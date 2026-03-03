@@ -1709,6 +1709,7 @@ static inline void lock_sock(struct sock *sk)
 	lock_sock_nested(sk, 0);
 }
 
+void __lock_sock(struct sock *sk);
 void __release_sock(struct sock *sk);
 void release_sock(struct sock *sk);
 
@@ -2097,7 +2098,7 @@ static inline int sk_rx_queue_get(const struct sock *sk)
 
 static inline void sk_set_socket(struct sock *sk, struct socket *sock)
 {
-	WRITE_ONCE(sk->sk_socket, sock);
+	sk->sk_socket = sock;
 	if (sock) {
 		WRITE_ONCE(sk->sk_uid, SOCK_INODE(sock)->i_uid);
 		WRITE_ONCE(sk->sk_ino, SOCK_INODE(sock)->i_ino);
@@ -2192,14 +2193,8 @@ sk_dst_get(const struct sock *sk)
 
 	rcu_read_lock();
 	dst = rcu_dereference(sk->sk_dst_cache);
-	if (dst) {
-		if (!rcuref_get(&dst->__rcuref))
-			dst = NULL;
-#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
-		else
-			atomic_inc(&dst->num_sk_dst_get_calls);
-#endif
-	}
+	if (dst && !rcuref_get(&dst->__rcuref))
+		dst = NULL;
 	rcu_read_unlock();
 	return dst;
 }

@@ -20,7 +20,7 @@
 
 #define PER_CPU_VAR(var)	__percpu(var)__percpu_rel
 
-#else /* !__ASSEMBLER__: */
+#else /* !__ASSEMBLY__: */
 
 #include <linux/args.h>
 #include <linux/bits.h>

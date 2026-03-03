@@ -1,14 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0 or MIT
 
-use kernel::{
-    drm::gem,
-    prelude::*, //
-};
-
-use crate::driver::{
-    TyrDevice,
-    TyrDriver, //
-};
+use crate::driver::TyrDevice;
+use crate::driver::TyrDriver;
+use kernel::drm::gem;
+use kernel::prelude::*;
 
 /// GEM Object inner driver data
 #[pin_data]

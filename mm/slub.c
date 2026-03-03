@@ -2041,18 +2041,18 @@ static inline void dec_slabs_node(struct kmem_cache *s, int node,
 
 #ifdef CONFIG_MEM_ALLOC_PROFILING_DEBUG
 
-static inline void mark_obj_codetag_empty(const void *obj)
+static inline void mark_objexts_empty(struct slabobj_ext *obj_exts)
 {
-	struct slab *obj_slab;
+	struct slab *obj_exts_slab;
 	unsigned long slab_exts;
 
-	obj_slab = virt_to_slab(obj);
-	slab_exts = slab_obj_exts(obj_slab);
+	obj_exts_slab = virt_to_slab(obj_exts);
+	slab_exts = slab_obj_exts(obj_exts_slab);
 	if (slab_exts) {
 		get_slab_obj_exts(slab_exts);
-		unsigned int offs = obj_to_index(obj_slab->slab_cache,
-						 obj_slab, obj);
-		struct slabobj_ext *ext = slab_obj_ext(obj_slab,
+		unsigned int offs = obj_to_index(obj_exts_slab->slab_cache,
+						 obj_exts_slab, obj_exts);
+		struct slabobj_ext *ext = slab_obj_ext(obj_exts_slab,
 						       slab_exts, offs);
 
 		if (unlikely(is_codetag_empty(&ext->ref))) {
@@ -2090,7 +2090,7 @@ static inline void handle_failed_objexts_alloc(unsigned long obj_exts,
 
 #else /* CONFIG_MEM_ALLOC_PROFILING_DEBUG */
 
-static inline void mark_obj_codetag_empty(const void *obj) {}
+static inline void mark_objexts_empty(struct slabobj_ext *obj_exts) {}
 static inline bool mark_failed_objexts_alloc(struct slab *slab) { return false; }
 static inline void handle_failed_objexts_alloc(unsigned long obj_exts,
 			struct slabobj_ext *vec, unsigned int objects) {}
@@ -2196,6 +2196,7 @@ int alloc_slab_obj_exts(struct slab *slab, struct kmem_cache *s,
 retry:
 	old_exts = READ_ONCE(slab->obj_exts);
 	handle_failed_objexts_alloc(old_exts, vec, objects);
+	slab_set_stride(slab, sizeof(struct slabobj_ext));
 
 	if (new_slab) {
 		/*
@@ -2210,7 +2211,7 @@ retry:
 		 * assign slabobj_exts in parallel. In this case the existing
 		 * objcg vector should be reused.
 		 */
-		mark_obj_codetag_empty(vec);
+		mark_objexts_empty(vec);
 		if (unlikely(!allow_spin))
 			kfree_nolock(vec);
 		else
@@ -2253,7 +2254,7 @@ static inline void free_slab_obj_exts(struct slab *slab, bool allow_spin)
 	 * NULL, therefore replace NULL with CODETAG_EMPTY to indicate that
 	 * the extension for obj_exts is expected to be NULL.
 	 */
-	mark_obj_codetag_empty(obj_exts);
+	mark_objexts_empty(obj_exts);
 	if (allow_spin)
 		kfree(obj_exts);
 	else
@@ -2271,9 +2272,6 @@ static void alloc_slab_obj_exts_early(struct kmem_cache *s, struct slab *slab)
 	void *addr;
 	unsigned long obj_exts;
 
-	/* Initialize stride early to avoid memory ordering issues */
-	slab_set_stride(slab, sizeof(struct slabobj_ext));
-
 	if (!need_slab_obj_exts(s))
 		return;
 
@@ -2290,6 +2288,7 @@ static void alloc_slab_obj_exts_early(struct kmem_cache *s, struct slab *slab)
 		obj_exts |= MEMCG_DATA_OBJEXTS;
 #endif
 		slab->obj_exts = obj_exts;
+		slab_set_stride(slab, sizeof(struct slabobj_ext));
 	} else if (s->flags & SLAB_OBJ_EXT_IN_OBJ) {
 		unsigned int offset = obj_exts_offset_in_object(s);
 
@@ -2312,10 +2311,6 @@ static void alloc_slab_obj_exts_early(struct kmem_cache *s, struct slab *slab)
 }
 
 #else /* CONFIG_SLAB_OBJ_EXT */
-
-static inline void mark_obj_codetag_empty(const void *obj)
-{
-}
 
 static inline void init_slab_obj_exts(struct slab *slab)
 {
@@ -2788,15 +2783,6 @@ static inline struct slab_sheaf *alloc_empty_sheaf(struct kmem_cache *s,
 
 static void free_empty_sheaf(struct kmem_cache *s, struct slab_sheaf *sheaf)
 {
-	/*
-	 * If the sheaf was created with __GFP_NO_OBJ_EXT flag then its
-	 * corresponding extension is NULL and alloc_tag_sub() will throw a
-	 * warning, therefore replace NULL with CODETAG_EMPTY to indicate
-	 * that the extension for this sheaf is expected to be NULL.
-	 */
-	if (s->flags & SLAB_KMALLOC)
-		mark_obj_codetag_empty(sheaf);
-
 	kfree(sheaf);
 
 	stat(s, SHEAF_FREE);
@@ -2836,7 +2822,7 @@ static struct slab_sheaf *alloc_full_sheaf(struct kmem_cache *s, gfp_t gfp)
 	if (!sheaf)
 		return NULL;
 
-	if (refill_sheaf(s, sheaf, gfp | __GFP_NOMEMALLOC | __GFP_NOWARN)) {
+	if (refill_sheaf(s, sheaf, gfp | __GFP_NOMEMALLOC)) {
 		free_empty_sheaf(s, sheaf);
 		return NULL;
 	}
@@ -4589,7 +4575,7 @@ __pcs_replace_empty_main(struct kmem_cache *s, struct slub_percpu_sheaves *pcs, 
 		return NULL;
 
 	if (empty) {
-		if (!refill_sheaf(s, empty, gfp | __GFP_NOMEMALLOC | __GFP_NOWARN)) {
+		if (!refill_sheaf(s, empty, gfp | __GFP_NOMEMALLOC)) {
 			full = empty;
 		} else {
 			/*
@@ -4904,14 +4890,9 @@ EXPORT_SYMBOL(kmem_cache_alloc_node_noprof);
 static int __prefill_sheaf_pfmemalloc(struct kmem_cache *s,
 				      struct slab_sheaf *sheaf, gfp_t gfp)
 {
-	gfp_t gfp_nomemalloc;
-	int ret;
+	int ret = 0;
 
-	gfp_nomemalloc = gfp | __GFP_NOMEMALLOC;
-	if (gfp_pfmemalloc_allowed(gfp))
-		gfp_nomemalloc |= __GFP_NOWARN;
-
-	ret = refill_sheaf(s, sheaf, gfp_nomemalloc);
+	ret = refill_sheaf(s, sheaf, gfp | __GFP_NOMEMALLOC);
 
 	if (likely(!ret || !gfp_pfmemalloc_allowed(gfp)))
 		return ret;
@@ -8852,7 +8833,7 @@ static ssize_t show_slab_objects(struct kmem_cache *s,
 	return len;
 }
 
-#define to_slab_attr(n) container_of_const(n, struct slab_attribute, attr)
+#define to_slab_attr(n) container_of(n, struct slab_attribute, attr)
 #define to_slab(n) container_of(n, struct kmem_cache, kobj)
 
 struct slab_attribute {
@@ -8862,10 +8843,10 @@ struct slab_attribute {
 };
 
 #define SLAB_ATTR_RO(_name) \
-	static const struct slab_attribute _name##_attr = __ATTR_RO_MODE(_name, 0400)
+	static struct slab_attribute _name##_attr = __ATTR_RO_MODE(_name, 0400)
 
 #define SLAB_ATTR(_name) \
-	static const struct slab_attribute _name##_attr = __ATTR_RW_MODE(_name, 0600)
+	static struct slab_attribute _name##_attr = __ATTR_RW_MODE(_name, 0600)
 
 static ssize_t slab_size_show(struct kmem_cache *s, char *buf)
 {
@@ -9259,7 +9240,7 @@ static ssize_t skip_kfence_store(struct kmem_cache *s,
 SLAB_ATTR(skip_kfence);
 #endif
 
-static const struct attribute *const slab_attrs[] = {
+static struct attribute *slab_attrs[] = {
 	&slab_size_attr.attr,
 	&object_size_attr.attr,
 	&objs_per_slab_attr.attr,
@@ -9336,13 +9317,15 @@ static const struct attribute *const slab_attrs[] = {
 	NULL
 };
 
-ATTRIBUTE_GROUPS(slab);
+static const struct attribute_group slab_attr_group = {
+	.attrs = slab_attrs,
+};
 
 static ssize_t slab_attr_show(struct kobject *kobj,
 				struct attribute *attr,
 				char *buf)
 {
-	const struct slab_attribute *attribute;
+	struct slab_attribute *attribute;
 	struct kmem_cache *s;
 
 	attribute = to_slab_attr(attr);
@@ -9358,7 +9341,7 @@ static ssize_t slab_attr_store(struct kobject *kobj,
 				struct attribute *attr,
 				const char *buf, size_t len)
 {
-	const struct slab_attribute *attribute;
+	struct slab_attribute *attribute;
 	struct kmem_cache *s;
 
 	attribute = to_slab_attr(attr);
@@ -9383,7 +9366,6 @@ static const struct sysfs_ops slab_sysfs_ops = {
 static const struct kobj_type slab_ktype = {
 	.sysfs_ops = &slab_sysfs_ops,
 	.release = kmem_cache_release,
-	.default_groups = slab_groups,
 };
 
 static struct kset *slab_kset;
@@ -9471,6 +9453,10 @@ static int sysfs_slab_add(struct kmem_cache *s)
 	if (err)
 		goto out;
 
+	err = sysfs_create_group(&s->kobj, &slab_attr_group);
+	if (err)
+		goto out_del_kobj;
+
 	if (!unmergeable) {
 		/* Setup first alias */
 		sysfs_slab_alias(s, s->name);
@@ -9479,6 +9465,9 @@ out:
 	if (!unmergeable)
 		kfree(name);
 	return err;
+out_del_kobj:
+	kobject_del(&s->kobj);
+	goto out;
 }
 
 void sysfs_slab_unlink(struct kmem_cache *s)

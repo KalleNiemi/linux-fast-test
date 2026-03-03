@@ -96,7 +96,7 @@ For short bitmaps of (reasonably) fixed length, standard ``NLA_BITFIELD32``
 type is used. For arbitrary length bitmaps, ethtool netlink uses a nested
 attribute with contents of one of two forms: compact (two binary bitmaps
 representing bit values and mask of affected bits) and bit-by-bit (list of
-bits identified by index or name).
+bits identified by either index or name).
 
 Verbose (bit-by-bit) bitsets allow sending symbolic names for bits together
 with their values which saves a round trip (when the bitset is passed in a
@@ -156,16 +156,12 @@ Bit-by-bit form: nested (bitset) attribute contents:
  | | | ``ETHTOOL_A_BITSET_BIT_VALUE`` | flag   | present if bit is set       |
  +-+-+--------------------------------+--------+-----------------------------+
 
-For bit-by-bit form, ``ETHTOOL_A_BITSET_SIZE`` is optional, and
-``ETHTOOL_A_BITSET_BITS`` is mandatory. ``ETHTOOL_A_BITSET_BITS`` nest can
+Bit size is optional for bit-by-bit form. ``ETHTOOL_A_BITSET_BITS`` nest can
 only contain ``ETHTOOL_A_BITSET_BITS_BIT`` attributes but there can be an
 arbitrary number of them.  A bit may be identified by its index or by its
 name. When used in requests, listed bits are set to 0 or 1 according to
-``ETHTOOL_A_BITSET_BIT_VALUE``, the rest is preserved.
-
-A request fails if index exceeds kernel bit length or if name is not
-recognized. If both name and index are set, the request will fail if they
-point to different bits.
+``ETHTOOL_A_BITSET_BIT_VALUE``, the rest is preserved. A request fails if
+index exceeds kernel bit length or if name is not recognized.
 
 When ``ETHTOOL_A_BITSET_NOMASK`` flag is present, bitset is interpreted as
 a simple bitmap. ``ETHTOOL_A_BITSET_BIT_VALUE`` attributes are not used in

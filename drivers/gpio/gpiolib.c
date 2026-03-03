@@ -11,7 +11,6 @@
 #include <linux/errno.h>
 #include <linux/file.h>
 #include <linux/fs.h>
-#include <linux/fwnode.h>
 #include <linux/idr.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
@@ -882,28 +881,23 @@ static const struct device_type gpio_dev_type = {
 };
 
 #ifdef CONFIG_GPIO_CDEV
-#define gcdev_register(gc, devt)	gpiolib_cdev_register((gc), (devt))
+#define gcdev_register(gdev, devt)	gpiolib_cdev_register((gdev), (devt))
 #define gcdev_unregister(gdev)		gpiolib_cdev_unregister((gdev))
 #else
 /*
  * gpiolib_cdev_register() indirectly calls device_add(), which is still
  * required even when cdev is not selected.
  */
-#define gcdev_register(gc, devt)	device_add(&(gc)->gpiodev->dev)
+#define gcdev_register(gdev, devt)	device_add(&(gdev)->dev)
 #define gcdev_unregister(gdev)		device_del(&(gdev)->dev)
 #endif
 
-/*
- * An initial reference count has been held in gpiochip_add_data_with_key().
- * The caller should drop the reference via gpio_device_put() on errors.
- */
-static int gpiochip_setup_dev(struct gpio_chip *gc)
+static int gpiochip_setup_dev(struct gpio_device *gdev)
 {
-	struct gpio_device *gdev = gc->gpiodev;
 	struct fwnode_handle *fwnode = dev_fwnode(&gdev->dev);
 	int ret;
 
-	gdev->dev.bus = &gpio_bus_type;
+	device_initialize(&gdev->dev);
 
 	/*
 	 * If fwnode doesn't belong to another device, it's safe to clear its
@@ -912,11 +906,11 @@ static int gpiochip_setup_dev(struct gpio_chip *gc)
 	if (fwnode && !fwnode->dev)
 		fwnode_dev_initialized(fwnode, false);
 
-	ret = gcdev_register(gc, gpio_devt);
+	ret = gcdev_register(gdev, gpio_devt);
 	if (ret)
 		return ret;
 
-	ret = gpiochip_sysfs_register(gc);
+	ret = gpiochip_sysfs_register(gdev);
 	if (ret)
 		goto err_remove_device;
 
@@ -963,27 +957,16 @@ static void machine_gpiochip_add(struct gpio_chip *gc)
 static void gpiochip_setup_devs(void)
 {
 	struct gpio_device *gdev;
-	struct gpio_chip *gc;
 	int ret;
 
 	guard(srcu)(&gpio_devices_srcu);
 
 	list_for_each_entry_srcu(gdev, &gpio_devices, list,
 				 srcu_read_lock_held(&gpio_devices_srcu)) {
-		guard(srcu)(&gdev->srcu);
-
-		gc = srcu_dereference(gdev->chip, &gdev->srcu);
-		if (!gc) {
-			dev_err(&gdev->dev, "Underlying GPIO chip is gone\n");
-			continue;
-		}
-
-		ret = gpiochip_setup_dev(gc);
-		if (ret) {
-			gpio_device_put(gdev);
+		ret = gpiochip_setup_dev(gdev);
+		if (ret)
 			dev_err(&gdev->dev,
 				"Failed to initialize gpio device (%d)\n", ret);
-		}
 	}
 }
 
@@ -1064,64 +1047,33 @@ int gpiochip_add_data_with_key(struct gpio_chip *gc, void *data,
 	int base = 0;
 	int ret;
 
+	/*
+	 * First: allocate and populate the internal stat container, and
+	 * set up the struct device.
+	 */
 	gdev = kzalloc(sizeof(*gdev), GFP_KERNEL);
 	if (!gdev)
 		return -ENOMEM;
+
+	gdev->dev.type = &gpio_dev_type;
+	gdev->dev.bus = &gpio_bus_type;
+	gdev->dev.parent = gc->parent;
+	rcu_assign_pointer(gdev->chip, gc);
+
 	gc->gpiodev = gdev;
 	gpiochip_set_data(gc, data);
+
+	device_set_node(&gdev->dev, gpiochip_choose_fwnode(gc));
 
 	ret = ida_alloc(&gpio_ida, GFP_KERNEL);
 	if (ret < 0)
 		goto err_free_gdev;
 	gdev->id = ret;
 
-	ret = init_srcu_struct(&gdev->srcu);
-	if (ret)
-		goto err_free_ida;
-	rcu_assign_pointer(gdev->chip, gc);
-
-	ret = init_srcu_struct(&gdev->desc_srcu);
-	if (ret)
-		goto err_cleanup_gdev_srcu;
-
 	ret = dev_set_name(&gdev->dev, GPIOCHIP_NAME "%d", gdev->id);
 	if (ret)
-		goto err_cleanup_desc_srcu;
+		goto err_free_ida;
 
-	device_initialize(&gdev->dev);
-	/*
-	 * After this point any allocated resources to `gdev` will be
-	 * free():ed by gpiodev_release().  If you add new resources
-	 * then make sure they get free():ed there.
-	 */
-	gdev->dev.type = &gpio_dev_type;
-	gdev->dev.parent = gc->parent;
-	device_set_node(&gdev->dev, gpiochip_choose_fwnode(gc));
-
-	ret = gpiochip_get_ngpios(gc, &gdev->dev);
-	if (ret)
-		goto err_put_device;
-	gdev->ngpio = gc->ngpio;
-
-	gdev->descs = kcalloc(gc->ngpio, sizeof(*gdev->descs), GFP_KERNEL);
-	if (!gdev->descs) {
-		ret = -ENOMEM;
-		goto err_put_device;
-	}
-
-	gdev->label = kstrdup_const(gc->label ?: "unknown", GFP_KERNEL);
-	if (!gdev->label) {
-		ret = -ENOMEM;
-		goto err_put_device;
-	}
-
-	gdev->can_sleep = gc->can_sleep;
-	rwlock_init(&gdev->line_state_lock);
-	RAW_INIT_NOTIFIER_HEAD(&gdev->line_state_notifier);
-	BLOCKING_INIT_NOTIFIER_HEAD(&gdev->device_notifier);
-#ifdef CONFIG_PINCTRL
-	INIT_LIST_HEAD(&gdev->pin_ranges);
-#endif
 	if (gc->parent && gc->parent->driver)
 		gdev->owner = gc->parent->driver->owner;
 	else if (gc->owner)
@@ -1129,6 +1081,37 @@ int gpiochip_add_data_with_key(struct gpio_chip *gc, void *data,
 		gdev->owner = gc->owner;
 	else
 		gdev->owner = THIS_MODULE;
+
+	ret = gpiochip_get_ngpios(gc, &gdev->dev);
+	if (ret)
+		goto err_free_dev_name;
+
+	gdev->descs = kcalloc(gc->ngpio, sizeof(*gdev->descs), GFP_KERNEL);
+	if (!gdev->descs) {
+		ret = -ENOMEM;
+		goto err_free_dev_name;
+	}
+
+	gdev->label = kstrdup_const(gc->label ?: "unknown", GFP_KERNEL);
+	if (!gdev->label) {
+		ret = -ENOMEM;
+		goto err_free_descs;
+	}
+
+	gdev->ngpio = gc->ngpio;
+	gdev->can_sleep = gc->can_sleep;
+
+	rwlock_init(&gdev->line_state_lock);
+	RAW_INIT_NOTIFIER_HEAD(&gdev->line_state_notifier);
+	BLOCKING_INIT_NOTIFIER_HEAD(&gdev->device_notifier);
+
+	ret = init_srcu_struct(&gdev->srcu);
+	if (ret)
+		goto err_free_label;
+
+	ret = init_srcu_struct(&gdev->desc_srcu);
+	if (ret)
+		goto err_cleanup_gdev_srcu;
 
 	scoped_guard(mutex, &gpio_devices_lock) {
 		/*
@@ -1144,7 +1127,7 @@ int gpiochip_add_data_with_key(struct gpio_chip *gc, void *data,
 			if (base < 0) {
 				ret = base;
 				base = 0;
-				goto err_put_device;
+				goto err_cleanup_desc_srcu;
 			}
 
 			/*
@@ -1164,9 +1147,13 @@ int gpiochip_add_data_with_key(struct gpio_chip *gc, void *data,
 		ret = gpiodev_add_to_list_unlocked(gdev);
 		if (ret) {
 			gpiochip_err(gc, "GPIO integer space overlap, cannot add chip\n");
-			goto err_put_device;
+			goto err_cleanup_desc_srcu;
 		}
 	}
+
+#ifdef CONFIG_PINCTRL
+	INIT_LIST_HEAD(&gdev->pin_ranges);
+#endif
 
 	if (gc->names)
 		gpiochip_set_desc_names(gc);
@@ -1232,11 +1219,11 @@ int gpiochip_add_data_with_key(struct gpio_chip *gc, void *data,
 	 * we get a device node entry in sysfs under
 	 * /sys/bus/gpio/devices/gpiochipN/dev that can be used for
 	 * coldplug of device nodes and other udev business.
-	 * We can do this only if gpiolib has been initialized
-	 * (i.e., `gpio_bus_type` is ready).  Otherwise, defer until later.
+	 * We can do this only if gpiolib has been initialized.
+	 * Otherwise, defer until later.
 	 */
 	if (gpiolib_initialized) {
-		ret = gpiochip_setup_dev(gc);
+		ret = gpiochip_setup_dev(gdev);
 		if (ret)
 			goto err_teardown_shared;
 	}
@@ -1261,19 +1248,25 @@ err_remove_from_list:
 	scoped_guard(mutex, &gpio_devices_lock)
 		list_del_rcu(&gdev->list);
 	synchronize_srcu(&gpio_devices_srcu);
-err_put_device:
-	gpio_device_put(gdev);
-	goto err_print_message;
-
+	if (gdev->dev.release) {
+		/* release() has been registered by gpiochip_setup_dev() */
+		gpio_device_put(gdev);
+		goto err_print_message;
+	}
 err_cleanup_desc_srcu:
 	cleanup_srcu_struct(&gdev->desc_srcu);
 err_cleanup_gdev_srcu:
 	cleanup_srcu_struct(&gdev->srcu);
+err_free_label:
+	kfree_const(gdev->label);
+err_free_descs:
+	kfree(gdev->descs);
+err_free_dev_name:
+	kfree(dev_name(&gdev->dev));
 err_free_ida:
 	ida_free(&gpio_ida, gdev->id);
 err_free_gdev:
 	kfree(gdev);
-
 err_print_message:
 	/* failures here can mean systems won't boot... */
 	if (ret != -EPROBE_DEFER) {
@@ -1296,7 +1289,7 @@ void gpiochip_remove(struct gpio_chip *gc)
 	struct gpio_device *gdev = gc->gpiodev;
 
 	/* FIXME: should the legacy sysfs handling be moved to gpio_device? */
-	gpiochip_sysfs_unregister(gc);
+	gpiochip_sysfs_unregister(gdev);
 	gpiochip_free_hogs(gc);
 	gpiochip_free_remaining_irqs(gc);
 
@@ -1401,16 +1394,7 @@ EXPORT_SYMBOL_GPL(gpio_device_find_by_label);
 
 static int gpio_chip_match_by_fwnode(struct gpio_chip *gc, const void *fwnode)
 {
-	struct device *dev = &gc->gpiodev->dev;
-	struct fwnode_handle *node = dev_fwnode(dev);
-
-	if (IS_ERR(fwnode))
-		return 0;
-
-	if (device_match_fwnode(dev, fwnode))
-		return 1;
-
-	return node && node->secondary == fwnode;
+	return device_match_fwnode(&gc->gpiodev->dev, fwnode);
 }
 
 /**
@@ -3283,12 +3267,8 @@ static int gpiochip_get(struct gpio_chip *gc, unsigned int offset)
 
 	/* Make sure this is called after checking for gc->get(). */
 	ret = gc->get(gc, offset);
-	if (ret > 1) {
-		gpiochip_warn(gc,
-			"invalid return value from gc->get(): %d, consider fixing the driver\n",
-			ret);
-		ret = !!ret;
-	}
+	if (ret > 1)
+		ret = -EBADE;
 
 	return ret;
 }
@@ -5336,13 +5316,22 @@ core_initcall(gpiolib_dev_init);
 
 #ifdef CONFIG_DEBUG_FS
 
-static void gpiolib_dbg_show(struct seq_file *s, struct gpio_chip *gc)
+static void gpiolib_dbg_show(struct seq_file *s, struct gpio_device *gdev)
 {
 	bool active_low, is_irq, is_out;
 	struct gpio_desc *desc;
 	unsigned int gpio = 0;
+	struct gpio_chip *gc;
 	unsigned long flags;
 	int value;
+
+	guard(srcu)(&gdev->srcu);
+
+	gc = srcu_dereference(gdev->chip, &gdev->srcu);
+	if (!gc) {
+		seq_puts(s, "Underlying GPIO chip is gone\n");
+		return;
+	}
 
 	for_each_gpio_desc(gc, desc) {
 		guard(srcu)(&desc->gdev->desc_srcu);
@@ -5456,7 +5445,7 @@ static int gpiolib_seq_show(struct seq_file *s, void *v)
 	if (gc->dbg_show)
 		gc->dbg_show(s, gc);
 	else
-		gpiolib_dbg_show(s, gc);
+		gpiolib_dbg_show(s, gdev);
 
 	return 0;
 }

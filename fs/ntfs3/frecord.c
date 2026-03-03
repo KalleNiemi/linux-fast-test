@@ -1852,31 +1852,27 @@ enum REPARSE_SIGN ni_parse_reparse(struct ntfs_inode *ni, struct ATTRIB *attr,
 	return REPARSE_LINK;
 }
 
-static struct folio *ntfs_lock_new_page(struct address_space *mapping,
-					pgoff_t index, gfp_t gfp)
+static struct page *ntfs_lock_new_page(struct address_space *mapping,
+				       pgoff_t index, gfp_t gfp)
 {
-	struct folio *folio = __filemap_get_folio(mapping, index,
-			FGP_LOCK | FGP_ACCESSED | FGP_CREAT, gfp);
+	struct folio *folio = __filemap_get_folio(
+		mapping, index, FGP_LOCK | FGP_ACCESSED | FGP_CREAT, gfp);
+	struct page *page;
 
 	if (IS_ERR(folio))
-		return folio;
+		return ERR_CAST(folio);
 
-	if (!folio_test_uptodate(folio)) {
-		struct page *page = folio_file_page(folio, index);
-
-		if (IS_ERR(page))
-			return ERR_CAST(page);
-		return page_folio(page);
-	}
+	if (!folio_test_uptodate(folio))
+		return folio_file_page(folio, index);
 
 	/* Use a temporary page to avoid data corruption */
 	folio_unlock(folio);
 	folio_put(folio);
-	folio = folio_alloc(gfp, 0);
-	if (!folio)
+	page = alloc_page(gfp);
+	if (!page)
 		return ERR_PTR(-ENOMEM);
-	__folio_set_locked(folio);
-	return folio;
+	__SetPageLocked(page);
+	return page;
 }
 
 /*
@@ -1898,7 +1894,6 @@ int ni_read_folio_cmpr(struct ntfs_inode *ni, struct folio *folio)
 	u32 i, idx, frame_size, pages_per_frame;
 	gfp_t gfp_mask;
 	struct page *pg;
-	struct folio *f;
 
 	if (vbo >= i_size_read(&ni->vfs_inode)) {
 		folio_zero_range(folio, 0, folio_size(folio));
@@ -1934,12 +1929,12 @@ int ni_read_folio_cmpr(struct ntfs_inode *ni, struct folio *folio)
 		if (i == idx)
 			continue;
 
-		f = ntfs_lock_new_page(mapping, index, gfp_mask);
-		if (IS_ERR(f)) {
-			err = PTR_ERR(f);
+		pg = ntfs_lock_new_page(mapping, index, gfp_mask);
+		if (IS_ERR(pg)) {
+			err = PTR_ERR(pg);
 			goto out1;
 		}
-		pages[i] = &f->page;
+		pages[i] = pg;
 	}
 
 	ni_lock(ni);
@@ -2028,18 +2023,18 @@ int ni_decompress_file(struct ntfs_inode *ni)
 		}
 
 		for (i = 0; i < pages_per_frame; i++, index++) {
-			struct folio *f;
+			struct page *pg;
 
-			f = ntfs_lock_new_page(mapping, index, gfp_mask);
-			if (IS_ERR(f)) {
+			pg = ntfs_lock_new_page(mapping, index, gfp_mask);
+			if (IS_ERR(pg)) {
 				while (i--) {
 					unlock_page(pages[i]);
 					put_page(pages[i]);
 				}
-				err = PTR_ERR(f);
+				err = PTR_ERR(pg);
 				goto out;
 			}
-			pages[i] = &f->page;
+			pages[i] = pg;
 		}
 
 		err = ni_read_frame(ni, vbo, pages, pages_per_frame, 1);

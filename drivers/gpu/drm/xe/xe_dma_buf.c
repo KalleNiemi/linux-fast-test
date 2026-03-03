@@ -56,10 +56,14 @@ static int xe_dma_buf_pin(struct dma_buf_attachment *attach)
 	bool allow_vram = true;
 	int ret;
 
-	list_for_each_entry(attach, &dmabuf->attachments, node) {
-		if (!attach->peer2peer) {
-			allow_vram = false;
-			break;
+	if (!IS_ENABLED(CONFIG_DMABUF_MOVE_NOTIFY)) {
+		allow_vram = false;
+	} else {
+		list_for_each_entry(attach, &dmabuf->attachments, node) {
+			if (!attach->peer2peer) {
+				allow_vram = false;
+				break;
+			}
 		}
 	}
 
@@ -283,7 +287,7 @@ static void xe_dma_buf_move_notify(struct dma_buf_attachment *attach)
 
 static const struct dma_buf_attach_ops xe_dma_buf_attach_ops = {
 	.allow_peer2peer = true,
-	.invalidate_mappings = xe_dma_buf_move_notify
+	.move_notify = xe_dma_buf_move_notify
 };
 
 #if IS_ENABLED(CONFIG_DRM_XE_KUNIT_TEST)

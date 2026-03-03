@@ -34,7 +34,6 @@
  */
 
 #include <drm/drm_print.h>
-#include <drm/intel/intel_gmd_misc_regs.h>
 
 #include "gt/intel_context.h"
 #include "gt/intel_engine_regs.h"

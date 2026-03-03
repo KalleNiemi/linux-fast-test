@@ -14,9 +14,8 @@
 
 #include <linux/sunrpc/clnt.h>
 #include <linux/sunrpc/svc.h>
-
-#include "lockd.h"
-#include "share.h"
+#include <linux/lockd/lockd.h>
+#include <linux/lockd/share.h>
 
 static inline int
 nlm_cmp_owner(struct nlm_share *share, struct xdr_netobj *oh)

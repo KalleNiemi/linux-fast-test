@@ -5,26 +5,15 @@
 //! C header: [`include/drm/drm_gem.h`](srctree/include/drm/drm_gem.h)
 
 use crate::{
-    bindings,
-    drm::{
-        self,
-        driver::{
-            AllocImpl,
-            AllocOps, //
-        },
-    },
-    error::to_result,
+    alloc::flags::*,
+    bindings, drm,
+    drm::driver::{AllocImpl, AllocOps},
+    error::{to_result, Result},
     prelude::*,
-    sync::aref::{
-        ARef,
-        AlwaysRefCounted, //
-    },
+    sync::aref::{ARef, AlwaysRefCounted},
     types::Opaque,
 };
-use core::{
-    ops::Deref,
-    ptr::NonNull, //
-};
+use core::{ops::Deref, ptr::NonNull};
 
 /// A type alias for retrieving a [`Driver`]s [`DriverFile`] implementation from its
 /// [`DriverObject`] implementation.

@@ -1605,9 +1605,9 @@ bool metricgroup__has_metric_or_groups(const char *pmu, const char *metric_or_gr
 		.metric_or_groups = metric_or_groups,
 	};
 
-	return metricgroup__for_each_metric(table,
-					    metricgroup__has_metric_or_groups_callback,
-					    &data)
+	return pmu_metrics_table__for_each_metric(table,
+						  metricgroup__has_metric_or_groups_callback,
+						  &data)
 		? true : false;
 }
 

@@ -231,7 +231,7 @@ static __always_inline const struct page *page_fixed_fake_head(const struct page
 	return page;
 }
 
-static __always_inline bool page_count_writable(const struct page *page)
+static __always_inline bool page_count_writable(const struct page *page, int u)
 {
 	if (!static_branch_unlikely(&hugetlb_optimize_vmemmap_key))
 		return true;
@@ -257,7 +257,7 @@ static __always_inline bool page_count_writable(const struct page *page)
 	 * The refcount check also prevents modification attempts to other (r/o)
 	 * tail pages that are not fake heads.
 	 */
-	if (!atomic_read_acquire(&page->_refcount))
+	if (atomic_read_acquire(&page->_refcount) == u)
 		return false;
 
 	return page_fixed_fake_head(page) == page;
@@ -268,7 +268,7 @@ static inline const struct page *page_fixed_fake_head(const struct page *page)
 	return page;
 }
 
-static inline bool page_count_writable(const struct page *page)
+static inline bool page_count_writable(const struct page *page, int u)
 {
 	return true;
 }
@@ -724,11 +724,6 @@ static __always_inline bool folio_test_anon(const struct folio *folio)
 	return ((unsigned long)folio->mapping & FOLIO_MAPPING_ANON) != 0;
 }
 
-static __always_inline bool folio_test_lazyfree(const struct folio *folio)
-{
-	return folio_test_anon(folio) && !folio_test_swapbacked(folio);
-}
-
 static __always_inline bool PageAnonNotKsm(const struct page *page)
 {
 	unsigned long flags = (unsigned long)page_folio(page)->mapping;
@@ -939,7 +934,6 @@ enum pagetype {
 	PGTY_zsmalloc		= 0xf6,
 	PGTY_unaccepted		= 0xf7,
 	PGTY_large_kmalloc	= 0xf8,
-	PGTY_netpp		= 0xf9,
 
 	PGTY_mapcount_underflow = 0xff
 };
@@ -1071,11 +1065,6 @@ PAGE_TYPE_OPS(Zsmalloc, zsmalloc, zsmalloc)
  */
 PAGE_TYPE_OPS(Unaccepted, unaccepted, unaccepted)
 PAGE_TYPE_OPS(LargeKmalloc, large_kmalloc, large_kmalloc)
-
-/*
- * Marks page_pool allocated pages.
- */
-PAGE_TYPE_OPS(Netpp, netpp, netpp)
 
 /**
  * PageHuge - Determine if the page belongs to hugetlbfs

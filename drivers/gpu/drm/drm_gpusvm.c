@@ -819,7 +819,7 @@ retry:
 
 		if (!(pfns[i] & HMM_PFN_VALID)) {
 			state = DRM_GPUSVM_SCAN_UNPOPULATED;
-			break;
+			goto err_free;
 		}
 
 		page = hmm_pfn_to_page(pfns[i]);
@@ -856,9 +856,9 @@ retry:
 		i += 1ul << drm_gpusvm_hmm_pfn_to_order(pfns[i], i, npages);
 	}
 
+err_free:
 	drm_gpusvm_notifier_unlock(range->gpusvm);
 
-err_free:
 	kvfree(pfns);
 	return state;
 }
@@ -1338,14 +1338,14 @@ bool drm_gpusvm_range_pages_valid(struct drm_gpusvm *gpusvm,
 EXPORT_SYMBOL_GPL(drm_gpusvm_range_pages_valid);
 
 /**
- * drm_gpusvm_pages_valid_unlocked() - GPU SVM pages valid unlocked
+ * drm_gpusvm_range_pages_valid_unlocked() - GPU SVM range pages valid unlocked
  * @gpusvm: Pointer to the GPU SVM structure
- * @svm_pages: Pointer to the GPU SVM pages structure
+ * @range: Pointer to the GPU SVM range structure
  *
- * This function determines if a GPU SVM pages are valid. Expected be called
- * without holding gpusvm->notifier_lock.
+ * This function determines if a GPU SVM range pages are valid. Expected be
+ * called without holding gpusvm->notifier_lock.
  *
- * Return: True if GPU SVM pages are valid, False otherwise
+ * Return: True if GPU SVM range has valid pages, False otherwise
  */
 static bool drm_gpusvm_pages_valid_unlocked(struct drm_gpusvm *gpusvm,
 					    struct drm_gpusvm_pages *svm_pages)
@@ -1495,7 +1495,7 @@ map_pages:
 			}
 			zdd = page->zone_device_data;
 			if (pagemap != page_pgmap(page)) {
-				if (pagemap) {
+				if (i > 0) {
 					err = -EOPNOTSUPP;
 					goto err_unmap;
 				}
@@ -1572,7 +1572,6 @@ set_seqno:
 	return 0;
 
 err_unmap:
-	svm_pages->flags.has_dma_mapping = true;
 	__drm_gpusvm_unmap_pages(gpusvm, svm_pages, num_dma_mapped);
 	drm_gpusvm_notifier_unlock(gpusvm);
 err_free:

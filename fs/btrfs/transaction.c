@@ -503,7 +503,7 @@ int btrfs_record_root_in_trans(struct btrfs_trans_handle *trans,
 		return 0;
 
 	mutex_lock(&fs_info->reloc_mutex);
-	ret = record_root_in_trans(trans, root, false);
+	ret = record_root_in_trans(trans, root, 0);
 	mutex_unlock(&fs_info->reloc_mutex);
 
 	return ret;
@@ -678,14 +678,6 @@ start_transaction(struct btrfs_root *root, unsigned int num_items,
 		 * here.
 		 */
 		ret = btrfs_delayed_refs_rsv_refill(fs_info, flush);
-		if (ret == -EAGAIN) {
-			ASSERT(btrfs_is_zoned(fs_info));
-			ret = btrfs_commit_current_transaction(root);
-			if (ret)
-				goto reserve_fail;
-			ret = btrfs_delayed_refs_rsv_refill(fs_info, flush);
-		}
-
 		if (ret)
 			goto reserve_fail;
 	}
@@ -1579,7 +1571,7 @@ static int qgroup_account_snapshot(struct btrfs_trans_handle *trans,
 	 * recorded root will never be updated again, causing an outdated root
 	 * item.
 	 */
-	ret = record_root_in_trans(trans, src, true);
+	ret = record_root_in_trans(trans, src, 1);
 	if (ret)
 		return ret;
 
@@ -1602,16 +1594,16 @@ static int qgroup_account_snapshot(struct btrfs_trans_handle *trans,
 
 	ret = commit_fs_roots(trans);
 	if (ret)
-		return ret;
+		goto out;
 	ret = btrfs_qgroup_account_extents(trans);
 	if (ret < 0)
-		return ret;
+		goto out;
 
 	/* Now qgroup are all updated, we can inherit it to new qgroups */
 	ret = btrfs_qgroup_inherit(trans, btrfs_root_id(src), dst_objectid,
 				   btrfs_root_id(parent), inherit);
 	if (ret < 0)
-		return ret;
+		goto out;
 
 	/*
 	 * Now we do a simplified commit transaction, which will:
@@ -1627,22 +1619,23 @@ static int qgroup_account_snapshot(struct btrfs_trans_handle *trans,
 	 */
 	ret = commit_cowonly_roots(trans);
 	if (ret)
-		return ret;
+		goto out;
 	switch_commit_roots(trans);
 	ret = btrfs_write_and_wait_transaction(trans);
-	if (unlikely(ret)) {
+	if (unlikely(ret))
 		btrfs_err(fs_info,
 "error while writing out transaction during qgroup snapshot accounting: %d", ret);
-		return ret;
-	}
 
+out:
 	/*
 	 * Force parent root to be updated, as we recorded it before so its
 	 * last_trans == cur_transid.
 	 * Or it won't be committed again onto disk after later
 	 * insert_dir_item()
 	 */
-	return record_root_in_trans(trans, parent, true);
+	if (!ret)
+		ret = record_root_in_trans(trans, parent, 1);
+	return ret;
 }
 
 /*
@@ -1669,7 +1662,7 @@ static noinline int create_pending_snapshot(struct btrfs_trans_handle *trans,
 	BTRFS_PATH_AUTO_FREE(path);
 	struct btrfs_dir_item *dir_item;
 	struct extent_buffer *tmp;
-	struct extent_buffer *root_eb;
+	struct extent_buffer *old;
 	struct timespec64 cur_time;
 	int ret = 0;
 	u64 to_reserve = 0;
@@ -1726,7 +1719,7 @@ static noinline int create_pending_snapshot(struct btrfs_trans_handle *trans,
 				      trans->transid,
 				      trans->bytes_reserved, 1);
 	parent_root = parent_inode->root;
-	ret = record_root_in_trans(trans, parent_root, false);
+	ret = record_root_in_trans(trans, parent_root, 0);
 	if (unlikely(ret))
 		goto fail;
 	cur_time = current_time(&parent_inode->vfs_inode);
@@ -1774,7 +1767,7 @@ static noinline int create_pending_snapshot(struct btrfs_trans_handle *trans,
 		goto fail;
 	}
 
-	ret = record_root_in_trans(trans, root, false);
+	ret = record_root_in_trans(trans, root, 0);
 	if (unlikely(ret)) {
 		btrfs_abort_transaction(trans, ret);
 		goto fail;
@@ -1807,10 +1800,20 @@ static noinline int create_pending_snapshot(struct btrfs_trans_handle *trans,
 	btrfs_set_stack_timespec_nsec(&new_root_item->otime, cur_time.tv_nsec);
 	btrfs_set_root_otransid(new_root_item, trans->transid);
 
-	root_eb = btrfs_lock_root_node(root);
-	ret = btrfs_copy_root(trans, root, root_eb, &tmp, objectid);
-	btrfs_tree_unlock(root_eb);
-	free_extent_buffer(root_eb);
+	old = btrfs_lock_root_node(root);
+	ret = btrfs_cow_block(trans, root, old, NULL, 0, &old,
+			      BTRFS_NESTING_COW);
+	if (unlikely(ret)) {
+		btrfs_tree_unlock(old);
+		free_extent_buffer(old);
+		btrfs_abort_transaction(trans, ret);
+		goto fail;
+	}
+
+	ret = btrfs_copy_root(trans, root, old, &tmp, objectid);
+	/* clean up in any case */
+	btrfs_tree_unlock(old);
+	free_extent_buffer(old);
 	if (unlikely(ret)) {
 		btrfs_abort_transaction(trans, ret);
 		goto fail;
@@ -2554,7 +2557,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 		goto scrub_continue;
 	}
 
-	ret = write_all_supers(trans);
+	ret = write_all_supers(fs_info, 0);
 	/*
 	 * the super is written, we can safely allow the tree-loggers
 	 * to go about their business

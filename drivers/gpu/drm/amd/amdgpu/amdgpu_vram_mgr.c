@@ -25,7 +25,6 @@
 #include <linux/dma-mapping.h>
 #include <drm/ttm/ttm_range_manager.h>
 #include <drm/drm_drv.h>
-#include <drm/drm_buddy.h>
 
 #include "amdgpu.h"
 #include "amdgpu_vm.h"
@@ -53,15 +52,15 @@ to_amdgpu_device(struct amdgpu_vram_mgr *mgr)
 	return container_of(mgr, struct amdgpu_device, mman.vram_mgr);
 }
 
-static inline struct gpu_buddy_block *
+static inline struct drm_buddy_block *
 amdgpu_vram_mgr_first_block(struct list_head *list)
 {
-	return list_first_entry_or_null(list, struct gpu_buddy_block, link);
+	return list_first_entry_or_null(list, struct drm_buddy_block, link);
 }
 
 static inline bool amdgpu_is_vram_mgr_blocks_contiguous(struct list_head *head)
 {
-	struct gpu_buddy_block *block;
+	struct drm_buddy_block *block;
 	u64 start, size;
 
 	block = amdgpu_vram_mgr_first_block(head);
@@ -72,7 +71,7 @@ static inline bool amdgpu_is_vram_mgr_blocks_contiguous(struct list_head *head)
 		start = amdgpu_vram_mgr_block_start(block);
 		size = amdgpu_vram_mgr_block_size(block);
 
-		block = list_entry(block->link.next, struct gpu_buddy_block, link);
+		block = list_entry(block->link.next, struct drm_buddy_block, link);
 		if (start + size != amdgpu_vram_mgr_block_start(block))
 			return false;
 	}
@@ -82,7 +81,7 @@ static inline bool amdgpu_is_vram_mgr_blocks_contiguous(struct list_head *head)
 
 static inline u64 amdgpu_vram_mgr_blocks_size(struct list_head *head)
 {
-	struct gpu_buddy_block *block;
+	struct drm_buddy_block *block;
 	u64 size = 0;
 
 	list_for_each_entry(block, head, link)
@@ -255,7 +254,7 @@ const struct attribute_group amdgpu_vram_mgr_attr_group = {
  * Calculate how many bytes of the DRM BUDDY block are inside visible VRAM
  */
 static u64 amdgpu_vram_mgr_vis_size(struct amdgpu_device *adev,
-				    struct gpu_buddy_block *block)
+				    struct drm_buddy_block *block)
 {
 	u64 start = amdgpu_vram_mgr_block_start(block);
 	u64 end = start + amdgpu_vram_mgr_block_size(block);
@@ -280,7 +279,7 @@ u64 amdgpu_vram_mgr_bo_visible_size(struct amdgpu_bo *bo)
 	struct amdgpu_device *adev = amdgpu_ttm_adev(bo->tbo.bdev);
 	struct ttm_resource *res = bo->tbo.resource;
 	struct amdgpu_vram_mgr_resource *vres = to_amdgpu_vram_mgr_resource(res);
-	struct gpu_buddy_block *block;
+	struct drm_buddy_block *block;
 	u64 usage = 0;
 
 	if (amdgpu_gmc_vram_full_visible(&adev->gmc))
@@ -300,15 +299,15 @@ static void amdgpu_vram_mgr_do_reserve(struct ttm_resource_manager *man)
 {
 	struct amdgpu_vram_mgr *mgr = to_vram_mgr(man);
 	struct amdgpu_device *adev = to_amdgpu_device(mgr);
-	struct gpu_buddy *mm = &mgr->mm;
+	struct drm_buddy *mm = &mgr->mm;
 	struct amdgpu_vram_reservation *rsv, *temp;
-	struct gpu_buddy_block *block;
+	struct drm_buddy_block *block;
 	uint64_t vis_usage;
 
 	list_for_each_entry_safe(rsv, temp, &mgr->reservations_pending, blocks) {
-		if (gpu_buddy_alloc_blocks(mm, rsv->start, rsv->start + rsv->size,
+		if (drm_buddy_alloc_blocks(mm, rsv->start, rsv->start + rsv->size,
 					   rsv->size, mm->chunk_size, &rsv->allocated,
-					   GPU_BUDDY_RANGE_ALLOCATION))
+					   DRM_BUDDY_RANGE_ALLOCATION))
 			continue;
 
 		block = amdgpu_vram_mgr_first_block(&rsv->allocated);
@@ -404,7 +403,7 @@ int amdgpu_vram_mgr_query_address_block_info(struct amdgpu_vram_mgr *mgr,
 			uint64_t address, struct amdgpu_vram_block_info *info)
 {
 	struct amdgpu_vram_mgr_resource *vres;
-	struct gpu_buddy_block *block;
+	struct drm_buddy_block *block;
 	u64 start, size;
 	int ret = -ENOENT;
 
@@ -451,8 +450,8 @@ static int amdgpu_vram_mgr_new(struct ttm_resource_manager *man,
 	struct amdgpu_vram_mgr_resource *vres;
 	u64 size, remaining_size, lpfn, fpfn;
 	unsigned int adjust_dcc_size = 0;
-	struct gpu_buddy *mm = &mgr->mm;
-	struct gpu_buddy_block *block;
+	struct drm_buddy *mm = &mgr->mm;
+	struct drm_buddy_block *block;
 	unsigned long pages_per_block;
 	int r;
 
@@ -494,17 +493,17 @@ static int amdgpu_vram_mgr_new(struct ttm_resource_manager *man,
 	INIT_LIST_HEAD(&vres->blocks);
 
 	if (place->flags & TTM_PL_FLAG_TOPDOWN)
-		vres->flags |= GPU_BUDDY_TOPDOWN_ALLOCATION;
+		vres->flags |= DRM_BUDDY_TOPDOWN_ALLOCATION;
 
 	if (bo->flags & AMDGPU_GEM_CREATE_VRAM_CONTIGUOUS)
-		vres->flags |= GPU_BUDDY_CONTIGUOUS_ALLOCATION;
+		vres->flags |= DRM_BUDDY_CONTIGUOUS_ALLOCATION;
 
 	if (bo->flags & AMDGPU_GEM_CREATE_VRAM_CLEARED)
-		vres->flags |= GPU_BUDDY_CLEAR_ALLOCATION;
+		vres->flags |= DRM_BUDDY_CLEAR_ALLOCATION;
 
 	if (fpfn || lpfn != mgr->mm.size)
 		/* Allocate blocks in desired range */
-		vres->flags |= GPU_BUDDY_RANGE_ALLOCATION;
+		vres->flags |= DRM_BUDDY_RANGE_ALLOCATION;
 
 	if (bo->flags & AMDGPU_GEM_CREATE_GFX12_DCC &&
 	    adev->gmc.gmc_funcs->get_dcc_alignment)
@@ -517,7 +516,7 @@ static int amdgpu_vram_mgr_new(struct ttm_resource_manager *man,
 		dcc_size = roundup_pow_of_two(vres->base.size + adjust_dcc_size);
 		remaining_size = (u64)dcc_size;
 
-		vres->flags |= GPU_BUDDY_TRIM_DISABLE;
+		vres->flags |= DRM_BUDDY_TRIM_DISABLE;
 	}
 
 	mutex_lock(&mgr->lock);
@@ -537,7 +536,7 @@ static int amdgpu_vram_mgr_new(struct ttm_resource_manager *man,
 
 		BUG_ON(min_block_size < mm->chunk_size);
 
-		r = gpu_buddy_alloc_blocks(mm, fpfn,
+		r = drm_buddy_alloc_blocks(mm, fpfn,
 					   lpfn,
 					   size,
 					   min_block_size,
@@ -546,7 +545,7 @@ static int amdgpu_vram_mgr_new(struct ttm_resource_manager *man,
 
 		if (unlikely(r == -ENOSPC) && pages_per_block == ~0ul &&
 		    !(place->flags & TTM_PL_FLAG_CONTIGUOUS)) {
-			vres->flags &= ~GPU_BUDDY_CONTIGUOUS_ALLOCATION;
+			vres->flags &= ~DRM_BUDDY_CONTIGUOUS_ALLOCATION;
 			pages_per_block = max_t(u32, 2UL << (20UL - PAGE_SHIFT),
 						tbo->page_alignment);
 
@@ -567,7 +566,7 @@ static int amdgpu_vram_mgr_new(struct ttm_resource_manager *man,
 	list_add_tail(&vres->vres_node, &mgr->allocated_vres_list);
 
 	if (bo->flags & AMDGPU_GEM_CREATE_VRAM_CONTIGUOUS && adjust_dcc_size) {
-		struct gpu_buddy_block *dcc_block;
+		struct drm_buddy_block *dcc_block;
 		unsigned long dcc_start;
 		u64 trim_start;
 
@@ -577,7 +576,7 @@ static int amdgpu_vram_mgr_new(struct ttm_resource_manager *man,
 			roundup((unsigned long)amdgpu_vram_mgr_block_start(dcc_block),
 				adjust_dcc_size);
 		trim_start = (u64)dcc_start;
-		gpu_buddy_block_trim(mm, &trim_start,
+		drm_buddy_block_trim(mm, &trim_start,
 				     (u64)vres->base.size,
 				     &vres->blocks);
 	}
@@ -615,7 +614,7 @@ static int amdgpu_vram_mgr_new(struct ttm_resource_manager *man,
 	return 0;
 
 error_free_blocks:
-	gpu_buddy_free_list(mm, &vres->blocks, 0);
+	drm_buddy_free_list(mm, &vres->blocks, 0);
 	mutex_unlock(&mgr->lock);
 error_fini:
 	ttm_resource_fini(man, &vres->base);
@@ -638,8 +637,8 @@ static void amdgpu_vram_mgr_del(struct ttm_resource_manager *man,
 	struct amdgpu_vram_mgr_resource *vres = to_amdgpu_vram_mgr_resource(res);
 	struct amdgpu_vram_mgr *mgr = to_vram_mgr(man);
 	struct amdgpu_device *adev = to_amdgpu_device(mgr);
-	struct gpu_buddy *mm = &mgr->mm;
-	struct gpu_buddy_block *block;
+	struct drm_buddy *mm = &mgr->mm;
+	struct drm_buddy_block *block;
 	uint64_t vis_usage = 0;
 
 	mutex_lock(&mgr->lock);
@@ -650,7 +649,7 @@ static void amdgpu_vram_mgr_del(struct ttm_resource_manager *man,
 	list_for_each_entry(block, &vres->blocks, link)
 		vis_usage += amdgpu_vram_mgr_vis_size(adev, block);
 
-	gpu_buddy_free_list(mm, &vres->blocks, vres->flags);
+	drm_buddy_free_list(mm, &vres->blocks, vres->flags);
 	amdgpu_vram_mgr_do_reserve(man);
 	mutex_unlock(&mgr->lock);
 
@@ -689,7 +688,7 @@ int amdgpu_vram_mgr_alloc_sgt(struct amdgpu_device *adev,
 	if (!*sgt)
 		return -ENOMEM;
 
-	/* Determine the number of GPU_BUDDY blocks to export */
+	/* Determine the number of DRM_BUDDY blocks to export */
 	amdgpu_res_first(res, offset, length, &cursor);
 	while (cursor.remaining) {
 		num_entries++;
@@ -705,10 +704,10 @@ int amdgpu_vram_mgr_alloc_sgt(struct amdgpu_device *adev,
 		sg->length = 0;
 
 	/*
-	 * Walk down GPU_BUDDY blocks to populate scatterlist nodes
-	 * @note: Use iterator api to get first the GPU_BUDDY block
+	 * Walk down DRM_BUDDY blocks to populate scatterlist nodes
+	 * @note: Use iterator api to get first the DRM_BUDDY block
 	 * and the number of bytes from it. Access the following
-	 * GPU_BUDDY block(s) if more buffer needs to exported
+	 * DRM_BUDDY block(s) if more buffer needs to exported
 	 */
 	amdgpu_res_first(res, offset, length, &cursor);
 	for_each_sgtable_sg((*sgt), sg, i) {
@@ -793,10 +792,10 @@ uint64_t amdgpu_vram_mgr_vis_usage(struct amdgpu_vram_mgr *mgr)
 void amdgpu_vram_mgr_clear_reset_blocks(struct amdgpu_device *adev)
 {
 	struct amdgpu_vram_mgr *mgr = &adev->mman.vram_mgr;
-	struct gpu_buddy *mm = &mgr->mm;
+	struct drm_buddy *mm = &mgr->mm;
 
 	mutex_lock(&mgr->lock);
-	gpu_buddy_reset_clear(mm, false);
+	drm_buddy_reset_clear(mm, false);
 	mutex_unlock(&mgr->lock);
 }
 
@@ -816,7 +815,7 @@ static bool amdgpu_vram_mgr_intersects(struct ttm_resource_manager *man,
 				       size_t size)
 {
 	struct amdgpu_vram_mgr_resource *mgr = to_amdgpu_vram_mgr_resource(res);
-	struct gpu_buddy_block *block;
+	struct drm_buddy_block *block;
 
 	/* Check each drm buddy block individually */
 	list_for_each_entry(block, &mgr->blocks, link) {
@@ -849,7 +848,7 @@ static bool amdgpu_vram_mgr_compatible(struct ttm_resource_manager *man,
 				       size_t size)
 {
 	struct amdgpu_vram_mgr_resource *mgr = to_amdgpu_vram_mgr_resource(res);
-	struct gpu_buddy_block *block;
+	struct drm_buddy_block *block;
 
 	/* Check each drm buddy block individually */
 	list_for_each_entry(block, &mgr->blocks, link) {
@@ -878,7 +877,7 @@ static void amdgpu_vram_mgr_debug(struct ttm_resource_manager *man,
 				  struct drm_printer *printer)
 {
 	struct amdgpu_vram_mgr *mgr = to_vram_mgr(man);
-	struct gpu_buddy *mm = &mgr->mm;
+	struct drm_buddy *mm = &mgr->mm;
 	struct amdgpu_vram_reservation *rsv;
 
 	drm_printf(printer, "  vis usage:%llu\n",
@@ -931,7 +930,7 @@ int amdgpu_vram_mgr_init(struct amdgpu_device *adev)
 	mgr->default_page_size = PAGE_SIZE;
 
 	man->func = &amdgpu_vram_mgr_func;
-	err = gpu_buddy_init(&mgr->mm, man->size, PAGE_SIZE);
+	err = drm_buddy_init(&mgr->mm, man->size, PAGE_SIZE);
 	if (err)
 		return err;
 
@@ -966,11 +965,11 @@ void amdgpu_vram_mgr_fini(struct amdgpu_device *adev)
 		kfree(rsv);
 
 	list_for_each_entry_safe(rsv, temp, &mgr->reserved_pages, blocks) {
-		gpu_buddy_free_list(&mgr->mm, &rsv->allocated, 0);
+		drm_buddy_free_list(&mgr->mm, &rsv->allocated, 0);
 		kfree(rsv);
 	}
 	if (!adev->gmc.is_app_apu)
-		gpu_buddy_fini(&mgr->mm);
+		drm_buddy_fini(&mgr->mm);
 	mutex_unlock(&mgr->lock);
 
 	ttm_resource_manager_cleanup(man);

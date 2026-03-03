@@ -19,7 +19,6 @@
 #include <linux/mutex.h>
 #include <linux/netdevice.h>
 #include <linux/rtnetlink.h>
-#include <linux/hex.h>
 
 #define USB_ETHERNET_CONFIGFS_ITEM(_f_)					\
 	static void _f_##_attr_release(struct config_item *item)	\
@@ -328,9 +327,18 @@ out:									\
 					      char *page)			\
 	{									\
 		struct f_##_f_##_opts *opts = to_f_##_f_##_opts(item);		\
+		const char *name;						\
 										\
 		guard(mutex)(&opts->lock);					\
-		return sysfs_emit(page, "%s\n", opts->net_opts.name);		\
+		rtnl_lock();							\
+		if (opts->net_opts.ifname_set)					\
+			name = opts->net_opts.name;				\
+		else if (opts->net)						\
+			name = netdev_name(opts->net);				\
+		else								\
+			name = "(inactive net_device)";				\
+		rtnl_unlock();							\
+		return sysfs_emit(page, "%s\n", name);				\
 	}									\
 										\
 	static ssize_t _f_##_opts_ifname_store(struct config_item *item,	\

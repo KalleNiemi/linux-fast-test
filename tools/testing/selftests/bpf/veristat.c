@@ -3378,8 +3378,6 @@ int main(int argc, char **argv)
 			}
 		}
 		free(env.presets[i].atoms);
-		if (env.presets[i].value.type == ENUMERATOR)
-			free(env.presets[i].value.svalue);
 	}
 	free(env.presets);
 	return -err;

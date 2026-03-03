@@ -618,10 +618,11 @@ void rtw_reset_drv_sw(struct adapter *padapter)
 	padapter->xmitpriv.tx_pkts = 0;
 	padapter->recvpriv.rx_pkts = 0;
 
-	pmlmepriv->link_detect_info.busy_traffic = false;
+	pmlmepriv->LinkDetectInfo.bBusyTraffic = false;
 
-	pmlmepriv->link_detect_info.traffic_transition_count = 0;
-	pmlmepriv->link_detect_info.low_power_transition_count = 0;
+	/* pmlmepriv->LinkDetectInfo.TrafficBusyState = false; */
+	pmlmepriv->LinkDetectInfo.TrafficTransitionCount = 0;
+	pmlmepriv->LinkDetectInfo.LowPowerTransitionCount = 0;
 
 	_clr_fwstate_(pmlmepriv, _FW_UNDER_SURVEY | _FW_UNDER_LINKING);
 
@@ -959,6 +960,7 @@ static int netdev_close(struct net_device *pnetdev)
 	}
 
 	rtw_scan_abort(padapter);
+	adapter_wdev_data(padapter)->bandroid_scan = false;
 
 	return 0;
 }

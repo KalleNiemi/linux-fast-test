@@ -349,7 +349,7 @@ int zlib_decompress_bio(struct list_head *ws, struct compressed_bio *cb)
 	int wbits = MAX_WBITS;
 	char *data_in;
 	size_t total_out = 0;
-	const size_t srclen = bio_get_size(&cb->bbio.bio);
+	size_t srclen = cb->compressed_len;
 	unsigned long buf_start;
 
 	bio_first_folio(&fi, &cb->bbio.bio, 0);

@@ -881,10 +881,10 @@ err_size:
 	return -E2BIG;
 }
 
-static void get_params(struct task_struct *p, struct sched_attr *attr, unsigned int flags)
+static void get_params(struct task_struct *p, struct sched_attr *attr)
 {
 	if (task_has_dl_policy(p)) {
-		__getparam_dl(p, attr, flags);
+		__getparam_dl(p, attr);
 	} else if (task_has_rt_policy(p)) {
 		attr->sched_priority = p->rt_priority;
 	} else {
@@ -950,7 +950,7 @@ SYSCALL_DEFINE3(sched_setattr, pid_t, pid, struct sched_attr __user *, uattr,
 		return -ESRCH;
 
 	if (attr.sched_flags & SCHED_FLAG_KEEP_PARAMS)
-		get_params(p, &attr, 0);
+		get_params(p, &attr);
 
 	return sched_setattr(p, &attr);
 }
@@ -1035,19 +1035,13 @@ SYSCALL_DEFINE4(sched_getattr, pid_t, pid, struct sched_attr __user *, uattr,
 	int retval;
 
 	if (unlikely(!uattr || pid < 0 || usize > PAGE_SIZE ||
-		     usize < SCHED_ATTR_SIZE_VER0))
+		      usize < SCHED_ATTR_SIZE_VER0 || flags))
 		return -EINVAL;
 
 	scoped_guard (rcu) {
 		p = find_process_by_pid(pid);
 		if (!p)
 			return -ESRCH;
-
-		if (flags) {
-			if (!task_has_dl_policy(p) ||
-			    flags != SCHED_GETATTR_FLAG_DL_DYNAMIC)
-				return -EINVAL;
-		}
 
 		retval = security_task_getscheduler(p);
 		if (retval)
@@ -1056,7 +1050,7 @@ SYSCALL_DEFINE4(sched_getattr, pid_t, pid, struct sched_attr __user *, uattr,
 		kattr.sched_policy = p->policy;
 		if (p->sched_reset_on_fork)
 			kattr.sched_flags |= SCHED_FLAG_RESET_ON_FORK;
-		get_params(p, &kattr, flags);
+		get_params(p, &kattr);
 		kattr.sched_flags &= SCHED_FLAG_ALL;
 
 #ifdef CONFIG_UCLAMP_TASK

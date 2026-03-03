@@ -1,5 +1,4 @@
-/* SPDX-License-Identifier: MIT */
-/* Copyright 2023-2026 Advanced Micro Devices, Inc.
+/* Copyright 2023 Advanced Micro Devices, Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -654,8 +653,6 @@
 
 struct dcn401_dpp_registers {
 	DPP_REG_VARIABLE_LIST_DCN401;
-	uint32_t ALPHA_2BIT_LUT01;
-	uint32_t ALPHA_2BIT_LUT23;
 };
 
 struct dcn401_dpp_shift {

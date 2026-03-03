@@ -67,7 +67,6 @@ const CMD_SIZE: usize = size_of::<fw::SequencerBufferCmd>();
 /// GSP Sequencer Command types with payload data.
 /// Commands have an opcode and an opcode-dependent struct.
 #[allow(clippy::enum_variant_names)]
-#[derive(Debug)]
 pub(crate) enum GspSeqCmd {
     RegWrite(fw::RegWritePayload),
     RegModify(fw::RegModifyPayload),
@@ -145,7 +144,12 @@ pub(crate) struct GspSequencer<'a> {
     dev: ARef<device::Device>,
 }
 
-impl fw::RegWritePayload {
+/// Trait for running sequencer commands.
+pub(crate) trait GspSeqCmdRunner {
+    fn run(&self, sequencer: &GspSequencer<'_>) -> Result;
+}
+
+impl GspSeqCmdRunner for fw::RegWritePayload {
     fn run(&self, sequencer: &GspSequencer<'_>) -> Result {
         let addr = usize::from_safe_cast(self.addr());
 
@@ -153,7 +157,7 @@ impl fw::RegWritePayload {
     }
 }
 
-impl fw::RegModifyPayload {
+impl GspSeqCmdRunner for fw::RegModifyPayload {
     fn run(&self, sequencer: &GspSequencer<'_>) -> Result {
         let addr = usize::from_safe_cast(self.addr());
 
@@ -165,7 +169,7 @@ impl fw::RegModifyPayload {
     }
 }
 
-impl fw::RegPollPayload {
+impl GspSeqCmdRunner for fw::RegPollPayload {
     fn run(&self, sequencer: &GspSequencer<'_>) -> Result {
         let addr = usize::from_safe_cast(self.addr());
 
@@ -190,14 +194,14 @@ impl fw::RegPollPayload {
     }
 }
 
-impl fw::DelayUsPayload {
+impl GspSeqCmdRunner for fw::DelayUsPayload {
     fn run(&self, _sequencer: &GspSequencer<'_>) -> Result {
         fsleep(Delta::from_micros(i64::from(self.val())));
         Ok(())
     }
 }
 
-impl fw::RegStorePayload {
+impl GspSeqCmdRunner for fw::RegStorePayload {
     fn run(&self, sequencer: &GspSequencer<'_>) -> Result {
         let addr = usize::from_safe_cast(self.addr());
 
@@ -205,7 +209,7 @@ impl fw::RegStorePayload {
     }
 }
 
-impl GspSeqCmd {
+impl GspSeqCmdRunner for GspSeqCmd {
     fn run(&self, seq: &GspSequencer<'_>) -> Result {
         match self {
             GspSeqCmd::RegWrite(cmd) => cmd.run(seq),

@@ -992,7 +992,7 @@ static inline bool sec_usage_check(struct f2fs_sb_info *sbi, unsigned int secno)
  */
 static inline int nr_pages_to_skip(struct f2fs_sb_info *sbi, int type)
 {
-	if (bdi_wb_dirty_exceeded(sbi->sb->s_bdi))
+	if (sbi->sb->s_bdi->wb.dirty_exceeded)
 		return 0;
 
 	if (type == DATA)

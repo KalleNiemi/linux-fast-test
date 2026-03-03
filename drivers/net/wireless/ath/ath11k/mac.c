@@ -1557,15 +1557,12 @@ static int ath11k_mac_setup_bcn_tmpl_ema(struct ath11k_vif *arvif,
 	if (!beacons || !beacons->cnt) {
 		ath11k_warn(arvif->ar->ab,
 			    "failed to get ema beacon templates from mac80211\n");
-		ret = -EPERM;
-		goto free;
+		return -EPERM;
 	}
 
 	if (tx_arvif == arvif) {
-		if (ath11k_mac_set_vif_params(tx_arvif, beacons->bcn[0].skb)) {
-			ret = -EINVAL;
-			goto free;
-		}
+		if (ath11k_mac_set_vif_params(tx_arvif, beacons->bcn[0].skb))
+			return -EINVAL;
 	} else {
 		arvif->wpaie_present = tx_arvif->wpaie_present;
 	}
@@ -1592,11 +1589,11 @@ static int ath11k_mac_setup_bcn_tmpl_ema(struct ath11k_vif *arvif,
 		}
 	}
 
-	if (tx_arvif != arvif && !nontx_vif_params_set)
-		ret = -EINVAL; /* Profile not found in the beacons */
-
-free:
 	ieee80211_beacon_free_ema_list(beacons);
+
+	if (tx_arvif != arvif && !nontx_vif_params_set)
+		return -EINVAL; /* Profile not found in the beacons */
+
 	return ret;
 }
 
@@ -1625,22 +1622,19 @@ static int ath11k_mac_setup_bcn_tmpl_mbssid(struct ath11k_vif *arvif,
 	}
 
 	if (tx_arvif == arvif) {
-		if (ath11k_mac_set_vif_params(tx_arvif, bcn)) {
-			ret = -EINVAL;
-			goto free;
-		}
+		if (ath11k_mac_set_vif_params(tx_arvif, bcn))
+			return -EINVAL;
 	} else if (!ath11k_mac_set_nontx_vif_params(tx_arvif, arvif, bcn)) {
-		ret = -EINVAL;
-		goto free;
+		return -EINVAL;
 	}
 
 	ret = ath11k_wmi_bcn_tmpl(ar, arvif->vdev_id, &offs, bcn, 0);
+	kfree_skb(bcn);
+
 	if (ret)
 		ath11k_warn(ab, "failed to submit beacon template command: %d\n",
 			    ret);
 
-free:
-	kfree_skb(bcn);
 	return ret;
 }
 

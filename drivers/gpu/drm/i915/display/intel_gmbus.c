@@ -35,6 +35,7 @@
 #include <drm/drm_print.h>
 #include <drm/display/drm_hdcp_helper.h>
 
+#include "i915_reg.h"
 #include "intel_de.h"
 #include "intel_display_regs.h"
 #include "intel_display_types.h"

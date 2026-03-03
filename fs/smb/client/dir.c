@@ -82,11 +82,10 @@ char *__build_path_from_dentry_optional_prefix(struct dentry *direntry, void *pa
 					       const char *tree, int tree_len,
 					       bool prefix)
 {
-	struct cifs_sb_info *cifs_sb = CIFS_SB(direntry);
-	unsigned int sbflags = cifs_sb_flags(cifs_sb);
-	char dirsep = CIFS_DIR_SEP(cifs_sb);
-	int pplen = 0;
 	int dfsplen;
+	int pplen = 0;
+	struct cifs_sb_info *cifs_sb = CIFS_SB(direntry->d_sb);
+	char dirsep = CIFS_DIR_SEP(cifs_sb);
 	char *s;
 
 	if (unlikely(!page))
@@ -97,7 +96,7 @@ char *__build_path_from_dentry_optional_prefix(struct dentry *direntry, void *pa
 	else
 		dfsplen = 0;
 
-	if (sbflags & CIFS_MOUNT_USE_PREFIX_PATH)
+	if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_USE_PREFIX_PATH)
 		pplen = cifs_sb->prepath ? strlen(cifs_sb->prepath) + 1 : 0;
 
 	s = dentry_path_raw(direntry, page, PATH_MAX);
@@ -124,7 +123,7 @@ char *__build_path_from_dentry_optional_prefix(struct dentry *direntry, void *pa
 	if (dfsplen) {
 		s -= dfsplen;
 		memcpy(s, tree, dfsplen);
-		if (sbflags & CIFS_MOUNT_POSIX_PATHS) {
+		if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_POSIX_PATHS) {
 			int i;
 			for (i = 0; i < dfsplen; i++) {
 				if (s[i] == '\\')
@@ -153,7 +152,7 @@ char *build_path_from_dentry_optional_prefix(struct dentry *direntry, void *page
 static int
 check_name(struct dentry *direntry, struct cifs_tcon *tcon)
 {
-	struct cifs_sb_info *cifs_sb = CIFS_SB(direntry);
+	struct cifs_sb_info *cifs_sb = CIFS_SB(direntry->d_sb);
 	int i;
 
 	if (unlikely(tcon->fsAttrInfo.MaxPathNameComponentLength &&
@@ -161,7 +160,7 @@ check_name(struct dentry *direntry, struct cifs_tcon *tcon)
 		     le32_to_cpu(tcon->fsAttrInfo.MaxPathNameComponentLength)))
 		return -ENAMETOOLONG;
 
-	if (!(cifs_sb_flags(cifs_sb) & CIFS_MOUNT_POSIX_PATHS)) {
+	if (!(cifs_sb->mnt_cifs_flags & CIFS_MOUNT_POSIX_PATHS)) {
 		for (i = 0; i < direntry->d_name.len; i++) {
 			if (direntry->d_name.name[i] == '\\') {
 				cifs_dbg(FYI, "Invalid file name\n");
@@ -182,12 +181,11 @@ static int cifs_do_create(struct inode *inode, struct dentry *direntry, unsigned
 	int rc = -ENOENT;
 	int create_options = CREATE_NOT_DIR;
 	int desired_access;
-	struct cifs_sb_info *cifs_sb = CIFS_SB(inode);
+	struct cifs_sb_info *cifs_sb = CIFS_SB(inode->i_sb);
 	struct cifs_tcon *tcon = tlink_tcon(tlink);
 	const char *full_path;
 	void *page = alloc_dentry_path();
 	struct inode *newinode = NULL;
-	unsigned int sbflags;
 	int disposition;
 	struct TCP_Server_Info *server = tcon->ses->server;
 	struct cifs_open_parms oparms;
@@ -367,7 +365,6 @@ retry_open:
 	 * If Open reported that we actually created a file then we now have to
 	 * set the mode if possible.
 	 */
-	sbflags = cifs_sb_flags(cifs_sb);
 	if ((tcon->unix_ext) && (*oplock & CIFS_CREATE_ACTION)) {
 		struct cifs_unix_set_info_args args = {
 				.mode	= mode,
@@ -377,7 +374,7 @@ retry_open:
 				.device	= 0,
 		};
 
-		if (sbflags & CIFS_MOUNT_SET_UID) {
+		if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_SET_UID) {
 			args.uid = current_fsuid();
 			if (inode->i_mode & S_ISGID)
 				args.gid = inode->i_gid;
@@ -414,9 +411,9 @@ cifs_create_get_file_info:
 			if (server->ops->set_lease_key)
 				server->ops->set_lease_key(newinode, fid);
 			if ((*oplock & CIFS_CREATE_ACTION) && S_ISREG(newinode->i_mode)) {
-				if (sbflags & CIFS_MOUNT_DYNPERM)
+				if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_DYNPERM)
 					newinode->i_mode = mode;
-				if (sbflags & CIFS_MOUNT_SET_UID) {
+				if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_SET_UID) {
 					newinode->i_uid = current_fsuid();
 					if (inode->i_mode & S_ISGID)
 						newinode->i_gid = inode->i_gid;
@@ -461,20 +458,18 @@ int
 cifs_atomic_open(struct inode *inode, struct dentry *direntry,
 		 struct file *file, unsigned int oflags, umode_t mode)
 {
-	struct cifs_sb_info *cifs_sb = CIFS_SB(inode);
-	struct cifs_open_info_data buf = {};
-	struct TCP_Server_Info *server;
-	struct cifsFileInfo *file_info;
-	struct cifs_pending_open open;
-	struct cifs_fid fid = {};
+	int rc;
+	unsigned int xid;
 	struct tcon_link *tlink;
 	struct cifs_tcon *tcon;
-	unsigned int sbflags;
-	unsigned int xid;
+	struct TCP_Server_Info *server;
+	struct cifs_fid fid = {};
+	struct cifs_pending_open open;
 	__u32 oplock;
-	int rc;
+	struct cifsFileInfo *file_info;
+	struct cifs_open_info_data buf = {};
 
-	if (unlikely(cifs_forced_shutdown(cifs_sb)))
+	if (unlikely(cifs_forced_shutdown(CIFS_SB(inode->i_sb))))
 		return smb_EIO(smb_eio_trace_forced_shutdown);
 
 	/*
@@ -504,7 +499,7 @@ cifs_atomic_open(struct inode *inode, struct dentry *direntry,
 	cifs_dbg(FYI, "parent inode = 0x%p name is: %pd and dentry = 0x%p\n",
 		 inode, direntry, direntry);
 
-	tlink = cifs_sb_tlink(cifs_sb);
+	tlink = cifs_sb_tlink(CIFS_SB(inode->i_sb));
 	if (IS_ERR(tlink)) {
 		rc = PTR_ERR(tlink);
 		goto out_free_xid;
@@ -541,13 +536,13 @@ cifs_atomic_open(struct inode *inode, struct dentry *direntry,
 		goto out;
 	}
 
-	sbflags = cifs_sb_flags(cifs_sb);
-	if ((file->f_flags & O_DIRECT) && (sbflags & CIFS_MOUNT_STRICT_IO)) {
-		if (sbflags & CIFS_MOUNT_NO_BRL)
+	if (file->f_flags & O_DIRECT &&
+	    CIFS_SB(inode->i_sb)->mnt_cifs_flags & CIFS_MOUNT_STRICT_IO) {
+		if (CIFS_SB(inode->i_sb)->mnt_cifs_flags & CIFS_MOUNT_NO_BRL)
 			file->f_op = &cifs_file_direct_nobrl_ops;
 		else
 			file->f_op = &cifs_file_direct_ops;
-	}
+		}
 
 	file_info = cifs_new_fileinfo(&fid, file, tlink, oplock, buf.symlink_target);
 	if (file_info == NULL) {

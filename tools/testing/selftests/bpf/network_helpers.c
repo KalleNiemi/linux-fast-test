@@ -432,7 +432,7 @@ int make_sockaddr(int family, const char *addr_str, __u16 port,
 		memset(addr, 0, sizeof(*sun));
 		sun->sun_family = family;
 		sun->sun_path[0] = 0;
-		strscpy(sun->sun_path + 1, addr_str, sizeof(sun->sun_path) - 1);
+		strcpy(sun->sun_path + 1, addr_str);
 		if (len)
 			*len = offsetof(struct sockaddr_un, sun_path) + 1 + strlen(addr_str);
 		return 0;
@@ -581,7 +581,8 @@ int open_tuntap(const char *dev_name, bool need_mac)
 		return -1;
 
 	ifr.ifr_flags = IFF_NO_PI | (need_mac ? IFF_TAP : IFF_TUN);
-	strscpy(ifr.ifr_name, dev_name);
+	strncpy(ifr.ifr_name, dev_name, IFNAMSIZ - 1);
+	ifr.ifr_name[IFNAMSIZ - 1] = '\0';
 
 	err = ioctl(fd, TUNSETIFF, &ifr);
 	if (!ASSERT_OK(err, "ioctl(TUNSETIFF)")) {

@@ -942,16 +942,10 @@ static int omap2_mcspi_setup_transfer(struct spi_device *spi,
 
 	l = mcspi_cached_chconf0(spi);
 
-	if (spi->mode & SPI_3WIRE) {
-		if (t && !t->tx_buf) {
-			l &= ~OMAP2_MCSPI_CHCONF_IS;
-			l |= OMAP2_MCSPI_CHCONF_DPE0;
-		} else if (t && !t->rx_buf) {
-			l |= OMAP2_MCSPI_CHCONF_IS;
-			l &= ~OMAP2_MCSPI_CHCONF_DPE0;
-		}
-		l |= OMAP2_MCSPI_CHCONF_DPE1;
-	} else if (mcspi->pin_dir == MCSPI_PINDIR_D0_IN_D1_OUT) {
+	/* standard 4-wire host mode:  SCK, MOSI/out, MISO/in, nCS
+	 * REVISIT: this controller could support SPI_3WIRE mode.
+	 */
+	if (mcspi->pin_dir == MCSPI_PINDIR_D0_IN_D1_OUT) {
 		l &= ~OMAP2_MCSPI_CHCONF_IS;
 		l &= ~OMAP2_MCSPI_CHCONF_DPE1;
 		l |= OMAP2_MCSPI_CHCONF_DPE0;
@@ -1184,7 +1178,6 @@ static int omap2_mcspi_transfer_one(struct spi_controller *ctlr,
 		omap2_mcspi_set_cs(spi, spi->mode & SPI_CS_HIGH);
 
 	if (par_override ||
-	    (spi->mode & SPI_3WIRE) ||
 	    (t->speed_hz != spi->max_speed_hz) ||
 	    (t->bits_per_word != spi->bits_per_word)) {
 		par_override = 1;
@@ -1491,7 +1484,7 @@ static int omap2_mcspi_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	/* the spi->mode bits understood by this driver: */
-	ctlr->mode_bits = SPI_CPOL | SPI_CPHA | SPI_CS_HIGH | SPI_3WIRE;
+	ctlr->mode_bits = SPI_CPOL | SPI_CPHA | SPI_CS_HIGH;
 	ctlr->bits_per_word_mask = SPI_BPW_RANGE_MASK(4, 32);
 	ctlr->setup = omap2_mcspi_setup;
 	ctlr->auto_runtime_pm = true;

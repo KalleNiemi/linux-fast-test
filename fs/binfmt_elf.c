@@ -47,7 +47,6 @@
 #include <linux/dax.h>
 #include <linux/uaccess.h>
 #include <uapi/linux/rseq.h>
-#include <linux/rseq.h>
 #include <asm/param.h>
 #include <asm/page.h>
 
@@ -287,7 +286,7 @@ create_elf_tables(struct linux_binprm *bprm, const struct elfhdr *exec,
 	}
 #ifdef CONFIG_RSEQ
 	NEW_AUX_ENT(AT_RSEQ_FEATURE_SIZE, offsetof(struct rseq, end));
-	NEW_AUX_ENT(AT_RSEQ_ALIGN, rseq_alloc_align());
+	NEW_AUX_ENT(AT_RSEQ_ALIGN, __alignof__(struct rseq));
 #endif
 #undef NEW_AUX_ENT
 	/* AT_NULL is zero; clear the rest too */

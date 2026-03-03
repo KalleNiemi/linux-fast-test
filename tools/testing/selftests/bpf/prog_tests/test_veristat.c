@@ -24,9 +24,9 @@ static struct fixture *init_fixture(void)
 
 	/* for no_alu32 and cpuv4 veristat is in parent folder */
 	if (access("./veristat", F_OK) == 0)
-		strscpy(fix->veristat, "./veristat");
+		strcpy(fix->veristat, "./veristat");
 	else if (access("../veristat", F_OK) == 0)
-		strscpy(fix->veristat, "../veristat");
+		strcpy(fix->veristat, "../veristat");
 	else
 		PRINT_FAIL("Can't find veristat binary");
 

@@ -134,9 +134,13 @@ static int amdgpu_dma_buf_pin(struct dma_buf_attachment *attach)
 	 * notifiers are disabled, only allow pinning in VRAM when move
 	 * notiers are enabled.
 	 */
-	list_for_each_entry(attach, &dmabuf->attachments, node)
-		if (!attach->peer2peer)
-			domains &= ~AMDGPU_GEM_DOMAIN_VRAM;
+	if (!IS_ENABLED(CONFIG_DMABUF_MOVE_NOTIFY)) {
+		domains &= ~AMDGPU_GEM_DOMAIN_VRAM;
+	} else {
+		list_for_each_entry(attach, &dmabuf->attachments, node)
+			if (!attach->peer2peer)
+				domains &= ~AMDGPU_GEM_DOMAIN_VRAM;
+	}
 
 	if (domains & AMDGPU_GEM_DOMAIN_VRAM)
 		bo->flags |= AMDGPU_GEM_CREATE_CPU_ACCESS_REQUIRED;
@@ -452,7 +456,7 @@ error:
 }
 
 /**
- * amdgpu_dma_buf_move_notify - &attach.invalidate_mappings implementation
+ * amdgpu_dma_buf_move_notify - &attach.move_notify implementation
  *
  * @attach: the DMA-buf attachment
  *
@@ -530,7 +534,7 @@ amdgpu_dma_buf_move_notify(struct dma_buf_attachment *attach)
 
 static const struct dma_buf_attach_ops amdgpu_dma_buf_attach_ops = {
 	.allow_peer2peer = true,
-	.invalidate_mappings = amdgpu_dma_buf_move_notify
+	.move_notify = amdgpu_dma_buf_move_notify
 };
 
 /**

@@ -71,8 +71,8 @@ struct axis_fifo {
 
 	unsigned int rx_fifo_depth;
 	unsigned int tx_fifo_depth;
-	u32 has_rx_fifo;
-	u32 has_tx_fifo;
+	int has_rx_fifo;
+	int has_tx_fifo;
 
 	wait_queue_head_t read_queue;
 	struct mutex read_lock; /* lock for reading */
@@ -392,39 +392,60 @@ static int axis_fifo_parse_dt(struct axis_fifo *fifo)
 
 	ret = of_property_read_u32(node, "xlnx,axi-str-rxd-tdata-width",
 				   &value);
-	if (ret)
-		return ret;
-	if (value != 32)
-		return -EINVAL;
+	if (ret) {
+		dev_err(fifo->dt_device, "missing xlnx,axi-str-rxd-tdata-width property\n");
+		goto end;
+	} else if (value != 32) {
+		dev_err(fifo->dt_device, "xlnx,axi-str-rxd-tdata-width only supports 32 bits\n");
+		ret = -EIO;
+		goto end;
+	}
 
 	ret = of_property_read_u32(node, "xlnx,axi-str-txd-tdata-width",
 				   &value);
-	if (ret)
-		return ret;
-	if (value != 32)
-		return -EINVAL;
+	if (ret) {
+		dev_err(fifo->dt_device, "missing xlnx,axi-str-txd-tdata-width property\n");
+		goto end;
+	} else if (value != 32) {
+		dev_err(fifo->dt_device, "xlnx,axi-str-txd-tdata-width only supports 32 bits\n");
+		ret = -EIO;
+		goto end;
+	}
 
 	ret = of_property_read_u32(node, "xlnx,rx-fifo-depth",
 				   &fifo->rx_fifo_depth);
-	if (ret)
-		return ret;
+	if (ret) {
+		dev_err(fifo->dt_device, "missing xlnx,rx-fifo-depth property\n");
+		ret = -EIO;
+		goto end;
+	}
 
 	ret = of_property_read_u32(node, "xlnx,tx-fifo-depth",
 				   &fifo->tx_fifo_depth);
-	if (ret)
-		return ret;
+	if (ret) {
+		dev_err(fifo->dt_device, "missing xlnx,tx-fifo-depth property\n");
+		ret = -EIO;
+		goto end;
+	}
 
 	ret = of_property_read_u32(node, "xlnx,use-rx-data",
 				   &fifo->has_rx_fifo);
-	if (ret)
-		return ret;
+	if (ret) {
+		dev_err(fifo->dt_device, "missing xlnx,use-rx-data property\n");
+		ret = -EIO;
+		goto end;
+	}
 
 	ret = of_property_read_u32(node, "xlnx,use-tx-data",
 				   &fifo->has_tx_fifo);
-	if (ret)
-		return ret;
+	if (ret) {
+		dev_err(fifo->dt_device, "missing xlnx,use-tx-data property\n");
+		ret = -EIO;
+		goto end;
+	}
 
-	return 0;
+end:
+	return ret;
 }
 
 static int axis_fifo_probe(struct platform_device *pdev)

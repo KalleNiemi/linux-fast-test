@@ -18,17 +18,12 @@ allOf:
 
 properties:
   compatible:
-    oneOf:
-      - enum:
-          - capella,cm36672p
-          - vishay,vcnl4000
-          - vishay,vcnl4010
-          - vishay,vcnl4020
-          - vishay,vcnl4040
-          - vishay,vcnl4200
-      - items:
-          - const: capella,cm36686
-          - const: vishay,vcnl4040
+    enum:
+      - vishay,vcnl4000
+      - vishay,vcnl4010
+      - vishay,vcnl4020
+      - vishay,vcnl4040
+      - vishay,vcnl4200
 
   interrupts:
     maxItems: 1

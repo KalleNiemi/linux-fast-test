@@ -808,7 +808,7 @@ static void ublk_dev_param_basic_apply(struct ublk_device *ub)
 
 static int ublk_integrity_flags(u32 flags)
 {
-	int ret_flags = BLK_SPLIT_INTERVAL_CAPABLE;
+	int ret_flags = 0;
 
 	if (flags & LBMD_PI_CAP_INTEGRITY) {
 		flags &= ~LBMD_PI_CAP_INTEGRITY;

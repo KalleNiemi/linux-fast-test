@@ -145,6 +145,7 @@
 				reg = <0x801c 0x4>;
 				status = "disabled";
 				clocks = <&refclk>;
+				syscon = <&gcr>;
 			};
 
 			watchdog1: watchdog@901c {
@@ -153,6 +154,7 @@
 				reg = <0x901c 0x4>;
 				status = "disabled";
 				clocks = <&refclk>;
+				syscon = <&gcr>;
 			};
 
 			watchdog2: watchdog@a01c {
@@ -161,6 +163,7 @@
 				reg = <0xa01c 0x4>;
 				status = "disabled";
 				clocks = <&refclk>;
+				syscon = <&gcr>;
 			};
 		};
 	};

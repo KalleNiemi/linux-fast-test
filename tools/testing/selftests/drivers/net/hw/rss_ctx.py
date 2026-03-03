@@ -4,16 +4,13 @@
 import datetime
 import random
 import re
-import time
-from lib.py import ksft_disruptive
 from lib.py import ksft_run, ksft_pr, ksft_exit
 from lib.py import ksft_eq, ksft_ne, ksft_ge, ksft_in, ksft_lt, ksft_true, ksft_raises
 from lib.py import NetDrvEpEnv
 from lib.py import EthtoolFamily, NetdevFamily
 from lib.py import KsftSkipEx, KsftFailEx
-from lib.py import rand_port, rand_ports
-from lib.py import cmd, ethtool, ip, defer, CmdExitFailure, wait_file
-from lib.py import GenerateTraffic
+from lib.py import rand_port
+from lib.py import ethtool, ip, defer, GenerateTraffic, CmdExitFailure
 
 
 def _rss_key_str(key):
@@ -455,7 +452,7 @@ def test_rss_context(cfg, ctx_cnt=1, create_with_cfg=None):
         except:
             raise KsftSkipEx("Not enough queues for the test")
 
-    ports = rand_ports(ctx_cnt)
+    ports = []
 
     # Use queues 0 and 1 for normal traffic
     ethtool(f"-X {cfg.ifname} equal 2")
@@ -489,6 +486,7 @@ def test_rss_context(cfg, ctx_cnt=1, create_with_cfg=None):
         ksft_eq(min(data['rss-indirection-table']), 2 + i * 2, "Unexpected context cfg: " + str(data))
         ksft_eq(max(data['rss-indirection-table']), 2 + i * 2 + 1, "Unexpected context cfg: " + str(data))
 
+        ports.append(rand_port())
         flow = f"flow-type tcp{cfg.addr_ipver} dst-ip {cfg.addr} dst-port {ports[i]} context {ctx_id}"
         ntuple = ethtool_create(cfg, "-N", flow)
         defer(ethtool, f"-N {cfg.ifname} delete {ntuple}")
@@ -544,7 +542,7 @@ def test_rss_context_out_of_order(cfg, ctx_cnt=4):
 
     ntuple = []
     ctx = []
-    ports = rand_ports(ctx_cnt)
+    ports = []
 
     def remove_ctx(idx):
         ntuple[idx].exec()
@@ -576,6 +574,7 @@ def test_rss_context_out_of_order(cfg, ctx_cnt=4):
         ctx_id = ethtool_create(cfg, "-X", f"context new start {2 + i * 2} equal 2")
         ctx.append(defer(ethtool, f"-X {cfg.ifname} context {ctx_id} delete"))
 
+        ports.append(rand_port())
         flow = f"flow-type tcp{cfg.addr_ipver} dst-ip {cfg.addr} dst-port {ports[i]} context {ctx_id}"
         ntuple_id = ethtool_create(cfg, "-N", flow)
         ntuple.append(defer(ethtool, f"-N {cfg.ifname} delete {ntuple_id}"))
@@ -789,10 +788,9 @@ def test_rss_default_context_rule(cfg):
     ethtool(f"-N {cfg.ifname} {flow_generic}")
     defer(ethtool, f"-N {cfg.ifname} delete 1")
 
-    ports = rand_ports(2)
     # Specific high-priority rule for a random port that should stay on context 0.
     # Assign loc 0 so it is evaluated before the generic rule.
-    port_main = ports[0]
+    port_main = rand_port()
     flow_main = f"flow-type tcp{cfg.addr_ipver} dst-ip {cfg.addr} dst-port {port_main} context 0 loc 0"
     ethtool(f"-N {cfg.ifname} {flow_main}")
     defer(ethtool, f"-N {cfg.ifname} delete 0")
@@ -805,102 +803,10 @@ def test_rss_default_context_rule(cfg):
                           'empty' : (2, 3) })
 
     # And that traffic for any other port is steered to the new context
-    port_other = ports[1]
+    port_other = rand_port()
     _send_traffic_check(cfg, port_other, f"context {ctx_id}",
                         { 'target': (2, 3),
                           'noise' : (0, 1) })
-
-
-@ksft_disruptive
-def test_rss_context_persist_ifupdown(cfg, pre_down=False):
-    """
-    Test that RSS contexts and their associated ntuple filters persist across
-    an interface down/up cycle.
-
-    """
-
-    require_ntuple(cfg)
-
-    qcnt = len(_get_rx_cnts(cfg))
-    if qcnt < 6:
-        try:
-            ethtool(f"-L {cfg.ifname} combined 6")
-            defer(ethtool, f"-L {cfg.ifname} combined {qcnt}")
-        except Exception as exc:
-            raise KsftSkipEx("Not enough queues for the test") from exc
-
-    ethtool(f"-X {cfg.ifname} equal 2")
-    defer(ethtool, f"-X {cfg.ifname} default")
-
-    ifup = defer(ip, f"link set dev {cfg.ifname} up")
-    if pre_down:
-        ip(f"link set dev {cfg.ifname} down")
-
-    try:
-        ctx1_id = ethtool_create(cfg, "-X", "context new start 2 equal 2")
-        defer(ethtool, f"-X {cfg.ifname} context {ctx1_id} delete")
-    except CmdExitFailure as exc:
-        raise KsftSkipEx("Create context not supported with interface down") from exc
-
-    ctx2_id = ethtool_create(cfg, "-X", "context new start 4 equal 2")
-    defer(ethtool, f"-X {cfg.ifname} context {ctx2_id} delete")
-
-    port_ctx2 = rand_port()
-    flow = f"flow-type tcp{cfg.addr_ipver} dst-ip {cfg.addr} dst-port {port_ctx2} context {ctx2_id}"
-    ntuple_id = ethtool_create(cfg, "-N", flow)
-    defer(ethtool, f"-N {cfg.ifname} delete {ntuple_id}")
-
-    if not pre_down:
-        ip(f"link set dev {cfg.ifname} down")
-    ifup.exec()
-
-    wait_file(f"/sys/class/net/{cfg.ifname}/carrier",
-        lambda x: x.strip() == "1", deadline=20)
-
-    remote_addr = cfg.remote_addr_v[cfg.addr_ipver]
-    for _ in range(10):
-        if cmd(f"ping -c 1 -W 1 {remote_addr}", fail=False).ret == 0:
-            break
-        time.sleep(1)
-    else:
-        raise KsftSkipEx("Cannot reach remote host after interface up")
-
-    ctxs = cfg.ethnl.rss_get({'header': {'dev-name': cfg.ifname}}, dump=True)
-
-    data1 = [c for c in ctxs if c.get('context') == ctx1_id]
-    ksft_eq(len(data1), 1, f"Context {ctx1_id} should persist after ifup")
-
-    data2 = [c for c in ctxs if c.get('context') == ctx2_id]
-    ksft_eq(len(data2), 1, f"Context {ctx2_id} should persist after ifup")
-
-    _ntuple_rule_check(cfg, ntuple_id, ctx2_id)
-
-    cnts = _get_rx_cnts(cfg)
-    GenerateTraffic(cfg).wait_pkts_and_stop(20000)
-    cnts = _get_rx_cnts(cfg, prev=cnts)
-
-    main_traffic = sum(cnts[0:2])
-    ksft_ge(main_traffic, 18000, f"Main context traffic distribution: {cnts}")
-    ksft_lt(sum(cnts[2:6]), 500, f"Other context queues should be mostly empty: {cnts}")
-
-    _send_traffic_check(cfg, port_ctx2, f"context {ctx2_id}",
-                        {'target': (4, 5),
-                         'noise': (0, 1),
-                         'empty': (2, 3)})
-
-
-def test_rss_context_persist_create_and_ifdown(cfg):
-    """
-    Create RSS contexts then cycle the interface down and up.
-    """
-    test_rss_context_persist_ifupdown(cfg, pre_down=False)
-
-
-def test_rss_context_persist_ifdown_and_create(cfg):
-    """
-    Bring interface down first, then create RSS contexts and bring up.
-    """
-    test_rss_context_persist_ifupdown(cfg, pre_down=True)
 
 
 def main() -> None:
@@ -917,9 +823,7 @@ def main() -> None:
                   test_rss_context_out_of_order, test_rss_context4_create_with_cfg,
                   test_flow_add_context_missing,
                   test_delete_rss_context_busy, test_rss_ntuple_addition,
-                  test_rss_default_context_rule,
-                  test_rss_context_persist_create_and_ifdown,
-                  test_rss_context_persist_ifdown_and_create],
+                  test_rss_default_context_rule],
                  args=(cfg, ))
     ksft_exit()
 

@@ -3552,7 +3552,7 @@ void tcp_rearm_rto(struct sock *sk)
 /* Try to schedule a loss probe; if that doesn't work, then schedule an RTO. */
 static void tcp_set_xmit_timer(struct sock *sk)
 {
-	if (!tcp_sk(sk)->packets_out || !tcp_schedule_loss_probe(sk, true))
+	if (!tcp_schedule_loss_probe(sk, true))
 		tcp_rearm_rto(sk);
 }
 
@@ -4858,24 +4858,15 @@ static enum skb_drop_reason tcp_disordered_ack_check(const struct sock *sk,
  */
 
 static enum skb_drop_reason tcp_sequence(const struct sock *sk,
-					 u32 seq, u32 end_seq,
-					 const struct tcphdr *th)
+					 u32 seq, u32 end_seq)
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
-	u32 seq_limit;
 
 	if (before(end_seq, tp->rcv_wup))
 		return SKB_DROP_REASON_TCP_OLD_SEQUENCE;
 
-	seq_limit = tp->rcv_nxt + tcp_receive_window(tp);
-	if (unlikely(after(end_seq, seq_limit))) {
-		/* Some stacks are known to handle FIN incorrectly; allow the
-		 * FIN to extend beyond the window and check it in detail later.
-		 */
-		if (!after(end_seq - th->fin, seq_limit))
-			return SKB_NOT_DROPPED_YET;
-
-		if (after(seq, seq_limit))
+	if (after(end_seq, tp->rcv_nxt + tcp_receive_window(tp))) {
+		if (after(seq, tp->rcv_nxt + tcp_receive_window(tp)))
 			return SKB_DROP_REASON_TCP_INVALID_SEQUENCE;
 
 		/* Only accept this packet if receive queue is empty. */
@@ -5425,7 +5416,7 @@ static void tcp_data_queue_ofo(struct sock *sk, struct sk_buff *skb)
 
 	if (unlikely(tcp_try_rmem_schedule(sk, skb, skb->truesize))) {
 		NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPOFODROP);
-		READ_ONCE(sk->sk_data_ready)(sk);
+		sk->sk_data_ready(sk);
 		tcp_drop_reason(sk, skb, SKB_DROP_REASON_PROTO_MEM);
 		return;
 	}
@@ -5635,7 +5626,7 @@ err:
 void tcp_data_ready(struct sock *sk)
 {
 	if (tcp_epollin_ready(sk, sk->sk_rcvlowat) || sock_flag(sk, SOCK_DONE))
-		READ_ONCE(sk->sk_data_ready)(sk);
+		sk->sk_data_ready(sk);
 }
 
 static void tcp_data_queue(struct sock *sk, struct sk_buff *skb)
@@ -5691,7 +5682,7 @@ queue_and_out:
 			inet_csk(sk)->icsk_ack.pending |=
 					(ICSK_ACK_NOMEM | ICSK_ACK_NOW);
 			inet_csk_schedule_ack(sk);
-			READ_ONCE(sk->sk_data_ready)(sk);
+			sk->sk_data_ready(sk);
 
 			if (skb_queue_len(&sk->sk_receive_queue) && skb->len) {
 				reason = SKB_DROP_REASON_PROTO_MEM;
@@ -6114,9 +6105,7 @@ static void tcp_new_space(struct sock *sk)
 		tp->snd_cwnd_stamp = tcp_jiffies32;
 	}
 
-	INDIRECT_CALL_1(READ_ONCE(sk->sk_write_space),
-			sk_stream_write_space,
-			sk);
+	INDIRECT_CALL_1(sk->sk_write_space, sk_stream_write_space, sk);
 }
 
 /* Caller made space either from:
@@ -6327,7 +6316,7 @@ static void tcp_urg(struct sock *sk, struct sk_buff *skb, const struct tcphdr *t
 				BUG();
 			WRITE_ONCE(tp->urg_data, TCP_URG_VALID | tmp);
 			if (!sock_flag(sk, SOCK_DEAD))
-				READ_ONCE(sk->sk_data_ready)(sk);
+				sk->sk_data_ready(sk);
 		}
 	}
 }
@@ -6390,8 +6379,7 @@ static bool tcp_validate_incoming(struct sock *sk, struct sk_buff *skb,
 
 step1:
 	/* Step 1: check sequence number */
-	reason = tcp_sequence(sk, TCP_SKB_CB(skb)->seq,
-			      TCP_SKB_CB(skb)->end_seq, th);
+	reason = tcp_sequence(sk, TCP_SKB_CB(skb)->seq, TCP_SKB_CB(skb)->end_seq);
 	if (reason) {
 		/* RFC793, page 37: "In all states except SYN-SENT, all reset
 		 * (RST) segments are validated by checking their SEQ-fields."
@@ -7794,7 +7782,7 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 			sock_put(fastopen_sk);
 			goto drop_and_free;
 		}
-		READ_ONCE(sk->sk_data_ready)(sk);
+		sk->sk_data_ready(sk);
 		bh_unlock_sock(fastopen_sk);
 		sock_put(fastopen_sk);
 	} else {

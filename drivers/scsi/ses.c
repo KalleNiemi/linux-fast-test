@@ -528,8 +528,9 @@ struct efd {
 };
 
 static int ses_enclosure_find_by_addr(struct enclosure_device *edev,
-				      struct efd *efd)
+				      void *data)
 {
+	struct efd *efd = data;
 	int i;
 	struct ses_component *scomp;
 
@@ -682,7 +683,7 @@ static void ses_match_to_enclosure(struct enclosure_device *edev,
 	if (efd.addr) {
 		efd.dev = &sdev->sdev_gendev;
 
-		ses_enclosure_find_by_addr(edev, &efd);
+		enclosure_for_each_device(ses_enclosure_find_by_addr, &efd);
 	}
 }
 

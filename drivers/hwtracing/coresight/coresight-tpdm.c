@@ -19,6 +19,8 @@
 #include "coresight-priv.h"
 #include "coresight-tpdm.h"
 
+DEFINE_CORESIGHT_DEVLIST(tpdm_devs, "tpdm");
+
 static bool tpdm_has_dsb_dataset(struct tpdm_drvdata *drvdata)
 {
 	return (drvdata->datasets & TPDM_PIDR0_DS_DSB);
@@ -1414,7 +1416,7 @@ static int tpdm_probe(struct device *dev, struct resource *res)
 	}
 
 	/* Set up coresight component description */
-	desc.name = coresight_alloc_device_name("tpdm", dev);
+	desc.name = coresight_alloc_device_name(&tpdm_devs, dev);
 	if (!desc.name)
 		return -ENOMEM;
 	desc.type = CORESIGHT_DEV_TYPE_SOURCE;

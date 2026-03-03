@@ -279,7 +279,7 @@ static u32 encode_config_ggtt(u32 *cfg, const struct xe_gt_sriov_config *config,
 {
 	struct xe_ggtt_node *node = config->ggtt_region;
 
-	if (!node)
+	if (!xe_ggtt_node_allocated(node))
 		return 0;
 
 	return encode_ggtt(cfg, xe_ggtt_node_addr(node), xe_ggtt_node_size(node), details);
@@ -482,9 +482,23 @@ static int pf_distribute_config_ggtt(struct xe_tile *tile, unsigned int vfid, u6
 	return err ?: err2;
 }
 
+static void pf_release_ggtt(struct xe_tile *tile, struct xe_ggtt_node *node)
+{
+	if (xe_ggtt_node_allocated(node)) {
+		/*
+		 * explicit GGTT PTE assignment to the PF using xe_ggtt_assign()
+		 * is redundant, as PTE will be implicitly re-assigned to PF by
+		 * the xe_ggtt_clear() called by below xe_ggtt_remove_node().
+		 */
+		xe_ggtt_node_remove(node, false);
+	} else {
+		xe_ggtt_node_fini(node);
+	}
+}
+
 static void pf_release_vf_config_ggtt(struct xe_gt *gt, struct xe_gt_sriov_config *config)
 {
-	xe_ggtt_node_remove(config->ggtt_region, false);
+	pf_release_ggtt(gt_to_tile(gt), config->ggtt_region);
 	config->ggtt_region = NULL;
 }
 
@@ -503,7 +517,7 @@ static int pf_provision_vf_ggtt(struct xe_gt *gt, unsigned int vfid, u64 size)
 
 	size = round_up(size, alignment);
 
-	if (config->ggtt_region) {
+	if (xe_ggtt_node_allocated(config->ggtt_region)) {
 		err = pf_distribute_config_ggtt(tile, vfid, 0, 0);
 		if (unlikely(err))
 			return err;
@@ -514,14 +528,18 @@ static int pf_provision_vf_ggtt(struct xe_gt *gt, unsigned int vfid, u64 size)
 		if (unlikely(err))
 			return err;
 	}
-	xe_gt_assert(gt, !config->ggtt_region);
+	xe_gt_assert(gt, !xe_ggtt_node_allocated(config->ggtt_region));
 
 	if (!size)
 		return 0;
 
-	node = xe_ggtt_insert_node(ggtt, size, alignment);
+	node = xe_ggtt_node_init(ggtt);
 	if (IS_ERR(node))
 		return PTR_ERR(node);
+
+	err = xe_ggtt_node_insert(node, size, alignment);
+	if (unlikely(err))
+		goto err;
 
 	xe_ggtt_assign(node, vfid);
 	xe_gt_sriov_dbg_verbose(gt, "VF%u assigned GGTT %llx-%llx\n",
@@ -534,7 +552,7 @@ static int pf_provision_vf_ggtt(struct xe_gt *gt, unsigned int vfid, u64 size)
 	config->ggtt_region = node;
 	return 0;
 err:
-	xe_ggtt_node_remove(node, false);
+	pf_release_ggtt(tile, node);
 	return err;
 }
 
@@ -544,7 +562,7 @@ static u64 pf_get_vf_config_ggtt(struct xe_gt *gt, unsigned int vfid)
 	struct xe_ggtt_node *node = config->ggtt_region;
 
 	xe_gt_assert(gt, xe_gt_is_main_type(gt));
-	return node ? xe_ggtt_node_size(node) : 0;
+	return xe_ggtt_node_allocated(node) ? xe_ggtt_node_size(node) : 0;
 }
 
 /**
@@ -1451,8 +1469,8 @@ int xe_gt_sriov_pf_config_set_fair_dbs(struct xe_gt *gt, unsigned int vfid,
 
 static u64 pf_get_lmem_alignment(struct xe_gt *gt)
 {
-	return xe_device_has_lmtt(gt_to_xe(gt)) ?
-		xe_lmtt_page_size(&gt_to_tile(gt)->sriov.pf.lmtt) : XE_PAGE_SIZE;
+	/* this might be platform dependent */
+	return SZ_2M;
 }
 
 static u64 pf_get_min_spare_lmem(struct xe_gt *gt)
@@ -1627,15 +1645,13 @@ static int pf_provision_vf_lmem(struct xe_gt *gt, unsigned int vfid, u64 size)
 	struct xe_device *xe = gt_to_xe(gt);
 	struct xe_tile *tile = gt_to_tile(gt);
 	struct xe_bo *bo;
-	u64 alignment;
 	int err;
 
 	xe_gt_assert(gt, vfid);
 	xe_gt_assert(gt, IS_DGFX(xe));
 	xe_gt_assert(gt, xe_gt_is_main_type(gt));
 
-	alignment = pf_get_lmem_alignment(gt);
-	size = round_up(size, alignment);
+	size = round_up(size, pf_get_lmem_alignment(gt));
 
 	if (config->lmem_obj) {
 		err = pf_distribute_config_lmem(gt, vfid, 0);
@@ -1651,12 +1667,12 @@ static int pf_provision_vf_lmem(struct xe_gt *gt, unsigned int vfid, u64 size)
 	if (!size)
 		return 0;
 
-	xe_gt_assert(gt, alignment == XE_PAGE_SIZE || alignment == SZ_2M);
+	xe_gt_assert(gt, pf_get_lmem_alignment(gt) == SZ_2M);
 	bo = xe_bo_create_pin_range_novm(xe, tile,
 					 ALIGN(size, PAGE_SIZE), 0, ~0ull,
 					 ttm_bo_type_kernel,
-					 XE_BO_FLAG_VRAM(tile->mem.vram) |
-					 (alignment == SZ_2M ? XE_BO_FLAG_NEEDS_2M : 0) |
+					 XE_BO_FLAG_VRAM_IF_DGFX(tile) |
+					 XE_BO_FLAG_NEEDS_2M |
 					 XE_BO_FLAG_PINNED |
 					 XE_BO_FLAG_PINNED_LATE_RESTORE |
 					 XE_BO_FLAG_FORCE_USER_VRAM);
@@ -1738,44 +1754,7 @@ int xe_gt_sriov_pf_config_set_lmem(struct xe_gt *gt, unsigned int vfid, u64 size
 }
 
 /**
- * xe_gt_sriov_pf_config_bulk_set_lmem_locked() - Provision many VFs with LMEM.
- * @gt: the &xe_gt (can't be media)
- * @vfid: starting VF identifier (can't be 0)
- * @num_vfs: number of VFs to provision
- * @size: requested LMEM size
- *
- * This function can only be called on PF.
- *
- * Return: 0 on success or a negative error code on failure.
- */
-int xe_gt_sriov_pf_config_bulk_set_lmem_locked(struct xe_gt *gt, unsigned int vfid,
-					       unsigned int num_vfs, u64 size)
-{
-	unsigned int n;
-	int err = 0;
-
-	lockdep_assert_held(xe_gt_sriov_pf_master_mutex(gt));
-	xe_gt_assert(gt, xe_device_has_lmtt(gt_to_xe(gt)));
-	xe_gt_assert(gt, IS_SRIOV_PF(gt_to_xe(gt)));
-	xe_gt_assert(gt, xe_gt_is_main_type(gt));
-	xe_gt_assert(gt, vfid);
-
-	if (!num_vfs)
-		return 0;
-
-	for (n = vfid; n < vfid + num_vfs; n++) {
-		err = pf_provision_vf_lmem(gt, n, size);
-		if (err)
-			break;
-	}
-
-	return pf_config_bulk_set_u64_done(gt, vfid, num_vfs, size,
-					   pf_get_vf_config_lmem,
-					   "LMEM", n, err);
-}
-
-/**
- * xe_gt_sriov_pf_config_bulk_set_lmem() - Provision many VFs with LMEM.
+ * xe_gt_sriov_pf_config_bulk_set_lmem - Provision many VFs with LMEM.
  * @gt: the &xe_gt (can't be media)
  * @vfid: starting VF identifier (can't be 0)
  * @num_vfs: number of VFs to provision
@@ -1788,52 +1767,26 @@ int xe_gt_sriov_pf_config_bulk_set_lmem_locked(struct xe_gt *gt, unsigned int vf
 int xe_gt_sriov_pf_config_bulk_set_lmem(struct xe_gt *gt, unsigned int vfid,
 					unsigned int num_vfs, u64 size)
 {
-	guard(mutex)(xe_gt_sriov_pf_master_mutex(gt));
+	unsigned int n;
+	int err = 0;
 
-	return xe_gt_sriov_pf_config_bulk_set_lmem_locked(gt, vfid, num_vfs, size);
-}
-
-/**
- * xe_gt_sriov_pf_config_get_lmem_locked() - Get VF's LMEM quota.
- * @gt: the &xe_gt
- * @vfid: the VF identifier (can't be 0 == PFID)
- *
- * This function can only be called on PF.
- *
- * Return: VF's LMEM quota.
- */
-u64 xe_gt_sriov_pf_config_get_lmem_locked(struct xe_gt *gt, unsigned int vfid)
-{
-	lockdep_assert_held(xe_gt_sriov_pf_master_mutex(gt));
-	xe_gt_assert(gt, IS_SRIOV_PF(gt_to_xe(gt)));
 	xe_gt_assert(gt, vfid);
-
-	return pf_get_vf_config_lmem(gt, vfid);
-}
-
-/**
- * xe_gt_sriov_pf_config_set_lmem_locked() - Provision VF with LMEM.
- * @gt: the &xe_gt (can't be media)
- * @vfid: the VF identifier (can't be 0 == PFID)
- * @size: requested LMEM size
- *
- * This function can only be called on PF.
- */
-int xe_gt_sriov_pf_config_set_lmem_locked(struct xe_gt *gt, unsigned int vfid, u64 size)
-{
-	int err;
-
-	lockdep_assert_held(xe_gt_sriov_pf_master_mutex(gt));
-	xe_gt_assert(gt, xe_device_has_lmtt(gt_to_xe(gt)));
-	xe_gt_assert(gt, IS_SRIOV_PF(gt_to_xe(gt)));
 	xe_gt_assert(gt, xe_gt_is_main_type(gt));
-	xe_gt_assert(gt, vfid);
 
-	err = pf_provision_vf_lmem(gt, vfid, size);
+	if (!num_vfs)
+		return 0;
 
-	return pf_config_set_u64_done(gt, vfid, size,
-				      pf_get_vf_config_lmem(gt, vfid),
-				      "LMEM", err);
+	mutex_lock(xe_gt_sriov_pf_master_mutex(gt));
+	for (n = vfid; n < vfid + num_vfs; n++) {
+		err = pf_provision_vf_lmem(gt, n, size);
+		if (err)
+			break;
+	}
+	mutex_unlock(xe_gt_sriov_pf_master_mutex(gt));
+
+	return pf_config_bulk_set_u64_done(gt, vfid, num_vfs, size,
+					   xe_gt_sriov_pf_config_get_lmem,
+					   "LMEM", n, err);
 }
 
 static struct xe_bo *pf_get_vf_config_lmem_obj(struct xe_gt *gt, unsigned int vfid)
@@ -1903,81 +1856,6 @@ static u64 pf_estimate_fair_lmem(struct xe_gt *gt, unsigned int num_vfs)
 	return fair;
 }
 
-static u64 pf_profile_fair_lmem(struct xe_gt *gt, unsigned int num_vfs)
-{
-	struct xe_tile *tile = gt_to_tile(gt);
-	bool admin_only_pf = xe_sriov_pf_admin_only(tile->xe);
-	u64 usable = xe_vram_region_usable_size(tile->mem.vram);
-	u64 spare = pf_get_min_spare_lmem(gt);
-	u64 available = usable > spare ? usable - spare : 0;
-	u64 shareable = ALIGN_DOWN(available, SZ_1G);
-	u64 alignment = pf_get_lmem_alignment(gt);
-	u64 fair;
-
-	if (admin_only_pf)
-		fair = div_u64(shareable, num_vfs);
-	else
-		fair = div_u64(shareable, 1 + num_vfs);
-
-	if (!admin_only_pf && fair)
-		fair = rounddown_pow_of_two(fair);
-
-	return ALIGN_DOWN(fair, alignment);
-}
-
-static void __pf_show_provisioning_lmem(struct xe_gt *gt, unsigned int first_vf,
-					unsigned int num_vfs, bool provisioned)
-{
-	unsigned int allvfs = 1 + xe_gt_sriov_pf_get_totalvfs(gt); /* PF plus VFs */
-	unsigned long *bitmap __free(bitmap) = bitmap_zalloc(allvfs, GFP_KERNEL);
-	unsigned int weight;
-	unsigned int n;
-
-	if (!bitmap)
-		return;
-
-	for (n = first_vf; n < first_vf + num_vfs; n++) {
-		if (!!pf_get_vf_config_lmem(gt, VFID(n)) == provisioned)
-			bitmap_set(bitmap, n, 1);
-	}
-
-	weight = bitmap_weight(bitmap, allvfs);
-	if (!weight)
-		return;
-
-	xe_gt_sriov_info(gt, "VF%s%*pbl %s provisioned with VRAM\n",
-			 weight > 1 ? "s " : "", allvfs, bitmap,
-			 provisioned ? "already" : "not");
-}
-
-static void pf_show_all_provisioned_lmem(struct xe_gt *gt)
-{
-	__pf_show_provisioning_lmem(gt, VFID(1), xe_gt_sriov_pf_get_totalvfs(gt), true);
-}
-
-static void pf_show_unprovisioned_lmem(struct xe_gt *gt, unsigned int first_vf,
-				       unsigned int num_vfs)
-{
-	__pf_show_provisioning_lmem(gt, first_vf, num_vfs, false);
-}
-
-static bool pf_needs_provision_lmem(struct xe_gt *gt, unsigned int first_vf,
-				    unsigned int num_vfs)
-{
-	unsigned int vfid;
-
-	for (vfid = first_vf; vfid < first_vf + num_vfs; vfid++) {
-		if (pf_get_vf_config_lmem(gt, vfid)) {
-			pf_show_all_provisioned_lmem(gt);
-			pf_show_unprovisioned_lmem(gt, first_vf, num_vfs);
-			return false;
-		}
-	}
-
-	pf_show_all_provisioned_lmem(gt);
-	return true;
-}
-
 /**
  * xe_gt_sriov_pf_config_set_fair_lmem - Provision many VFs with fair LMEM.
  * @gt: the &xe_gt (can't be media)
@@ -1991,7 +1869,6 @@ static bool pf_needs_provision_lmem(struct xe_gt *gt, unsigned int first_vf,
 int xe_gt_sriov_pf_config_set_fair_lmem(struct xe_gt *gt, unsigned int vfid,
 					unsigned int num_vfs)
 {
-	u64 profile;
 	u64 fair;
 
 	xe_gt_assert(gt, vfid);
@@ -2001,22 +1878,14 @@ int xe_gt_sriov_pf_config_set_fair_lmem(struct xe_gt *gt, unsigned int vfid,
 	if (!xe_device_has_lmtt(gt_to_xe(gt)))
 		return 0;
 
-	guard(mutex)(xe_gt_sriov_pf_master_mutex(gt));
-
-	if (!pf_needs_provision_lmem(gt, vfid, num_vfs))
-		return 0;
-
+	mutex_lock(xe_gt_sriov_pf_master_mutex(gt));
 	fair = pf_estimate_fair_lmem(gt, num_vfs);
+	mutex_unlock(xe_gt_sriov_pf_master_mutex(gt));
+
 	if (!fair)
 		return -ENOSPC;
 
-	profile = pf_profile_fair_lmem(gt, num_vfs);
-	fair = min(fair, profile);
-	if (fair < profile)
-		xe_gt_sriov_info(gt, "Using non-profile provisioning (%s %llu vs %llu)\n",
-				 "VRAM", fair, profile);
-
-	return xe_gt_sriov_pf_config_bulk_set_lmem_locked(gt, vfid, num_vfs, fair);
+	return xe_gt_sriov_pf_config_bulk_set_lmem(gt, vfid, num_vfs, fair);
 }
 
 /**
@@ -2707,7 +2576,7 @@ int xe_gt_sriov_pf_config_release(struct xe_gt *gt, unsigned int vfid, bool forc
 
 static void pf_sanitize_ggtt(struct xe_ggtt_node *ggtt_region, unsigned int vfid)
 {
-	if (ggtt_region)
+	if (xe_ggtt_node_allocated(ggtt_region))
 		xe_ggtt_assign(ggtt_region, vfid);
 }
 
@@ -3166,7 +3035,7 @@ int xe_gt_sriov_pf_config_print_ggtt(struct xe_gt *gt, struct drm_printer *p)
 
 	for (n = 1; n <= total_vfs; n++) {
 		config = &gt->sriov.pf.vfs[n].config;
-		if (!config->ggtt_region)
+		if (!xe_ggtt_node_allocated(config->ggtt_region))
 			continue;
 
 		string_get_size(xe_ggtt_node_size(config->ggtt_region), 1, STRING_UNITS_2,

@@ -478,7 +478,7 @@ config PINCTRL_PEF2256
 config PINCTRL_PIC32
 	bool "Microchip PIC32 pin controller driver"
 	depends on OF
-	depends on MACH_PIC32 || COMPILE_TEST
+	depends on MACH_PIC32
 	select PINMUX
 	select GENERIC_PINCONF
 	select GPIOLIB_IRQCHIP

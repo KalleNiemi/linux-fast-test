@@ -252,7 +252,3 @@
 &pcie2 {
 	status = "okay";
 };
-
-&v3d {
-	clocks = <&firmware_clocks 5>;
-};

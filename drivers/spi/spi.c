@@ -641,25 +641,11 @@ static inline int spi_dev_check_cs(struct device *dev,
 	return 0;
 }
 
-struct spi_dev_check_info {
-	struct spi_device *new_spi;
-	struct spi_device *parent;	/* set for ancillary devices */
-};
-
 static int spi_dev_check(struct device *dev, void *data)
 {
 	struct spi_device *spi = to_spi_device(dev);
-	struct spi_dev_check_info *info = data;
-	struct spi_device *new_spi = info->new_spi;
+	struct spi_device *new_spi = data;
 	int status, idx;
-
-	/*
-	 * When registering an ancillary device, skip checking against the
-	 * parent device since the ancillary is intentionally using one of
-	 * the parent's chip selects.
-	 */
-	if (info->parent && spi == info->parent)
-		return 0;
 
 	if (spi->controller == new_spi->controller) {
 		for (idx = 0; idx < spi->num_chipselect; idx++) {
@@ -677,11 +663,10 @@ static void spi_cleanup(struct spi_device *spi)
 		spi->controller->cleanup(spi);
 }
 
-static int __spi_add_device(struct spi_device *spi, struct spi_device *parent)
+static int __spi_add_device(struct spi_device *spi)
 {
 	struct spi_controller *ctlr = spi->controller;
 	struct device *dev = ctlr->dev.parent;
-	struct spi_dev_check_info check_info;
 	int status, idx;
 	u8 cs;
 
@@ -725,9 +710,7 @@ static int __spi_add_device(struct spi_device *spi, struct spi_device *parent)
 	 * chipselect **BEFORE** we call setup(), else we'll trash
 	 * its configuration.
 	 */
-	check_info.new_spi = spi;
-	check_info.parent = parent;
-	status = bus_for_each_dev(&spi_bus_type, NULL, &check_info, spi_dev_check);
+	status = bus_for_each_dev(&spi_bus_type, NULL, spi, spi_dev_check);
 	if (status)
 		return status;
 
@@ -789,7 +772,7 @@ int spi_add_device(struct spi_device *spi)
 	spi_dev_set_name(spi);
 
 	mutex_lock(&ctlr->add_lock);
-	status = __spi_add_device(spi, NULL);
+	status = __spi_add_device(spi);
 	mutex_unlock(&ctlr->add_lock);
 	return status;
 }
@@ -2732,8 +2715,8 @@ struct spi_device *spi_new_ancillary_device(struct spi_device *spi,
 
 	WARN_ON(!mutex_is_locked(&ctlr->add_lock));
 
-	/* Register the new device, passing the parent to skip CS conflict check */
-	rc = __spi_add_device(ancillary, spi);
+	/* Register the new device */
+	rc = __spi_add_device(ancillary);
 	if (rc) {
 		dev_err(&spi->dev, "failed to register ancillary device\n");
 		goto err_out;
@@ -2746,46 +2729,6 @@ err_out:
 	return ERR_PTR(rc);
 }
 EXPORT_SYMBOL_GPL(spi_new_ancillary_device);
-
-static void devm_spi_unregister_device(void *spi)
-{
-	spi_unregister_device(spi);
-}
-
-/**
- * devm_spi_new_ancillary_device() - Register managed ancillary SPI device
- * @spi:         Pointer to the main SPI device registering the ancillary device
- * @chip_select: Chip Select of the ancillary device
- *
- * Register an ancillary SPI device; for example some chips have a chip-select
- * for normal device usage and another one for setup/firmware upload.
- *
- * This is the managed version of spi_new_ancillary_device(). The ancillary
- * device will be unregistered automatically when the parent SPI device is
- * unregistered.
- *
- * This may only be called from main SPI device's probe routine.
- *
- * Return: Pointer to new ancillary device on success; ERR_PTR on failure
- */
-struct spi_device *devm_spi_new_ancillary_device(struct spi_device *spi,
-						 u8 chip_select)
-{
-	struct spi_device *ancillary;
-	int ret;
-
-	ancillary = spi_new_ancillary_device(spi, chip_select);
-	if (IS_ERR(ancillary))
-		return ancillary;
-
-	ret = devm_add_action_or_reset(&spi->dev, devm_spi_unregister_device,
-				       ancillary);
-	if (ret)
-		return ERR_PTR(ret);
-
-	return ancillary;
-}
-EXPORT_SYMBOL_GPL(devm_spi_new_ancillary_device);
 
 #ifdef CONFIG_ACPI
 struct acpi_spi_lookup {

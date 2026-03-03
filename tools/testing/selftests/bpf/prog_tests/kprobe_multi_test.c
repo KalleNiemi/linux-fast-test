@@ -456,23 +456,25 @@ static void test_kprobe_multi_bench_attach(bool kernel)
 {
 	LIBBPF_OPTS(bpf_kprobe_multi_opts, opts);
 	struct kprobe_multi_empty *skel = NULL;
-	struct ksyms *ksyms = NULL;
+	char **syms = NULL;
+	size_t cnt = 0;
 
-	if (!ASSERT_OK(bpf_get_ksyms(&ksyms, kernel), "bpf_get_ksyms"))
+	if (!ASSERT_OK(bpf_get_ksyms(&syms, &cnt, kernel), "bpf_get_ksyms"))
 		return;
 
 	skel = kprobe_multi_empty__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "kprobe_multi_empty__open_and_load"))
 		goto cleanup;
 
-	opts.syms = (const char **)ksyms->filtered_syms;
-	opts.cnt = ksyms->filtered_cnt;
+	opts.syms = (const char **) syms;
+	opts.cnt = cnt;
 
 	do_bench_test(skel, &opts);
 
 cleanup:
 	kprobe_multi_empty__destroy(skel);
-	free_kallsyms_local(ksyms);
+	if (syms)
+		free(syms);
 }
 
 static void test_kprobe_multi_bench_attach_addr(bool kernel)

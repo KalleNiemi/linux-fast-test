@@ -146,12 +146,6 @@ void noinstr do_io_irq(struct pt_regs *regs)
 	struct pt_regs *old_regs = set_irq_regs(regs);
 	bool from_idle;
 
-	from_idle = test_and_clear_cpu_flag(CIF_ENABLED_WAIT);
-	if (from_idle) {
-		update_timer_idle();
-		regs->psw.mask &= ~(PSW_MASK_EXT | PSW_MASK_IO | PSW_MASK_WAIT);
-	}
-
 	irq_enter_rcu();
 
 	if (user_mode(regs)) {
@@ -160,6 +154,7 @@ void noinstr do_io_irq(struct pt_regs *regs)
 			current->thread.last_break = regs->last_break;
 	}
 
+	from_idle = test_and_clear_cpu_flag(CIF_ENABLED_WAIT);
 	if (from_idle)
 		account_idle_time_irq();
 
@@ -176,6 +171,9 @@ void noinstr do_io_irq(struct pt_regs *regs)
 
 	set_irq_regs(old_regs);
 	irqentry_exit(regs, state);
+
+	if (from_idle)
+		regs->psw.mask &= ~(PSW_MASK_EXT | PSW_MASK_IO | PSW_MASK_WAIT);
 }
 
 void noinstr do_ext_irq(struct pt_regs *regs)
@@ -183,12 +181,6 @@ void noinstr do_ext_irq(struct pt_regs *regs)
 	irqentry_state_t state = irqentry_enter(regs);
 	struct pt_regs *old_regs = set_irq_regs(regs);
 	bool from_idle;
-
-	from_idle = test_and_clear_cpu_flag(CIF_ENABLED_WAIT);
-	if (from_idle) {
-		update_timer_idle();
-		regs->psw.mask &= ~(PSW_MASK_EXT | PSW_MASK_IO | PSW_MASK_WAIT);
-	}
 
 	irq_enter_rcu();
 
@@ -202,6 +194,7 @@ void noinstr do_ext_irq(struct pt_regs *regs)
 	regs->int_parm = get_lowcore()->ext_params;
 	regs->int_parm_long = get_lowcore()->ext_params2;
 
+	from_idle = test_and_clear_cpu_flag(CIF_ENABLED_WAIT);
 	if (from_idle)
 		account_idle_time_irq();
 
@@ -210,6 +203,9 @@ void noinstr do_ext_irq(struct pt_regs *regs)
 	irq_exit_rcu();
 	set_irq_regs(old_regs);
 	irqentry_exit(regs, state);
+
+	if (from_idle)
+		regs->psw.mask &= ~(PSW_MASK_EXT | PSW_MASK_IO | PSW_MASK_WAIT);
 }
 
 static void show_msi_interrupt(struct seq_file *p, int irq)

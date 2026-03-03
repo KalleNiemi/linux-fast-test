@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <signal.h>
 #include <setjmp.h>
+#include <unistd.h>
 #include <fcntl.h>
 #include <sys/vfs.h>
 #include <linux/magic.h>

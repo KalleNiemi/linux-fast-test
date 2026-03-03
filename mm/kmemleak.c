@@ -1505,10 +1505,12 @@ static int scan_should_stop(void)
 	 * This function may be called from either process or kthread context,
 	 * hence the need to check for both stop conditions.
 	 */
-	if (current->flags & PF_KTHREAD)
+	if (current->mm)
+		return signal_pending(current);
+	else
 		return kthread_should_stop();
 
-	return signal_pending(current);
+	return 0;
 }
 
 /*

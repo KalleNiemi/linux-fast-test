@@ -14,7 +14,6 @@
 	https://bugzilla.stlinux.com/
 *******************************************************************************/
 
-#include <linux/circ_buf.h>
 #include <linux/clk.h>
 #include <linux/kernel.h>
 #include <linux/interrupt.h>
@@ -356,9 +355,14 @@ static void print_pkt(unsigned char *buf, int len)
 static inline u32 stmmac_tx_avail(struct stmmac_priv *priv, u32 queue)
 {
 	struct stmmac_tx_queue *tx_q = &priv->dma_conf.tx_queue[queue];
+	u32 avail;
 
-	return CIRC_SPACE(tx_q->cur_tx, tx_q->dirty_tx,
-			  priv->dma_conf.dma_tx_size);
+	if (tx_q->dirty_tx > tx_q->cur_tx)
+		avail = tx_q->dirty_tx - tx_q->cur_tx - 1;
+	else
+		avail = priv->dma_conf.dma_tx_size - tx_q->cur_tx + tx_q->dirty_tx - 1;
+
+	return avail;
 }
 
 /**
@@ -369,9 +373,14 @@ static inline u32 stmmac_tx_avail(struct stmmac_priv *priv, u32 queue)
 static inline u32 stmmac_rx_dirty(struct stmmac_priv *priv, u32 queue)
 {
 	struct stmmac_rx_queue *rx_q = &priv->dma_conf.rx_queue[queue];
+	u32 dirty;
 
-	return CIRC_CNT(rx_q->cur_rx, rx_q->dirty_rx,
-			priv->dma_conf.dma_rx_size);
+	if (rx_q->dirty_rx <= rx_q->cur_rx)
+		dirty = rx_q->cur_rx - rx_q->dirty_rx;
+	else
+		dirty = priv->dma_conf.dma_rx_size - rx_q->dirty_rx + rx_q->cur_rx;
+
+	return dirty;
 }
 
 static bool stmmac_eee_tx_busy(struct stmmac_priv *priv)
@@ -844,7 +853,6 @@ static int stmmac_init_timestamping(struct stmmac_priv *priv)
 		netdev_info(priv->dev,
 			    "IEEE 1588-2008 Advanced Timestamp supported\n");
 
-	memset(&priv->tstamp_config, 0, sizeof(priv->tstamp_config));
 	priv->hwts_tx_en = 0;
 	priv->hwts_rx_en = 0;
 
@@ -1063,8 +1071,7 @@ static void stmmac_mac_link_up(struct phylink_config *config,
 	}
 
 	if (priv->plat->fix_mac_speed)
-		priv->plat->fix_mac_speed(priv->plat->bsp_priv, interface,
-					  speed, mode);
+		priv->plat->fix_mac_speed(priv->plat->bsp_priv, speed, mode);
 
 	if (!duplex)
 		ctrl &= ~priv->hw->link.duplex;
@@ -1367,21 +1374,9 @@ static int stmmac_phylink_setup(struct stmmac_priv *priv)
 				 pcs->supported_interfaces);
 
 	if (priv->dma_cap.eee) {
-		/* The GMAC 3.74a databook states that EEE is only supported
-		 * in MII, GMII, and RGMII interfaces.
-		 */
-		__set_bit(PHY_INTERFACE_MODE_MII, config->lpi_interfaces);
-		__set_bit(PHY_INTERFACE_MODE_GMII, config->lpi_interfaces);
-		phy_interface_set_rgmii(config->lpi_interfaces);
-
-		/* If we have a non-integrated PCS, assume that it is connected
-		 * to the GMAC using GMII or another EEE compatible interface,
-		 * and thus all PCS-supported interfaces support LPI.
-		 */
-		if (pcs)
-			phy_interface_or(config->lpi_interfaces,
-					 config->lpi_interfaces,
-					 pcs->supported_interfaces);
+		/* Assume all supported interfaces also support LPI */
+		memcpy(config->lpi_interfaces, config->supported_interfaces,
+		       sizeof(config->lpi_interfaces));
 
 		/* All full duplex speeds above 100Mbps are supported */
 		config->lpi_capabilities = ~(MAC_1000FD - 1) | MAC_100FD;
@@ -4512,8 +4507,7 @@ static netdev_tx_t stmmac_tso_xmit(struct sk_buff *skb, struct net_device *dev)
 	tx_q->tx_skbuff_dma[tx_q->cur_tx].buf_type = STMMAC_TXBUF_T_SKB;
 
 	/* Manage tx mitigation */
-	tx_packets = CIRC_CNT(tx_q->cur_tx + 1, first_tx,
-			      priv->dma_conf.dma_tx_size);
+	tx_packets = (tx_q->cur_tx + 1) - first_tx;
 	tx_q->tx_count_frames += tx_packets;
 
 	if ((skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP) && priv->hwts_tx_en)
@@ -4572,8 +4566,8 @@ static netdev_tx_t stmmac_tso_xmit(struct sk_buff *skb, struct net_device *dev)
 	/* If we only have one entry used, then the first entry is the last
 	 * segment.
 	 */
-	is_last_segment = CIRC_CNT(tx_q->cur_tx, first_entry,
-				   priv->dma_conf.dma_tx_size) == 1;
+	is_last_segment = ((tx_q->cur_tx - first_entry) &
+			   (priv->dma_conf.dma_tx_size - 1)) == 1;
 
 	/* Complete the first descriptor before granting the DMA */
 	stmmac_prepare_tso_tx_desc(priv, first, 1, proto_hdr_len, 0, 1,
@@ -4791,7 +4785,7 @@ static netdev_tx_t stmmac_xmit(struct sk_buff *skb, struct net_device *dev)
 	 * This approach takes care about the fragments: desc is the first
 	 * element in case of no SG.
 	 */
-	tx_packets = CIRC_CNT(entry + 1, first_tx, priv->dma_conf.dma_tx_size);
+	tx_packets = (entry + 1) - first_tx;
 	tx_q->tx_count_frames += tx_packets;
 
 	if ((skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP) && priv->hwts_tx_en)

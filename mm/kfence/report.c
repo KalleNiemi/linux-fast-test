@@ -7,12 +7,9 @@
 
 #include <linux/stdarg.h>
 
-#include <linux/bug.h>
-#include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/lockdep.h>
 #include <linux/math.h>
-#include <linux/panic.h>
 #include <linux/printk.h>
 #include <linux/sched/debug.h>
 #include <linux/seq_file.h>
@@ -31,26 +28,6 @@
 #ifndef ARCH_FUNC_PREFIX
 #define ARCH_FUNC_PREFIX ""
 #endif
-
-static enum kfence_fault kfence_fault __ro_after_init = KFENCE_FAULT_REPORT;
-
-static int __init early_kfence_fault(char *arg)
-{
-	if (!arg)
-		return -EINVAL;
-
-	if (!strcmp(arg, "report"))
-		kfence_fault = KFENCE_FAULT_REPORT;
-	else if (!strcmp(arg, "oops"))
-		kfence_fault = KFENCE_FAULT_OOPS;
-	else if (!strcmp(arg, "panic"))
-		kfence_fault = KFENCE_FAULT_PANIC;
-	else
-		return -EINVAL;
-
-	return 0;
-}
-early_param("kfence.fault", early_kfence_fault);
 
 /* Helper function to either print to a seq_file or to console. */
 __printf(2, 3)
@@ -212,9 +189,8 @@ static const char *get_access_type(bool is_write)
 	return str_write_read(is_write);
 }
 
-enum kfence_fault
-kfence_report_error(unsigned long address, bool is_write, struct pt_regs *regs,
-		    const struct kfence_metadata *meta, enum kfence_error_type type)
+void kfence_report_error(unsigned long address, bool is_write, struct pt_regs *regs,
+			 const struct kfence_metadata *meta, enum kfence_error_type type)
 {
 	unsigned long stack_entries[KFENCE_STACK_DEPTH] = { 0 };
 	const ptrdiff_t object_index = meta ? meta - kfence_metadata : -1;
@@ -230,7 +206,7 @@ kfence_report_error(unsigned long address, bool is_write, struct pt_regs *regs,
 
 	/* Require non-NULL meta, except if KFENCE_ERROR_INVALID. */
 	if (WARN_ON(type != KFENCE_ERROR_INVALID && !meta))
-		return KFENCE_FAULT_NONE;
+		return;
 
 	/*
 	 * Because we may generate reports in printk-unfriendly parts of the
@@ -306,25 +282,6 @@ kfence_report_error(unsigned long address, bool is_write, struct pt_regs *regs,
 
 	/* We encountered a memory safety error, taint the kernel! */
 	add_taint(TAINT_BAD_PAGE, LOCKDEP_STILL_OK);
-
-	return kfence_fault;
-}
-
-void kfence_handle_fault(enum kfence_fault fault)
-{
-	switch (fault) {
-	case KFENCE_FAULT_NONE:
-	case KFENCE_FAULT_REPORT:
-		break;
-	case KFENCE_FAULT_OOPS:
-		BUG();
-		break;
-	case KFENCE_FAULT_PANIC:
-		/* Disable KFENCE to avoid recursion if check_on_panic is set. */
-		WRITE_ONCE(kfence_enabled, false);
-		panic("kfence.fault=panic set ...\n");
-		break;
-	}
 }
 
 #ifdef CONFIG_PRINTK

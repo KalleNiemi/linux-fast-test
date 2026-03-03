@@ -6,7 +6,6 @@
 #include <linux/highmem.h>
 
 #include <drm/drm_print.h>
-#include <drm/intel/intel_gmd_misc_regs.h>
 
 #include "display/intel_display.h"
 #include "i915_drv.h"

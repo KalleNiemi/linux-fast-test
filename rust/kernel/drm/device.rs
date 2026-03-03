@@ -6,29 +6,15 @@
 
 use crate::{
     alloc::allocator::Kmalloc,
-    bindings,
-    device,
-    drm::{
-        self,
-        driver::AllocImpl, //
-    },
+    bindings, device, drm,
+    drm::driver::AllocImpl,
     error::from_err_ptr,
+    error::Result,
     prelude::*,
-    sync::aref::{
-        ARef,
-        AlwaysRefCounted, //
-    },
-    types::Opaque, //
+    sync::aref::{ARef, AlwaysRefCounted},
+    types::Opaque,
 };
-use core::{
-    alloc::Layout,
-    mem,
-    ops::Deref,
-    ptr::{
-        self,
-        NonNull, //
-    },
-};
+use core::{alloc::Layout, mem, ops::Deref, ptr, ptr::NonNull};
 
 #[cfg(CONFIG_DRM_LEGACY)]
 macro_rules! drm_legacy_fields {

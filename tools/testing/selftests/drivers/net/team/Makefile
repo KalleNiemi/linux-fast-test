@@ -5,7 +5,6 @@ TEST_PROGS := \
 	dev_addr_lists.sh \
 	options.sh \
 	propagation.sh \
-	refleak.sh \
 # end of TEST_PROGS
 
 TEST_INCLUDES := \

@@ -8,9 +8,7 @@
 #include <linux/limits.h>
 #include <linux/types.h>
 
-#include "xe_defaults.h"
-#include "xe_hw_engine_types.h"
-#include "xe_module.h"
+#include <xe_hw_engine_types.h>
 
 struct pci_dev;
 
@@ -31,7 +29,6 @@ u32 xe_configfs_get_ctx_restore_post_bb(struct pci_dev *pdev,
 					const u32 **cs);
 #ifdef CONFIG_PCI_IOV
 unsigned int xe_configfs_get_max_vfs(struct pci_dev *pdev);
-bool xe_configfs_admin_only_pf(struct pci_dev *pdev);
 #endif
 #else
 static inline int xe_configfs_init(void) { return 0; }
@@ -48,16 +45,7 @@ static inline u32 xe_configfs_get_ctx_restore_mid_bb(struct pci_dev *pdev,
 static inline u32 xe_configfs_get_ctx_restore_post_bb(struct pci_dev *pdev,
 						      enum xe_engine_class class,
 						      const u32 **cs) { return 0; }
-#ifdef CONFIG_PCI_IOV
-static inline unsigned int xe_configfs_get_max_vfs(struct pci_dev *pdev)
-{
-	return xe_modparam.max_vfs;
-}
-static inline bool xe_configfs_admin_only_pf(struct pci_dev *pdev)
-{
-	return XE_DEFAULT_ADMIN_ONLY_PF;
-}
-#endif
+static inline unsigned int xe_configfs_get_max_vfs(struct pci_dev *pdev) { return UINT_MAX; }
 #endif
 
 #endif

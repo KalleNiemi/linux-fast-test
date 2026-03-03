@@ -17,14 +17,10 @@ properties:
   compatible:
     oneOf:
       - enum:
-          - qcom,mdm9607-mss-pil
           - qcom,msm8226-mss-pil
           - qcom,msm8909-mss-pil
           - qcom,msm8916-mss-pil
-          - qcom,msm8917-mss-pil
           - qcom,msm8926-mss-pil
-          - qcom,msm8937-mss-pil
-          - qcom,msm8940-mss-pil
           - qcom,msm8953-mss-pil
           - qcom,msm8974-mss-pil
 
@@ -93,7 +89,7 @@ properties:
     description: PLL proxy supply (control handed over after startup)
 
   mss-supply:
-    description: MSS power domain supply
+    description: MSS power domain supply (only valid for qcom,msm8974-mss-pil)
 
   resets:
     items:
@@ -230,12 +226,8 @@ allOf:
         compatible:
           contains:
             enum:
-              - qcom,mdm9607-mss-pil
               - qcom,msm8909-mss-pil
               - qcom,msm8916-mss-pil
-              - qcom,msm8917-mss-pil
-              - qcom,msm8937-mss-pil
-              - qcom,msm8940-mss-pil
     then:
       properties:
         power-domains:
@@ -279,9 +271,6 @@ allOf:
           contains:
             enum:
               - qcom,msm8926-mss-pil
-              - qcom,msm8917-mss-pil
-              - qcom,msm8937-mss-pil
-              - qcom,msm8940-mss-pil
               - qcom,msm8974-mss-pil
     then:
       required:

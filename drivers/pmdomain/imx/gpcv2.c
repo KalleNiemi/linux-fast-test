@@ -1416,9 +1416,7 @@ static int imx_pgc_domain_suspend(struct device *dev)
 
 static int imx_pgc_domain_resume(struct device *dev)
 {
-	pm_runtime_put(dev);
-
-	return 0;
+	return pm_runtime_put(dev);
 }
 #endif
 

@@ -1320,7 +1320,7 @@ static bool cmp_str_seq(const char *log, const char *exp)
 			printf("FAIL\nTestcase bug\n");
 			return false;
 		}
-		memcpy(needle, exp, len);
+		strncpy(needle, exp, len);
 		needle[len] = 0;
 		q = strstr(log, needle);
 		if (!q) {

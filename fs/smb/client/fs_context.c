@@ -176,7 +176,6 @@ const struct fs_parameter_spec smb3_fs_parameters[] = {
 	fsparam_string("password2", Opt_pass2),
 	fsparam_string("ip", Opt_ip),
 	fsparam_string("addr", Opt_ip),
-	fsparam_string("hostname", Opt_hostname),
 	fsparam_string("domain", Opt_domain),
 	fsparam_string("dom", Opt_domain),
 	fsparam_string("srcaddr", Opt_srcaddr),
@@ -864,23 +863,16 @@ static int smb3_fs_context_validate(struct fs_context *fc)
 		return -ENOENT;
 	}
 
-	if (ctx->got_opt_hostname) {
-		kfree(ctx->server_hostname);
-		ctx->server_hostname = ctx->opt_hostname;
-		pr_notice("changing server hostname to name provided in hostname= option\n");
-	}
-
 	if (!ctx->got_ip) {
 		int len;
+		const char *slash;
 
-		/*
-		 * No ip= option specified? Try to get it from server_hostname
-		 * Use the address part of the UNC parsed into server_hostname
-		 * or hostname= option if specified.
-		 */
-		len = strlen(ctx->server_hostname);
+		/* No ip= option specified? Try to get it from UNC */
+		/* Use the address part of the UNC. */
+		slash = strchr(&ctx->UNC[2], '\\');
+		len = slash - &ctx->UNC[2];
 		if (!cifs_convert_address((struct sockaddr *)&ctx->dstaddr,
-					  ctx->server_hostname, len)) {
+					  &ctx->UNC[2], len)) {
 			pr_err("Unable to determine destination address\n");
 			return -EHOSTUNREACH;
 		}
@@ -1596,21 +1588,6 @@ static int smb3_fs_context_parse_param(struct fs_context *fc,
 		}
 		ctx->got_ip = true;
 		break;
-	case Opt_hostname:
-		if (strnlen(param->string, CIFS_NI_MAXHOST) == CIFS_NI_MAXHOST) {
-			pr_warn("host name too long\n");
-			goto cifs_parse_mount_err;
-		}
-
-		kfree(ctx->opt_hostname);
-		ctx->opt_hostname = kstrdup(param->string, GFP_KERNEL);
-		if (ctx->opt_hostname == NULL) {
-			cifs_errorf(fc, "OOM when copying hostname string\n");
-			goto cifs_parse_mount_err;
-		}
-		cifs_dbg(FYI, "Host name set\n");
-		ctx->got_opt_hostname = true;
-		break;
 	case Opt_domain:
 		if (strnlen(param->string, CIFS_MAX_DOMAINNAME_LEN)
 				== CIFS_MAX_DOMAINNAME_LEN) {
@@ -2085,160 +2062,161 @@ smb3_cleanup_fs_context(struct smb3_fs_context *ctx)
 	kfree(ctx);
 }
 
-unsigned int smb3_update_mnt_flags(struct cifs_sb_info *cifs_sb)
+void smb3_update_mnt_flags(struct cifs_sb_info *cifs_sb)
 {
-	unsigned int sbflags = cifs_sb_flags(cifs_sb);
 	struct smb3_fs_context *ctx = cifs_sb->ctx;
 
 	if (ctx->nodfs)
-		sbflags |= CIFS_MOUNT_NO_DFS;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_NO_DFS;
 	else
-		sbflags &= ~CIFS_MOUNT_NO_DFS;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_NO_DFS;
 
 	if (ctx->noperm)
-		sbflags |= CIFS_MOUNT_NO_PERM;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_NO_PERM;
 	else
-		sbflags &= ~CIFS_MOUNT_NO_PERM;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_NO_PERM;
 
 	if (ctx->setuids)
-		sbflags |= CIFS_MOUNT_SET_UID;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_SET_UID;
 	else
-		sbflags &= ~CIFS_MOUNT_SET_UID;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_SET_UID;
 
 	if (ctx->setuidfromacl)
-		sbflags |= CIFS_MOUNT_UID_FROM_ACL;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_UID_FROM_ACL;
 	else
-		sbflags &= ~CIFS_MOUNT_UID_FROM_ACL;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_UID_FROM_ACL;
 
 	if (ctx->server_ino)
-		sbflags |= CIFS_MOUNT_SERVER_INUM;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_SERVER_INUM;
 	else
-		sbflags &= ~CIFS_MOUNT_SERVER_INUM;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_SERVER_INUM;
 
 	if (ctx->remap)
-		sbflags |= CIFS_MOUNT_MAP_SFM_CHR;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_MAP_SFM_CHR;
 	else
-		sbflags &= ~CIFS_MOUNT_MAP_SFM_CHR;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_MAP_SFM_CHR;
 
 	if (ctx->sfu_remap)
-		sbflags |= CIFS_MOUNT_MAP_SPECIAL_CHR;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_MAP_SPECIAL_CHR;
 	else
-		sbflags &= ~CIFS_MOUNT_MAP_SPECIAL_CHR;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_MAP_SPECIAL_CHR;
 
 	if (ctx->no_xattr)
-		sbflags |= CIFS_MOUNT_NO_XATTR;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_NO_XATTR;
 	else
-		sbflags &= ~CIFS_MOUNT_NO_XATTR;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_NO_XATTR;
 
 	if (ctx->sfu_emul)
-		sbflags |= CIFS_MOUNT_UNX_EMUL;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_UNX_EMUL;
 	else
-		sbflags &= ~CIFS_MOUNT_UNX_EMUL;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_UNX_EMUL;
 
 	if (ctx->nobrl)
-		sbflags |= CIFS_MOUNT_NO_BRL;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_NO_BRL;
 	else
-		sbflags &= ~CIFS_MOUNT_NO_BRL;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_NO_BRL;
 
 	if (ctx->nohandlecache)
-		sbflags |= CIFS_MOUNT_NO_HANDLE_CACHE;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_NO_HANDLE_CACHE;
 	else
-		sbflags &= ~CIFS_MOUNT_NO_HANDLE_CACHE;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_NO_HANDLE_CACHE;
 
 	if (ctx->nostrictsync)
-		sbflags |= CIFS_MOUNT_NOSSYNC;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_NOSSYNC;
 	else
-		sbflags &= ~CIFS_MOUNT_NOSSYNC;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_NOSSYNC;
 
 	if (ctx->mand_lock)
-		sbflags |= CIFS_MOUNT_NOPOSIXBRL;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_NOPOSIXBRL;
 	else
-		sbflags &= ~CIFS_MOUNT_NOPOSIXBRL;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_NOPOSIXBRL;
 
 	if (ctx->rwpidforward)
-		sbflags |= CIFS_MOUNT_RWPIDFORWARD;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_RWPIDFORWARD;
 	else
-		sbflags &= ~CIFS_MOUNT_RWPIDFORWARD;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_RWPIDFORWARD;
 
 	if (ctx->mode_ace)
-		sbflags |= CIFS_MOUNT_MODE_FROM_SID;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_MODE_FROM_SID;
 	else
-		sbflags &= ~CIFS_MOUNT_MODE_FROM_SID;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_MODE_FROM_SID;
 
 	if (ctx->cifs_acl)
-		sbflags |= CIFS_MOUNT_CIFS_ACL;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_CIFS_ACL;
 	else
-		sbflags &= ~CIFS_MOUNT_CIFS_ACL;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_CIFS_ACL;
 
 	if (ctx->backupuid_specified)
-		sbflags |= CIFS_MOUNT_CIFS_BACKUPUID;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_CIFS_BACKUPUID;
 	else
-		sbflags &= ~CIFS_MOUNT_CIFS_BACKUPUID;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_CIFS_BACKUPUID;
 
 	if (ctx->backupgid_specified)
-		sbflags |= CIFS_MOUNT_CIFS_BACKUPGID;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_CIFS_BACKUPGID;
 	else
-		sbflags &= ~CIFS_MOUNT_CIFS_BACKUPGID;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_CIFS_BACKUPGID;
 
 	if (ctx->override_uid)
-		sbflags |= CIFS_MOUNT_OVERR_UID;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_OVERR_UID;
 	else
-		sbflags &= ~CIFS_MOUNT_OVERR_UID;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_OVERR_UID;
 
 	if (ctx->override_gid)
-		sbflags |= CIFS_MOUNT_OVERR_GID;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_OVERR_GID;
 	else
-		sbflags &= ~CIFS_MOUNT_OVERR_GID;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_OVERR_GID;
 
 	if (ctx->dynperm)
-		sbflags |= CIFS_MOUNT_DYNPERM;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_DYNPERM;
 	else
-		sbflags &= ~CIFS_MOUNT_DYNPERM;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_DYNPERM;
 
 	if (ctx->fsc)
-		sbflags |= CIFS_MOUNT_FSCACHE;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_FSCACHE;
 	else
-		sbflags &= ~CIFS_MOUNT_FSCACHE;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_FSCACHE;
 
 	if (ctx->multiuser)
-		sbflags |= CIFS_MOUNT_MULTIUSER | CIFS_MOUNT_NO_PERM;
+		cifs_sb->mnt_cifs_flags |= (CIFS_MOUNT_MULTIUSER |
+					    CIFS_MOUNT_NO_PERM);
 	else
-		sbflags &= ~CIFS_MOUNT_MULTIUSER;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_MULTIUSER;
 
 
 	if (ctx->strict_io)
-		sbflags |= CIFS_MOUNT_STRICT_IO;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_STRICT_IO;
 	else
-		sbflags &= ~CIFS_MOUNT_STRICT_IO;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_STRICT_IO;
 
 	if (ctx->direct_io)
-		sbflags |= CIFS_MOUNT_DIRECT_IO;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_DIRECT_IO;
 	else
-		sbflags &= ~CIFS_MOUNT_DIRECT_IO;
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_DIRECT_IO;
 
 	if (ctx->mfsymlinks)
-		sbflags |= CIFS_MOUNT_MF_SYMLINKS;
+		cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_MF_SYMLINKS;
 	else
-		sbflags &= ~CIFS_MOUNT_MF_SYMLINKS;
-
-	if (ctx->mfsymlinks && ctx->sfu_emul) {
-		/*
-		 * Our SFU ("Services for Unix") emulation allows now
-		 * creating new and reading existing SFU symlinks.
-		 * Older Linux kernel versions were not able to neither
-		 * read existing nor create new SFU symlinks. But
-		 * creating and reading SFU style mknod and FIFOs was
-		 * supported for long time. When "mfsymlinks" and
-		 * "sfu" are both enabled at the same time, it allows
-		 * reading both types of symlinks, but will only create
-		 * them with mfsymlinks format. This allows better
-		 * Apple compatibility, compatibility with older Linux
-		 * kernel clients (probably better for Samba too)
-		 * while still recognizing old Windows style symlinks.
-		 */
-		cifs_dbg(VFS, "mount options mfsymlinks and sfu both enabled\n");
+		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_MF_SYMLINKS;
+	if (ctx->mfsymlinks) {
+		if (ctx->sfu_emul) {
+			/*
+			 * Our SFU ("Services for Unix") emulation allows now
+			 * creating new and reading existing SFU symlinks.
+			 * Older Linux kernel versions were not able to neither
+			 * read existing nor create new SFU symlinks. But
+			 * creating and reading SFU style mknod and FIFOs was
+			 * supported for long time. When "mfsymlinks" and
+			 * "sfu" are both enabled at the same time, it allows
+			 * reading both types of symlinks, but will only create
+			 * them with mfsymlinks format. This allows better
+			 * Apple compatibility, compatibility with older Linux
+			 * kernel clients (probably better for Samba too)
+			 * while still recognizing old Windows style symlinks.
+			 */
+			cifs_dbg(VFS, "mount options mfsymlinks and sfu both enabled\n");
+		}
 	}
-	sbflags &= ~CIFS_MOUNT_SHUTDOWN;
-	atomic_set(&cifs_sb->mnt_cifs_flags, sbflags);
-	return sbflags;
+	cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_SHUTDOWN;
+
+	return;
 }

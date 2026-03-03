@@ -37,10 +37,9 @@
 #include <linux/bitfield.h>
 #include <net/page_pool/helpers.h>
 
-int mlx5e_xdp_max_mtu(struct mlx5e_params *params,
-		      struct mlx5e_rq_opt_param *rqo)
+int mlx5e_xdp_max_mtu(struct mlx5e_params *params, struct mlx5e_xsk_param *xsk)
 {
-	int hr = mlx5e_get_linear_rq_headroom(params, rqo);
+	int hr = mlx5e_get_linear_rq_headroom(params, xsk);
 
 	/* Let S := SKB_DATA_ALIGN(sizeof(struct skb_shared_info)).
 	 * The condition checked in mlx5e_rx_is_linear_skb is:
@@ -708,7 +707,7 @@ static void mlx5e_free_xdpsq_desc(struct mlx5e_xdpsq *sq,
 				xdpi = mlx5e_xdpi_fifo_pop(xdpi_fifo);
 				page = xdpi.page.page;
 
-				/* No need to check PageNetpp() as we
+				/* No need to check page_pool_page_is_pp() as we
 				 * know this is a page_pool page.
 				 */
 				page_pool_recycle_direct(pp_page_to_nmdesc(page)->pp,

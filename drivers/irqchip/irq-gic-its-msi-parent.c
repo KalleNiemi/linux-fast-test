@@ -5,7 +5,6 @@
 // Copyright (C) 2022 Intel
 
 #include <linux/acpi_iort.h>
-#include <linux/fsl/mc.h>
 #include <linux/of_address.h>
 #include <linux/pci.h>
 
@@ -188,11 +187,9 @@ static int its_pmsi_prepare(struct irq_domain *domain, struct device *dev,
 {
 	struct msi_domain_info *msi_info;
 	u32 dev_id;
-	int ret = 0;
+	int ret;
 
-	if (dev_is_fsl_mc(dev))
-		dev_id = fsl_mc_get_msi_id(dev);
-	else if (dev->of_node)
+	if (dev->of_node)
 		ret = of_pmsi_get_msi_info(domain->parent, dev, &dev_id, NULL);
 	else
 		ret = iort_pmsi_get_msi_info(dev, &dev_id, NULL);

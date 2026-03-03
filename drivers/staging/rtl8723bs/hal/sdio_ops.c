@@ -13,8 +13,12 @@
 /*  */
 /*  Creadted by Roger, 2011.01.31. */
 /*  */
-static void hal_sdio_get_cmd_addr_8723b(struct adapter *adapter, u8 device_id,
-					u32 addr, u32 *cmdaddr)
+static void hal_sdio_get_cmd_addr_8723b(
+	struct adapter *adapter,
+	u8 device_id,
+	u32 addr,
+	u32 *cmdaddr
+)
 {
 	switch (device_id) {
 	case SDIO_LOCAL_DEVICE_ID:
@@ -579,9 +583,11 @@ s32 sdio_local_write(
 	)
 		return sd_cmd52_write(intfhdl, addr, cnt, buf);
 
-	tmpbuf = kmemdup(buf, cnt, GFP_ATOMIC);
+	tmpbuf = kmalloc(cnt, GFP_ATOMIC);
 	if (!tmpbuf)
 		return -ENOMEM;
+
+	memcpy(tmpbuf, buf, cnt);
 
 	err = sd_write(intfhdl, addr, cnt, tmpbuf);
 

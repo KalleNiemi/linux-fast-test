@@ -699,7 +699,7 @@ void test_tc_tunnel(void)
 		return;
 
 	if (!ASSERT_OK(setup(), "global setup"))
-		goto out;
+		return;
 
 	for (i = 0; i < ARRAY_SIZE(subtests_cfg); i++) {
 		cfg = &subtests_cfg[i];
@@ -711,7 +711,4 @@ void test_tc_tunnel(void)
 		subtest_cleanup(cfg);
 	}
 	cleanup();
-
-out:
-	test_tc_tunnel__destroy(skel);
 }

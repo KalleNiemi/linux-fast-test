@@ -455,8 +455,17 @@ calc_size_exit:
 __le16 *
 cifs_convert_path_to_utf16(const char *from, struct cifs_sb_info *cifs_sb)
 {
-	const char *start_of_path;
 	int len;
+	const char *start_of_path;
+	__le16 *to;
+	int map_type;
+
+	if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_MAP_SFM_CHR)
+		map_type = SFM_MAP_UNI_RSVD;
+	else if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_MAP_SPECIAL_CHR)
+		map_type = SFU_MAP_UNI_RSVD;
+	else
+		map_type = NO_MAP_UNI_RSVD;
 
 	/* Windows doesn't allow paths beginning with \ */
 	if (from[0] == '\\')
@@ -470,13 +479,14 @@ cifs_convert_path_to_utf16(const char *from, struct cifs_sb_info *cifs_sb)
 	} else
 		start_of_path = from;
 
-	return cifs_strndup_to_utf16(start_of_path, PATH_MAX, &len,
-				     cifs_sb->local_nls, cifs_remap(cifs_sb));
+	to = cifs_strndup_to_utf16(start_of_path, PATH_MAX, &len,
+				   cifs_sb->local_nls, map_type);
+	return to;
 }
 
 __le32 smb2_get_lease_state(struct cifsInodeInfo *cinode, unsigned int oplock)
 {
-	unsigned int sbflags = cifs_sb_flags(CIFS_SB(cinode));
+	unsigned int sbflags = CIFS_SB(cinode->netfs.inode.i_sb)->mnt_cifs_flags;
 	__le32 lease = 0;
 
 	if ((oplock & CIFS_CACHE_WRITE_FLG) || (sbflags & CIFS_MOUNT_RW_CACHE))

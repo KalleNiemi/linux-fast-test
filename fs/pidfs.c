@@ -22,7 +22,6 @@
 #include <net/net_namespace.h>
 #include <linux/coredump.h>
 #include <linux/rhashtable.h>
-#include <linux/llist.h>
 #include <linux/xattr.h>
 #include <linux/cookie.h>
 
@@ -32,6 +31,7 @@
 #define PIDFS_PID_DEAD ERR_PTR(-ESRCH)
 
 static struct kmem_cache *pidfs_attr_cachep __ro_after_init;
+static struct kmem_cache *pidfs_xattr_cachep __ro_after_init;
 
 static struct path pidfs_root_path = {};
 
@@ -46,8 +46,9 @@ enum pidfs_attr_mask_bits {
 	PIDFS_ATTR_BIT_COREDUMP	= 1,
 };
 
-struct pidfs_anon_attr {
+struct pidfs_attr {
 	unsigned long attr_mask;
+	struct simple_xattrs *xattrs;
 	struct /* exit info */ {
 		__u64 cgroupid;
 		__s32 exit_code;
@@ -92,13 +93,6 @@ static const struct rhashtable_params pidfs_ino_ht_params = {
  * inode number and the inode generation number to compare or
  * use file handles.
  */
-struct pidfs_attr {
-	struct simple_xattrs *xattrs;
-	union {
-		struct pidfs_anon_attr;
-		struct llist_node pidfs_llist;
-	};
-};
 
 #if BITS_PER_LONG == 32
 
@@ -184,30 +178,10 @@ void pidfs_remove_pid(struct pid *pid)
 				       pidfs_ino_ht_params);
 }
 
-static LLIST_HEAD(pidfs_free_list);
-
-static void pidfs_free_attr_work(struct work_struct *work)
-{
-	struct pidfs_attr *attr, *next;
-	struct llist_node *head;
-
-	head = llist_del_all(&pidfs_free_list);
-	llist_for_each_entry_safe(attr, next, head, pidfs_llist) {
-		struct simple_xattrs *xattrs = attr->xattrs;
-
-		if (xattrs) {
-			simple_xattrs_free(xattrs, NULL);
-			kfree(xattrs);
-		}
-		kfree(attr);
-	}
-}
-
-static DECLARE_WORK(pidfs_free_work, pidfs_free_attr_work);
-
 void pidfs_free_pid(struct pid *pid)
 {
-	struct pidfs_attr *attr = pid->attr;
+	struct pidfs_attr *attr __free(kfree) = no_free_ptr(pid->attr);
+	struct simple_xattrs *xattrs __free(kfree) = NULL;
 
 	/*
 	 * Any dentry must've been wiped from the pid by now.
@@ -226,10 +200,9 @@ void pidfs_free_pid(struct pid *pid)
 	if (IS_ERR(attr))
 		return;
 
-	if (likely(!attr->xattrs))
-		kfree(attr);
-	else if (llist_add(&attr->pidfs_llist, &pidfs_free_list))
-		schedule_work(&pidfs_free_work);
+	xattrs = no_free_ptr(attr->xattrs);
+	if (xattrs)
+		simple_xattrs_free(xattrs, NULL);
 }
 
 #ifdef CONFIG_PROC_FS
@@ -635,8 +608,9 @@ static long pidfd_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			struct user_namespace *user_ns;
 
 			user_ns = task_cred_xxx(task, user_ns);
-			if (ns_ref_get(user_ns))
-				ns_common = to_ns_common(user_ns);
+			if (!ns_ref_get(user_ns))
+				break;
+			ns_common = to_ns_common(user_ns);
 		}
 #endif
 		break;
@@ -646,8 +620,9 @@ static long pidfd_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			struct pid_namespace *pid_ns;
 
 			pid_ns = task_active_pid_ns(task);
-			if (ns_ref_get(pid_ns))
-				ns_common = to_ns_common(pid_ns);
+			if (!ns_ref_get(pid_ns))
+				break;
+			ns_common = to_ns_common(pid_ns);
 		}
 #endif
 		break;
@@ -1036,7 +1011,7 @@ static int pidfs_xattr_get(const struct xattr_handler *handler,
 
 	xattrs = READ_ONCE(attr->xattrs);
 	if (!xattrs)
-		return -ENODATA;
+		return 0;
 
 	name = xattr_full_name(handler, suffix);
 	return simple_xattr_get(xattrs, name, value, size);
@@ -1056,16 +1031,22 @@ static int pidfs_xattr_set(const struct xattr_handler *handler,
 	/* Ensure we're the only one to set @attr->xattrs. */
 	WARN_ON_ONCE(!inode_is_locked(inode));
 
-	xattrs = simple_xattrs_lazy_alloc(&attr->xattrs, value, flags);
-	if (IS_ERR_OR_NULL(xattrs))
-		return PTR_ERR(xattrs);
+	xattrs = READ_ONCE(attr->xattrs);
+	if (!xattrs) {
+		xattrs = kmem_cache_zalloc(pidfs_xattr_cachep, GFP_KERNEL);
+		if (!xattrs)
+			return -ENOMEM;
+
+		simple_xattrs_init(xattrs);
+		smp_store_release(&pid->attr->xattrs, xattrs);
+	}
 
 	name = xattr_full_name(handler, suffix);
 	old_xattr = simple_xattr_set(xattrs, name, value, size, flags);
 	if (IS_ERR(old_xattr))
 		return PTR_ERR(old_xattr);
 
-	simple_xattr_free_rcu(old_xattr);
+	simple_xattr_free(old_xattr);
 	return 0;
 }
 
@@ -1142,6 +1123,11 @@ void __init pidfs_init(void)
 	pidfs_attr_cachep = kmem_cache_create("pidfs_attr_cache", sizeof(struct pidfs_attr), 0,
 					 (SLAB_HWCACHE_ALIGN | SLAB_RECLAIM_ACCOUNT |
 					  SLAB_ACCOUNT | SLAB_PANIC), NULL);
+
+	pidfs_xattr_cachep = kmem_cache_create("pidfs_xattr_cache",
+					       sizeof(struct simple_xattrs), 0,
+					       (SLAB_HWCACHE_ALIGN | SLAB_RECLAIM_ACCOUNT |
+						SLAB_ACCOUNT | SLAB_PANIC), NULL);
 
 	pidfs_mnt = kern_mount(&pidfs_type);
 	if (IS_ERR(pidfs_mnt))

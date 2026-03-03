@@ -216,7 +216,7 @@ static int cifs_shutdown(struct super_block *sb, unsigned long arg)
 	 */
 	case CIFS_GOING_FLAGS_LOGFLUSH:
 	case CIFS_GOING_FLAGS_NOLOGFLUSH:
-		atomic_or(CIFS_MOUNT_SHUTDOWN, &sbi->mnt_cifs_flags);
+		sbi->mnt_cifs_flags |= CIFS_MOUNT_SHUTDOWN;
 		goto shutdown_good;
 	default:
 		rc = -EINVAL;

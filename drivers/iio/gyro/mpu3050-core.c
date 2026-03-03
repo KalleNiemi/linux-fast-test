@@ -322,9 +322,7 @@ static int mpu3050_read_raw(struct iio_dev *indio_dev,
 		}
 	case IIO_CHAN_INFO_RAW:
 		/* Resume device */
-		ret = pm_runtime_resume_and_get(mpu3050->dev);
-		if (ret)
-			return ret;
+		pm_runtime_get_sync(mpu3050->dev);
 		mutex_lock(&mpu3050->lock);
 
 		ret = mpu3050_set_8khz_samplerate(mpu3050);
@@ -649,20 +647,14 @@ out_trigger_unlock:
 static int mpu3050_buffer_preenable(struct iio_dev *indio_dev)
 {
 	struct mpu3050 *mpu3050 = iio_priv(indio_dev);
-	int ret;
 
-	ret = pm_runtime_resume_and_get(mpu3050->dev);
-	if (ret)
-		return ret;
+	pm_runtime_get_sync(mpu3050->dev);
 
 	/* Unless we have OUR trigger active, run at full speed */
-	if (!mpu3050->hw_irq_trigger) {
-		ret = mpu3050_set_8khz_samplerate(mpu3050);
-		if (ret)
-			pm_runtime_put_autosuspend(mpu3050->dev);
-	}
+	if (!mpu3050->hw_irq_trigger)
+		return mpu3050_set_8khz_samplerate(mpu3050);
 
-	return ret;
+	return 0;
 }
 
 static int mpu3050_buffer_postdisable(struct iio_dev *indio_dev)

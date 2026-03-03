@@ -78,8 +78,6 @@ static int mlx5e_xsk_enable_locked(struct mlx5e_priv *priv,
 				   struct xsk_buff_pool *pool, u16 ix)
 {
 	struct mlx5e_params *params = &priv->channels.params;
-	struct mlx5e_channel_param *cparam;
-	enum mlx5e_mpwrq_umr_mode umr_mode;
 	struct mlx5e_xsk_param xsk;
 	struct mlx5e_channel *c;
 	int err;
@@ -90,24 +88,18 @@ static int mlx5e_xsk_enable_locked(struct mlx5e_priv *priv,
 	if (unlikely(!mlx5e_xsk_is_pool_sane(pool)))
 		return -EINVAL;
 
-	cparam = kvzalloc_obj(*cparam);
-	if (!cparam)
-		return -ENOMEM;
-
 	err = mlx5e_xsk_map_pool(mlx5_sd_ch_ix_get_dev(priv->mdev, ix), pool);
 	if (unlikely(err))
-		goto err_free_cparam;
+		return err;
 
 	err = mlx5e_xsk_add_pool(&priv->xsk, pool, ix);
 	if (unlikely(err))
 		goto err_unmap_pool;
 
 	mlx5e_build_xsk_param(pool, &xsk);
-	mlx5e_build_xsk_channel_param(priv->mdev, params, &xsk, cparam);
 
-	umr_mode = mlx5e_mpwrq_umr_mode(priv->mdev, &cparam->rq_opt);
 	if (priv->channels.params.rq_wq_type == MLX5_WQ_TYPE_LINKED_LIST_STRIDING_RQ &&
-	    umr_mode == MLX5E_MPWRQ_UMR_MODE_OVERSIZED) {
+	    mlx5e_mpwrq_umr_mode(priv->mdev, &xsk) == MLX5E_MPWRQ_UMR_MODE_OVERSIZED) {
 		const char *recommendation = is_power_of_2(xsk.chunk_size) ?
 			"Upgrade firmware" : "Disable striding RQ";
 
@@ -129,7 +121,7 @@ static int mlx5e_xsk_enable_locked(struct mlx5e_priv *priv,
 
 	c = priv->channels.c[ix];
 
-	err = mlx5e_open_xsk(priv, params, cparam, pool, c);
+	err = mlx5e_open_xsk(priv, params, &xsk, pool, c);
 	if (unlikely(err))
 		goto err_remove_pool;
 
@@ -145,8 +137,6 @@ static int mlx5e_xsk_enable_locked(struct mlx5e_priv *priv,
 	mlx5e_deactivate_rq(&c->rq);
 	mlx5e_flush_rq(&c->rq, MLX5_RQC_STATE_RDY);
 
-	kvfree(cparam);
-
 	return 0;
 
 err_remove_pool:
@@ -155,21 +145,16 @@ err_remove_pool:
 err_unmap_pool:
 	mlx5e_xsk_unmap_pool(priv, pool);
 
-err_free_cparam:
-	kvfree(cparam);
-
 	return err;
 
 validate_closed:
 	/* Check the configuration in advance, rather than fail at a later stage
 	 * (in mlx5e_xdp_set or on open) and end up with no channels.
 	 */
-	if (!mlx5e_validate_xsk_param(params, &cparam->rq_opt, priv->mdev)) {
+	if (!mlx5e_validate_xsk_param(params, &xsk, priv->mdev)) {
 		err = -EINVAL;
 		goto err_remove_pool;
 	}
-
-	kvfree(cparam);
 
 	return 0;
 }

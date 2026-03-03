@@ -22,6 +22,10 @@
 	status = "okay";
 };
 
+&amix {
+	status = "okay";
+};
+
 &asrc0 {
 	status = "okay";
 };

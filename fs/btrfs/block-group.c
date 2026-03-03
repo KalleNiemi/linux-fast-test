@@ -728,7 +728,7 @@ static int load_extent_tree_free(struct btrfs_caching_control *caching_ctl)
 	struct extent_buffer *leaf;
 	struct btrfs_key key;
 	u64 total_found = 0;
-	u64 last = block_group->start;
+	u64 last = 0;
 	u32 nritems;
 	int ret;
 	bool wakeup = true;
@@ -737,13 +737,8 @@ static int load_extent_tree_free(struct btrfs_caching_control *caching_ctl)
 	if (!path)
 		return -ENOMEM;
 
+	last = max_t(u64, block_group->start, BTRFS_SUPER_INFO_OFFSET);
 	extent_root = btrfs_extent_root(fs_info, last);
-	if (unlikely(!extent_root)) {
-		btrfs_err(fs_info,
-			  "missing extent root for block group at offset %llu",
-			  block_group->start);
-		return -EUCLEAN;
-	}
 
 #ifdef CONFIG_BTRFS_DEBUG
 	/*
@@ -1066,11 +1061,6 @@ static int remove_block_group_item(struct btrfs_trans_handle *trans,
 	int ret;
 
 	root = btrfs_block_group_root(fs_info);
-	if (unlikely(!root)) {
-		btrfs_err(fs_info, "missing block group root");
-		return -EUCLEAN;
-	}
-
 	key.objectid = block_group->start;
 	key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
 	key.offset = block_group->length;
@@ -1359,11 +1349,6 @@ struct btrfs_trans_handle *btrfs_start_trans_remove_block_group(
 	struct btrfs_chunk_map *map;
 	unsigned int num_items;
 
-	if (unlikely(!root)) {
-		btrfs_err(fs_info, "missing block group root");
-		return ERR_PTR(-EUCLEAN);
-	}
-
 	map = btrfs_find_chunk_map(fs_info, chunk_offset, 1);
 	ASSERT(map != NULL);
 	ASSERT(map->start == chunk_offset);
@@ -1612,24 +1597,6 @@ void btrfs_delete_unused_bgs(struct btrfs_fs_info *fs_info)
 
 		spin_lock(&space_info->lock);
 		spin_lock(&block_group->lock);
-
-		if (btrfs_is_zoned(fs_info) && btrfs_is_block_group_used(block_group) &&
-		    block_group->zone_unusable >= div_u64(block_group->length, 2)) {
-			/*
-			 * If the block group has data left, but at least half
-			 * of the block group is zone_unusable, mark it as
-			 * reclaimable before continuing with the next block group.
-			 */
-
-			spin_unlock(&block_group->lock);
-			spin_unlock(&space_info->lock);
-			up_write(&space_info->groups_sem);
-
-			btrfs_mark_bg_to_reclaim(block_group);
-
-			goto next;
-		}
-
 		if (btrfs_is_block_group_used(block_group) ||
 		    (block_group->ro && !(block_group->flags & BTRFS_BLOCK_GROUP_REMAPPED)) ||
 		    list_is_singular(&block_group->list) ||
@@ -1696,7 +1663,7 @@ void btrfs_delete_unused_bgs(struct btrfs_fs_info *fs_info)
 		spin_unlock(&space_info->lock);
 
 		/* We don't want to force the issue, only flip if it's ok. */
-		ret = inc_block_group_ro(block_group, false);
+		ret = inc_block_group_ro(block_group, 0);
 		up_write(&space_info->groups_sem);
 		if (ret < 0) {
 			ret = 0;
@@ -2026,7 +1993,7 @@ void btrfs_reclaim_bgs_work(struct work_struct *work)
 			goto next;
 		}
 
-		ret = inc_block_group_ro(bg, false);
+		ret = inc_block_group_ro(bg, 0);
 		up_write(&space_info->groups_sem);
 		if (ret < 0)
 			goto next;
@@ -2172,11 +2139,6 @@ static int find_first_block_group(struct btrfs_fs_info *fs_info,
 	struct btrfs_root *root = btrfs_block_group_root(fs_info);
 	int ret;
 	struct btrfs_key found_key;
-
-	if (unlikely(!root)) {
-		btrfs_err(fs_info, "missing block group root");
-		return -EUCLEAN;
-	}
 
 	btrfs_for_each_slot(root, key, &found_key, path, ret) {
 		if (found_key.objectid >= key->objectid &&
@@ -2555,7 +2517,7 @@ static int read_one_block_group(struct btrfs_fs_info *info,
 				btrfs_mark_bg_unused(cache);
 		}
 	} else {
-		inc_block_group_ro(cache, true);
+		inc_block_group_ro(cache, 1);
 	}
 
 	return 0;
@@ -2711,11 +2673,11 @@ int btrfs_read_block_groups(struct btrfs_fs_info *info)
 		list_for_each_entry(cache,
 				&space_info->block_groups[BTRFS_RAID_RAID0],
 				list)
-			inc_block_group_ro(cache, true);
+			inc_block_group_ro(cache, 1);
 		list_for_each_entry(cache,
 				&space_info->block_groups[BTRFS_RAID_SINGLE],
 				list)
-			inc_block_group_ro(cache, true);
+			inc_block_group_ro(cache, 1);
 	}
 
 	btrfs_init_global_block_rsv(info);
@@ -2750,11 +2712,6 @@ static int insert_block_group_item(struct btrfs_trans_handle *trans,
 	u64 old_last_used;
 	size_t size;
 	int ret;
-
-	if (unlikely(!root)) {
-		btrfs_err(fs_info, "missing block group root");
-		return -EUCLEAN;
-	}
 
 	spin_lock(&block_group->lock);
 	btrfs_set_stack_block_group_v2_used(&bgi, block_group->used);
@@ -3091,11 +3048,6 @@ int btrfs_inc_block_group_ro(struct btrfs_block_group *cache,
 	int ret;
 	bool dirty_bg_running;
 
-	if (unlikely(!root)) {
-		btrfs_err(fs_info, "missing block group root");
-		return -EUCLEAN;
-	}
-
 	/*
 	 * This can only happen when we are doing read-only scrub on read-only
 	 * mount.
@@ -3104,7 +3056,7 @@ int btrfs_inc_block_group_ro(struct btrfs_block_group *cache,
 	 */
 	if (sb_rdonly(fs_info->sb)) {
 		mutex_lock(&fs_info->ro_block_group_mutex);
-		ret = inc_block_group_ro(cache, false);
+		ret = inc_block_group_ro(cache, 0);
 		mutex_unlock(&fs_info->ro_block_group_mutex);
 		return ret;
 	}
@@ -3155,7 +3107,7 @@ int btrfs_inc_block_group_ro(struct btrfs_block_group *cache,
 		}
 	}
 
-	ret = inc_block_group_ro(cache, false);
+	ret = inc_block_group_ro(cache, 0);
 	if (!ret)
 		goto out;
 	if (ret == -ETXTBSY)
@@ -3182,7 +3134,7 @@ int btrfs_inc_block_group_ro(struct btrfs_block_group *cache,
 	if (ret < 0)
 		goto out;
 
-	ret = inc_block_group_ro(cache, false);
+	ret = inc_block_group_ro(cache, 0);
 	if (ret == -ETXTBSY)
 		goto unlock_out;
 out:
@@ -3239,11 +3191,6 @@ static int update_block_group_item(struct btrfs_trans_handle *trans,
 	u32 old_last_identity_remap_count;
 	u64 used, remap_bytes;
 	u32 identity_remap_count;
-
-	if (unlikely(!root)) {
-		btrfs_err(fs_info, "missing block group root");
-		return -EUCLEAN;
-	}
 
 	/*
 	 * Block group items update can be triggered out of commit transaction
@@ -3322,9 +3269,9 @@ fail:
 
 }
 
-static void cache_save_setup(struct btrfs_block_group *block_group,
-			     struct btrfs_trans_handle *trans,
-			     struct btrfs_path *path)
+static int cache_save_setup(struct btrfs_block_group *block_group,
+			    struct btrfs_trans_handle *trans,
+			    struct btrfs_path *path)
 {
 	struct btrfs_fs_info *fs_info = block_group->fs_info;
 	struct inode *inode = NULL;
@@ -3336,7 +3283,7 @@ static void cache_save_setup(struct btrfs_block_group *block_group,
 	int ret = 0;
 
 	if (!btrfs_test_opt(fs_info, SPACE_CACHE))
-		return;
+		return 0;
 
 	/*
 	 * If this block group is smaller than 100 megs don't bother caching the
@@ -3346,11 +3293,11 @@ static void cache_save_setup(struct btrfs_block_group *block_group,
 		spin_lock(&block_group->lock);
 		block_group->disk_cache_state = BTRFS_DC_WRITTEN;
 		spin_unlock(&block_group->lock);
-		return;
+		return 0;
 	}
 
 	if (TRANS_ABORTED(trans))
-		return;
+		return 0;
 again:
 	inode = lookup_free_space_inode(block_group, path);
 	if (IS_ERR(inode) && PTR_ERR(inode) != -ENOENT) {
@@ -3393,6 +3340,7 @@ again:
 		btrfs_abort_transaction(trans, ret);
 		goto out_put;
 	}
+	WARN_ON(ret);
 
 	/* We've already setup this transaction, go ahead and exit */
 	if (block_group->cache_generation == trans->transid &&
@@ -3431,8 +3379,10 @@ again:
 	 * We hit an ENOSPC when setting up the cache in this transaction, just
 	 * skip doing the setup, we've already cleared the cache so we're safe.
 	 */
-	if (test_bit(BTRFS_TRANS_CACHE_ENOSPC, &trans->transaction->flags))
+	if (test_bit(BTRFS_TRANS_CACHE_ENOSPC, &trans->transaction->flags)) {
+		ret = -ENOSPC;
 		goto out_put;
+	}
 
 	/*
 	 * Try to preallocate enough space based on how big the block group is.
@@ -3480,6 +3430,7 @@ out:
 	spin_unlock(&block_group->lock);
 
 	extent_changeset_free(data_reserved);
+	return ret;
 }
 
 int btrfs_setup_space_cache(struct btrfs_trans_handle *trans)

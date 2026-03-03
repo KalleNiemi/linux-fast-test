@@ -6,8 +6,6 @@
 #include <linux/err.h>
 #include <linux/types.h>
 
-#include "defs.h"
-
 struct acpi_device;
 struct device;
 struct fwnode_handle;

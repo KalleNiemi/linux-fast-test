@@ -91,22 +91,22 @@
 			    NETIF_F_GSO_ESP)
 
 #ifdef CONFIG_NET_POLL_CONTROLLER
-DECLARE_STATIC_KEY_FALSE(netpoll_block_tx);
+extern atomic_t netpoll_block_tx;
 
 static inline void block_netpoll_tx(void)
 {
-	static_branch_inc(&netpoll_block_tx);
+	atomic_inc(&netpoll_block_tx);
 }
 
 static inline void unblock_netpoll_tx(void)
 {
-	static_branch_dec(&netpoll_block_tx);
+	atomic_dec(&netpoll_block_tx);
 }
 
 static inline int is_netpoll_tx_blocked(struct net_device *dev)
 {
-	if (static_branch_unlikely(&netpoll_block_tx))
-		return netpoll_tx_running(dev);
+	if (unlikely(netpoll_tx_running(dev)))
+		return atomic_read(&netpoll_block_tx);
 	return 0;
 }
 #else

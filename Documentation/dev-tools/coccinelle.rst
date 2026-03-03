@@ -29,7 +29,6 @@ of many distributions, e.g. :
  - Ubuntu
  - OpenSUSE
  - Arch Linux
- - Gentoo
  - NetBSD
  - FreeBSD
 

@@ -74,16 +74,6 @@ Supported chips:
 	       https://us1.silergy.com/
 
 
-  * Texas Instruments INA234
-
-    Prefix: 'ina234'
-
-    Addresses: I2C 0x40 - 0x43
-
-    Datasheet: Publicly available at the Texas Instruments website
-
-	       https://www.ti.com/
-
 Author: Lothar Felten <lothar.felten@gmail.com>
 
 Description
@@ -99,7 +89,7 @@ interface. The INA220 monitors both shunt drop and supply voltage.
 The INA226 is a current shunt and power monitor with an I2C interface.
 The INA226 monitors both a shunt voltage drop and bus supply voltage.
 
-INA230, INA231, and INA234 are high or low side current shunt and power monitors
+INA230 and INA231 are high or low side current shunt and power monitors
 with an I2C interface. The chips monitor both a shunt voltage drop and
 bus supply voltage.
 
@@ -134,17 +124,8 @@ power1_input		Power(uW) measurement channel
 shunt_resistor		Shunt resistance(uOhm) channel (not for ina260)
 ======================= ===============================================
 
-Additional sysfs entries
-------------------------
-
-Additional entries are available for the following chips:
-
-  * ina226
-  * ina230
-  * ina231
-  * ina234
-  * ina260
-  * sy24655
+Additional sysfs entries for ina226, ina230, ina231, ina260, and sy24655
+------------------------------------------------------------------------
 
 ======================= ====================================================
 curr1_lcrit		Critical low current

@@ -1,7 +1,7 @@
 /*******************************************************************
  * This file is part of the Emulex Linux Device Driver for         *
  * Fibre Channel Host Bus Adapters.                                *
- * Copyright (C) 2017-2026 Broadcom. All Rights Reserved. The term *
+ * Copyright (C) 2017-2025 Broadcom. All Rights Reserved. The term *
  * “Broadcom” refers to Broadcom Inc. and/or its subsidiaries.     *
  * Copyright (C) 2004-2016 Emulex.  All rights reserved.           *
  * EMULEX and SLI are trademarks of Emulex.                        *
@@ -1107,7 +1107,7 @@ stop_rr_fcf_flogi:
 		vport->vmid_flag = 0;
 	}
 	if (sp->cmn.priority_tagging)
-		vport->vmid_flag |= (LPFC_VMID_ISSUE_QFPA |
+		vport->phba->pport->vmid_flag |= (LPFC_VMID_ISSUE_QFPA |
 						  LPFC_VMID_TYPE_PRIO);
 
 	/*
@@ -1303,12 +1303,8 @@ lpfc_issue_els_flogi(struct lpfc_vport *vport, struct lpfc_nodelist *ndlp,
 	elsiocb = lpfc_prep_els_iocb(vport, 1, cmdsize, retry, ndlp,
 				     ndlp->nlp_DID, ELS_CMD_FLOGI);
 
-	if (!elsiocb) {
-		lpfc_vport_set_state(vport, FC_VPORT_FAILED);
-		lpfc_printf_vlog(vport, KERN_WARNING, LOG_ELS | LOG_DISCOVERY,
-				 "4296 Unable to prepare FLOGI iocb\n");
+	if (!elsiocb)
 		return 1;
-	}
 
 	wqe = &elsiocb->wqe;
 	pcmd = (uint8_t *)elsiocb->cmd_dmabuf->virt;
@@ -1398,8 +1394,10 @@ lpfc_issue_els_flogi(struct lpfc_vport *vport, struct lpfc_nodelist *ndlp,
 		phba->sli3_options, 0, 0);
 
 	elsiocb->ndlp = lpfc_nlp_get(ndlp);
-	if (!elsiocb->ndlp)
-		goto err_out;
+	if (!elsiocb->ndlp) {
+		lpfc_els_free_iocb(phba, elsiocb);
+		return 1;
+	}
 
 	/* Avoid race with FLOGI completion and hba_flags. */
 	set_bit(HBA_FLOGI_ISSUED, &phba->hba_flag);
@@ -1409,8 +1407,9 @@ lpfc_issue_els_flogi(struct lpfc_vport *vport, struct lpfc_nodelist *ndlp,
 	if (rc == IOCB_ERROR) {
 		clear_bit(HBA_FLOGI_ISSUED, &phba->hba_flag);
 		clear_bit(HBA_FLOGI_OUTSTANDING, &phba->hba_flag);
+		lpfc_els_free_iocb(phba, elsiocb);
 		lpfc_nlp_put(ndlp);
-		goto err_out;
+		return 1;
 	}
 
 	/* Clear external loopback plug detected flag */
@@ -1475,13 +1474,6 @@ lpfc_issue_els_flogi(struct lpfc_vport *vport, struct lpfc_nodelist *ndlp,
 	}
 
 	return 0;
-
- err_out:
-	lpfc_els_free_iocb(phba, elsiocb);
-	lpfc_vport_set_state(vport, FC_VPORT_FAILED);
-	lpfc_printf_vlog(vport, KERN_WARNING, LOG_ELS | LOG_DISCOVERY,
-			 "4297 Issue FLOGI: Cannot send IOCB\n");
-	return 1;
 }
 
 /**
@@ -2649,9 +2641,7 @@ lpfc_issue_els_prli(struct lpfc_vport *vport, struct lpfc_nodelist *ndlp,
 		}
 		npr->estabImagePair = 1;
 		npr->readXferRdyDis = 1;
-		if (phba->sli_rev == LPFC_SLI_REV4 &&
-		    !test_bit(HBA_FCOE_MODE, &phba->hba_flag) &&
-		    vport->cfg_first_burst_size)
+		if (vport->cfg_first_burst_size)
 			npr->writeXferRdyDis = 1;
 
 		/* For FCP support */

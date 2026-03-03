@@ -16,9 +16,9 @@ def get_categorized_testlist(alltests, ucat):
 
 
 def get_unique_item(lst):
-    """Return unique items while preserving original order."""
+    """ For a list, return a list of the unique items in the list. """
     if len(lst) > 1:
-        return list(dict.fromkeys(lst))
+        return list(set(lst))
     else:
         return lst
 

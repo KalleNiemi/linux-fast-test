@@ -822,6 +822,7 @@ struct extent_buffer *btrfs_read_node_slot(struct extent_buffer *parent,
 {
 	int level = btrfs_header_level(parent);
 	struct btrfs_tree_parent_check check = { 0 };
+	struct extent_buffer *eb;
 
 	if (slot < 0 || slot >= btrfs_header_nritems(parent))
 		return ERR_PTR(-ENOENT);
@@ -834,8 +835,16 @@ struct extent_buffer *btrfs_read_node_slot(struct extent_buffer *parent,
 	check.has_first_key = true;
 	btrfs_node_key_to_cpu(parent, &check.first_key, slot);
 
-	return read_tree_block(parent->fs_info, btrfs_node_blockptr(parent, slot),
-			       &check);
+	eb = read_tree_block(parent->fs_info, btrfs_node_blockptr(parent, slot),
+			     &check);
+	if (IS_ERR(eb))
+		return eb;
+	if (unlikely(!extent_buffer_uptodate(eb))) {
+		free_extent_buffer(eb);
+		return ERR_PTR(-EIO);
+	}
+
+	return eb;
 }
 
 /*
@@ -3887,7 +3896,7 @@ static noinline int setup_leaf_for_split(struct btrfs_trans_handle *trans,
 			goto err;
 	}
 
-	ret = split_leaf(trans, root, &key, path, ins_len, true);
+	ret = split_leaf(trans, root, &key, path, ins_len, 1);
 	if (ret)
 		goto err;
 

@@ -347,9 +347,6 @@ int amdgpu_get_xgmi_link_status(struct amdgpu_device *adev, int global_link_num)
 {
 	u32 xgmi_state_reg_val;
 
-	if (amdgpu_sriov_vf(adev))
-		return AMDGPU_XGMI_LINK_NA;
-
 	if (adev->gmc.xgmi.num_physical_nodes <= 1)
 		return -EINVAL;
 

@@ -177,7 +177,7 @@ xrep_dir_teardown(
 	rd->dir_names = NULL;
 	if (rd->dir_entries)
 		xfarray_destroy(rd->dir_entries);
-	rd->dir_entries = NULL;
+	rd->dir_names = NULL;
 }
 
 /* Set up for a directory repair. */

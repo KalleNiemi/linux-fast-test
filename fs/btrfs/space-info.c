@@ -129,15 +129,6 @@
  *     churn a lot and we can avoid making some extent tree modifications if we
  *     are able to delay for as long as possible.
  *
- *   RECLAIM_ZONES
- *     This state only works for the zoned mode. In zoned mode, we cannot reuse
- *     regions that have once been allocated and then been freed until we reset
- *     the zone, due to the sequential write requirement. The RECLAIM_ZONES state
- *     calls the reclaim machinery, evacuating the still valid data in these
- *     block-groups and relocates it to the data_reloc_bg. Afterwards these
- *     block-groups get deleted and the transaction is committed. This frees up
- *     space to use for new allocations.
- *
  *   RESET_ZONES
  *     This state works only for the zoned mode. On the zoned mode, we cannot
  *     reuse once allocated then freed region until we reset the zone, due to
@@ -412,10 +403,10 @@ void btrfs_add_bg_to_space_info(struct btrfs_fs_info *info,
 	up_write(&space_info->groups_sem);
 }
 
-struct btrfs_space_info *btrfs_find_space_info(const struct btrfs_fs_info *info,
+struct btrfs_space_info *btrfs_find_space_info(struct btrfs_fs_info *info,
 					       u64 flags)
 {
-	const struct list_head *head = &info->space_info;
+	struct list_head *head = &info->space_info;
 	struct btrfs_space_info *found;
 
 	flags &= BTRFS_BLOCK_GROUP_TYPE_MASK;
@@ -427,7 +418,7 @@ struct btrfs_space_info *btrfs_find_space_info(const struct btrfs_fs_info *info,
 	return NULL;
 }
 
-static u64 calc_effective_data_chunk_size(const struct btrfs_fs_info *fs_info)
+static u64 calc_effective_data_chunk_size(struct btrfs_fs_info *fs_info)
 {
 	struct btrfs_space_info *data_sinfo;
 	u64 data_chunk_size;
@@ -453,7 +444,6 @@ static u64 calc_available_free_space(const struct btrfs_space_info *space_info,
 				     enum btrfs_reserve_flush_enum flush)
 {
 	struct btrfs_fs_info *fs_info = space_info->fs_info;
-	bool has_per_profile;
 	u64 profile;
 	u64 avail;
 	u64 data_chunk_size;
@@ -464,21 +454,19 @@ static u64 calc_available_free_space(const struct btrfs_space_info *space_info,
 	else
 		profile = btrfs_metadata_alloc_profile(fs_info);
 
-	has_per_profile = btrfs_get_per_profile_avail(fs_info, profile, &avail);
-	if (!has_per_profile) {
-		avail = atomic64_read(&fs_info->free_chunk_space);
+	avail = atomic64_read(&fs_info->free_chunk_space);
 
-		/*
-		 * If we have dup, raid1 or raid10 then only half of the free
-		 * space is actually usable.  For raid56, the space info used
-		 * doesn't include the parity drive, so we don't have to
-		 * change the math
-		 */
-		factor = btrfs_bg_type_to_factor(profile);
-		avail = div_u64(avail, factor);
-		if (avail == 0)
-			return 0;
-	}
+	/*
+	 * If we have dup, raid1 or raid10 then only half of the free
+	 * space is actually usable.  For raid56, the space info used
+	 * doesn't include the parity drive, so we don't have to
+	 * change the math
+	 */
+	factor = btrfs_bg_type_to_factor(profile);
+	avail = div_u64(avail, factor);
+	if (avail == 0)
+		return 0;
+
 	data_chunk_size = calc_effective_data_chunk_size(fs_info);
 
 	/*
@@ -501,10 +489,10 @@ static u64 calc_available_free_space(const struct btrfs_space_info *space_info,
 	/*
 	 * If we aren't flushing all things, let us overcommit up to
 	 * 1/2th of the space. If we can flush, don't let us overcommit
-	 * too much, let it overcommit up to 1/64th of the space.
+	 * too much, let it overcommit up to 1/8 of the space.
 	 */
-	if (flush == BTRFS_RESERVE_FLUSH_ALL || flush == BTRFS_RESERVE_FLUSH_ALL_STEAL)
-		avail >>= 6;
+	if (flush == BTRFS_RESERVE_FLUSH_ALL)
+		avail >>= 3;
 	else
 		avail >>= 1;
 
@@ -913,18 +901,6 @@ static void flush_space(struct btrfs_space_info *space_info, u64 num_bytes,
 
 		if (ret > 0 || ret == -ENOSPC)
 			ret = 0;
-		break;
-	case RECLAIM_ZONES:
-		if (btrfs_is_zoned(fs_info)) {
-			btrfs_reclaim_sweep(fs_info);
-			btrfs_delete_unused_bgs(fs_info);
-			btrfs_reclaim_bgs(fs_info);
-			flush_work(&fs_info->reclaim_bgs_work);
-			ASSERT(current->journal_info == NULL);
-			ret = btrfs_commit_current_transaction(root);
-		} else {
-			ret = 0;
-		}
 		break;
 	case RUN_DELAYED_IPUTS:
 		/*
@@ -1424,7 +1400,6 @@ static const enum btrfs_flush_state data_flush_states[] = {
 	FLUSH_DELALLOC_FULL,
 	RUN_DELAYED_IPUTS,
 	COMMIT_TRANS,
-	RECLAIM_ZONES,
 	RESET_ZONES,
 	ALLOC_CHUNK_FORCE,
 };
@@ -2219,11 +2194,8 @@ void btrfs_reclaim_sweep(const struct btrfs_fs_info *fs_info)
 		if (!btrfs_should_periodic_reclaim(space_info))
 			continue;
 		for (raid = 0; raid < BTRFS_NR_RAID_TYPES; raid++) {
-			if (do_reclaim_sweep(space_info, raid)) {
-				spin_lock(&space_info->lock);
+			if (do_reclaim_sweep(space_info, raid))
 				btrfs_set_periodic_reclaim_ready(space_info, false);
-				spin_unlock(&space_info->lock);
-			}
 		}
 	}
 }

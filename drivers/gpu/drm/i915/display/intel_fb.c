@@ -16,6 +16,7 @@
 #include "intel_display_core.h"
 #include "intel_display_types.h"
 #include "intel_display_utils.h"
+#include "intel_dpt.h"
 #include "intel_fb.h"
 #include "intel_fb_bo.h"
 #include "intel_frontbuffer.h"
@@ -2103,13 +2104,12 @@ int intel_plane_compute_gtt(struct intel_plane_state *plane_state)
 
 static void intel_user_framebuffer_destroy(struct drm_framebuffer *fb)
 {
-	struct intel_display *display = to_intel_display(fb->dev);
 	struct intel_framebuffer *intel_fb = to_intel_framebuffer(fb);
 
 	drm_framebuffer_cleanup(fb);
 
 	if (intel_fb_uses_dpt(fb))
-		intel_parent_dpt_destroy(display, intel_fb->dpt);
+		intel_dpt_destroy(intel_fb->dpt_vm);
 
 	intel_fb_bo_framebuffer_fini(intel_fb_bo(fb));
 
@@ -2304,21 +2304,16 @@ int intel_framebuffer_init(struct intel_framebuffer *intel_fb,
 		goto err_bo_framebuffer_fini;
 
 	if (intel_fb_uses_dpt(fb)) {
-		struct drm_gem_object *obj = intel_fb_bo(&intel_fb->base);
-		struct intel_dpt *dpt;
-		size_t size = 0;
+		struct i915_address_space *vm;
 
-		if (intel_fb_needs_pot_stride_remap(intel_fb))
-			size = intel_remapped_info_size(&intel_fb->remapped_view.gtt.remapped);
-
-		dpt = intel_parent_dpt_create(display, obj, size);
-		if (IS_ERR(dpt)) {
+		vm = intel_dpt_create(intel_fb);
+		if (IS_ERR(vm)) {
 			drm_dbg_kms(display->drm, "failed to create DPT\n");
-			ret = PTR_ERR(dpt);
+			ret = PTR_ERR(vm);
 			goto err_frontbuffer_put;
 		}
 
-		intel_fb->dpt = dpt;
+		intel_fb->dpt_vm = vm;
 	}
 
 	ret = drm_framebuffer_init(display->drm, fb, &intel_fb_funcs);
@@ -2331,7 +2326,7 @@ int intel_framebuffer_init(struct intel_framebuffer *intel_fb,
 
 err_free_dpt:
 	if (intel_fb_uses_dpt(fb))
-		intel_parent_dpt_destroy(display, intel_fb->dpt);
+		intel_dpt_destroy(intel_fb->dpt_vm);
 err_bo_framebuffer_fini:
 	intel_fb_bo_framebuffer_fini(obj);
 err_frontbuffer_put:

@@ -784,7 +784,7 @@ EXPORT_SYMBOL(drm_gem_put_pages);
 static int objects_lookup(struct drm_file *filp, u32 *handle, int count,
 			  struct drm_gem_object **objs)
 {
-	int i;
+	int i, ret = 0;
 	struct drm_gem_object *obj;
 
 	spin_lock(&filp->table_lock);
@@ -792,23 +792,16 @@ static int objects_lookup(struct drm_file *filp, u32 *handle, int count,
 	for (i = 0; i < count; i++) {
 		/* Check if we currently have a reference on the object */
 		obj = idr_find(&filp->object_idr, handle[i]);
-		if (!obj)
-			goto err;
-
+		if (!obj) {
+			ret = -ENOENT;
+			break;
+		}
 		drm_gem_object_get(obj);
 		objs[i] = obj;
 	}
-
-	spin_unlock(&filp->table_lock);
-	return 0;
-
-err:
 	spin_unlock(&filp->table_lock);
 
-	while (i--)
-		drm_gem_object_put(objs[i]);
-
-	return -ENOENT;
+	return ret;
 }
 
 /**
@@ -836,34 +829,24 @@ int drm_gem_objects_lookup(struct drm_file *filp, void __user *bo_handles,
 	u32 *handles;
 	int ret;
 
-	*objs_out = NULL;
-
 	if (!count)
 		return 0;
 
-	objs = kvmalloc_objs(*objs, count);
+	objs = kvmalloc_objs(struct drm_gem_object *, count,
+			     GFP_KERNEL | __GFP_ZERO);
 	if (!objs)
 		return -ENOMEM;
 
+	*objs_out = objs;
+
 	handles = vmemdup_array_user(bo_handles, count, sizeof(u32));
-	if (IS_ERR(handles)) {
-		ret = PTR_ERR(handles);
-		goto err_free_objs;
-	}
+	if (IS_ERR(handles))
+		return PTR_ERR(handles);
 
 	ret = objects_lookup(filp, handles, count, objs);
-	if (ret)
-		goto err_free_handles;
-
 	kvfree(handles);
-	*objs_out = objs;
-	return 0;
-
-err_free_handles:
-	kvfree(handles);
-err_free_objs:
-	kvfree(objs);
 	return ret;
+
 }
 EXPORT_SYMBOL(drm_gem_objects_lookup);
 

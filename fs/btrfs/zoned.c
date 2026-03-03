@@ -1259,13 +1259,6 @@ static int calculate_alloc_pointer(struct btrfs_block_group *cache,
 	key.offset = 0;
 
 	root = btrfs_extent_root(fs_info, key.objectid);
-	if (unlikely(!root)) {
-		btrfs_err(fs_info,
-			  "missing extent root for extent at bytenr %llu",
-			  key.objectid);
-		return -EUCLEAN;
-	}
-
 	ret = btrfs_search_slot(NULL, root, &key, path, 0, 0);
 	/* We should not find the exact match */
 	if (unlikely(!ret))
@@ -2121,8 +2114,9 @@ void btrfs_finish_ordered_zoned(struct btrfs_ordered_extent *ordered)
 	if (test_bit(BTRFS_ORDERED_PREALLOC, &ordered->flags))
 		return;
 
-	ASSERT(!list_empty(&ordered->csum_list));
-	sum = list_first_entry(&ordered->csum_list, struct btrfs_ordered_sum, list);
+	ASSERT(!list_empty(&ordered->list));
+	/* The ordered->list can be empty in the above pre-alloc case. */
+	sum = list_first_entry(&ordered->list, struct btrfs_ordered_sum, list);
 	logical = sum->logical;
 	len = sum->len;
 
@@ -2153,7 +2147,7 @@ out:
 	 */
 	if ((inode->flags & BTRFS_INODE_NODATASUM) ||
 	    test_bit(BTRFS_FS_STATE_NO_DATA_CSUMS, &fs_info->fs_state)) {
-		while ((sum = list_first_entry_or_null(&ordered->csum_list,
+		while ((sum = list_first_entry_or_null(&ordered->list,
 						       typeof(*sum), list))) {
 			list_del(&sum->list);
 			kfree(sum);
@@ -2381,9 +2375,6 @@ bool btrfs_zone_activate(struct btrfs_block_group *block_group)
 	int i;
 
 	if (!btrfs_is_zoned(block_group->fs_info))
-		return true;
-
-	if (unlikely(btrfs_is_testing(fs_info)))
 		return true;
 
 	map = block_group->physical_map;

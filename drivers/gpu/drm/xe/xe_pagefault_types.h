@@ -68,26 +68,24 @@ struct xe_pagefault {
 		/** @consumer.asid: address space ID */
 		u32 asid;
 		/**
-		 * @consumer.access_type: access type and prefetch flag packed
-		 * into a u8.
+		 * @consumer.access_type: access type, u8 rather than enum to
+		 * keep size compact
 		 */
 		u8 access_type;
-#define XE_PAGEFAULT_ACCESS_TYPE_MASK	GENMASK(1, 0)
-#define XE_PAGEFAULT_ACCESS_PREFETCH	BIT(7)
 		/**
-		 * @consumer.fault_type_level: fault type and level, u8 rather
-		 * than enum to keep size compact
+		 * @consumer.fault_type: fault type, u8 rather than enum to
+		 * keep size compact
 		 */
-		u8 fault_type_level;
-#define XE_PAGEFAULT_TYPE_LEVEL_NACK		0xff	/* Producer indicates nack fault */
-#define XE_PAGEFAULT_LEVEL_MASK			GENMASK(3, 0)
-#define XE_PAGEFAULT_TYPE_MASK			GENMASK(7, 4)
+		u8 fault_type;
+#define XE_PAGEFAULT_LEVEL_NACK		0xff	/* Producer indicates nack fault */
+		/** @consumer.fault_level: fault level */
+		u8 fault_level;
 		/** @consumer.engine_class: engine class */
 		u8 engine_class;
 		/** @consumer.engine_instance: engine instance */
 		u8 engine_instance;
 		/** consumer.reserved: reserved bits for future expansion */
-		u64 reserved;
+		u8 reserved[7];
 	} consumer;
 	/**
 	 * @producer: State for the producer (i.e., HW/FW interface). Populated

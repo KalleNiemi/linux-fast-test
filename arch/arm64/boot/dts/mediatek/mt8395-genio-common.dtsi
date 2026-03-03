@@ -18,10 +18,8 @@
 
 / {
 	aliases {
-		ethernet0 = &eth;
-		mmc0 = &mmc0;
-		mmc1 = &mmc1;
 		serial0 = &uart0;
+		ethernet0 = &eth;
 	};
 
 	chosen {

@@ -54,11 +54,6 @@ struct prop_nums {
 	int platforms;
 };
 
-enum simple_util_sysclk_order {
-	SIMPLE_SYSCLK_ORDER_CODEC_FIRST = 0,
-	SIMPLE_SYSCLK_ORDER_CPU_FIRST,
-};
-
 struct simple_util_priv {
 	struct snd_soc_card snd_card;
 	struct simple_dai_props {
@@ -68,7 +63,6 @@ struct simple_util_priv {
 		struct snd_soc_codec_conf *codec_conf;
 		struct prop_nums num;
 		unsigned int mclk_fs;
-		enum simple_util_sysclk_order sysclk_order;
 	} *dai_props;
 	struct simple_util_jack hp_jack;
 	struct simple_util_jack mic_jack;

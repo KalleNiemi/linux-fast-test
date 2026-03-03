@@ -23,11 +23,8 @@ struct file;
 /**
  * struct liveupdate_file_op_args - Arguments for file operation callbacks.
  * @handler:          The file handler being called.
- * @retrieve_status:  The retrieve status for the 'can_finish / finish'
- *                    operation. A value of 0 means the retrieve has not been
- *                    attempted, a positive value means the retrieve was
- *                    successful, and a negative value means the retrieve failed,
- *                    and the value is the error code of the call.
+ * @retrieved:        The retrieve status for the 'can_finish / finish'
+ *                    operation.
  * @file:             The file object. For retrieve: [OUT] The callback sets
  *                    this to the new file. For other ops: [IN] The caller sets
  *                    this to the file being operated on.
@@ -43,7 +40,7 @@ struct file;
  */
 struct liveupdate_file_op_args {
 	struct liveupdate_file_handler *handler;
-	int retrieve_status;
+	bool retrieved;
 	struct file *file;
 	u64 serialized_data;
 	void *private_data;

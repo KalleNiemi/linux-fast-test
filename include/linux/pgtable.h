@@ -1917,56 +1917,41 @@ static inline void pfnmap_setup_cachemode_pfn(unsigned long pfn, pgprot_t *prot)
 	pfnmap_setup_cachemode(pfn, PAGE_SIZE, prot);
 }
 
-/*
- * ZERO_PAGE() is global shared page(s) that is always zero. It is used for
- * zero-mapped memory areas, CoW etc.
- *
- * On architectures that __HAVE_COLOR_ZERO_PAGE there are several such pages
- * for different ranges in the virtual address space.
- *
- * zero_page_pfn identifies the first (or the only) pfn for these pages.
- *
- * For architectures that don't __HAVE_COLOR_ZERO_PAGE the zero page lives in
- * empty_zero_page in BSS.
- */
-void arch_setup_zero_pages(void);
-
+#ifdef CONFIG_MMU
 #ifdef __HAVE_COLOR_ZERO_PAGE
 static inline int is_zero_pfn(unsigned long pfn)
 {
-	extern unsigned long zero_page_pfn;
-	unsigned long offset_from_zero_pfn = pfn - zero_page_pfn;
-
+	extern unsigned long zero_pfn;
+	unsigned long offset_from_zero_pfn = pfn - zero_pfn;
 	return offset_from_zero_pfn <= (zero_page_mask >> PAGE_SHIFT);
 }
 
-#define zero_pfn(addr)	page_to_pfn(ZERO_PAGE(addr))
+#define my_zero_pfn(addr)	page_to_pfn(ZERO_PAGE(addr))
 
 #else
 static inline int is_zero_pfn(unsigned long pfn)
 {
-	extern unsigned long zero_page_pfn;
-
-	return pfn == zero_page_pfn;
+	extern unsigned long zero_pfn;
+	return pfn == zero_pfn;
 }
 
-static inline unsigned long zero_pfn(unsigned long addr)
+static inline unsigned long my_zero_pfn(unsigned long addr)
 {
-	extern unsigned long zero_page_pfn;
-
-	return zero_page_pfn;
+	extern unsigned long zero_pfn;
+	return zero_pfn;
 }
-
-extern uint8_t empty_zero_page[PAGE_SIZE];
-extern struct page *__zero_page;
-
-static inline struct page *_zero_page(unsigned long addr)
+#endif
+#else
+static inline int is_zero_pfn(unsigned long pfn)
 {
-	return __zero_page;
+	return 0;
 }
-#define ZERO_PAGE(vaddr) _zero_page(vaddr)
 
-#endif /* __HAVE_COLOR_ZERO_PAGE */
+static inline unsigned long my_zero_pfn(unsigned long addr)
+{
+	return 0;
+}
+#endif /* CONFIG_MMU */
 
 #ifdef CONFIG_MMU
 

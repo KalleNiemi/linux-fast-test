@@ -239,7 +239,6 @@ struct dml2_configuration_options {
 
 	bool use_clock_dc_limits;
 	bool gpuvm_enable;
-	bool hostvm_enable;
 	bool force_tdlut_enable;
 	void *bb_from_dmub;
 };

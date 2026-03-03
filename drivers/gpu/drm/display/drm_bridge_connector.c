@@ -826,19 +826,9 @@ struct drm_connector *drm_bridge_connector_init(struct drm_device *drm,
 		if (!bridge->ycbcr_420_allowed)
 			connector->ycbcr_420_allowed = false;
 
-		/*
-		 * Ensure the last bridge declares OP_EDID or OP_MODES or both.
-		 */
-		if (bridge->ops & DRM_BRIDGE_OP_EDID || bridge->ops & DRM_BRIDGE_OP_MODES) {
+		if (bridge->ops & DRM_BRIDGE_OP_EDID) {
 			drm_bridge_put(bridge_connector->bridge_edid);
-			bridge_connector->bridge_edid = NULL;
-			drm_bridge_put(bridge_connector->bridge_modes);
-			bridge_connector->bridge_modes = NULL;
-
-			if (bridge->ops & DRM_BRIDGE_OP_EDID)
-				bridge_connector->bridge_edid = drm_bridge_get(bridge);
-			if (bridge->ops & DRM_BRIDGE_OP_MODES)
-				bridge_connector->bridge_modes = drm_bridge_get(bridge);
+			bridge_connector->bridge_edid = drm_bridge_get(bridge);
 		}
 		if (bridge->ops & DRM_BRIDGE_OP_HPD) {
 			drm_bridge_put(bridge_connector->bridge_hpd);
@@ -847,6 +837,10 @@ struct drm_connector *drm_bridge_connector_init(struct drm_device *drm,
 		if (bridge->ops & DRM_BRIDGE_OP_DETECT) {
 			drm_bridge_put(bridge_connector->bridge_detect);
 			bridge_connector->bridge_detect = drm_bridge_get(bridge);
+		}
+		if (bridge->ops & DRM_BRIDGE_OP_MODES) {
+			drm_bridge_put(bridge_connector->bridge_modes);
+			bridge_connector->bridge_modes = drm_bridge_get(bridge);
 		}
 		if (bridge->ops & DRM_BRIDGE_OP_HDMI) {
 			if (bridge_connector->bridge_hdmi)

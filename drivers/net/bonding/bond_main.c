@@ -206,7 +206,7 @@ MODULE_PARM_DESC(lp_interval, "The number of seconds between instances where "
 /*----------------------------- Global variables ----------------------------*/
 
 #ifdef CONFIG_NET_POLL_CONTROLLER
-DEFINE_STATIC_KEY_FALSE(netpoll_block_tx);
+atomic_t netpoll_block_tx = ATOMIC_INIT(0);
 #endif
 
 unsigned int bond_net_id __read_mostly;
@@ -6586,7 +6586,7 @@ static void __exit bonding_exit(void)
 
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	/* Make sure we don't have an imbalance on our netpoll blocking */
-	WARN_ON(static_branch_unlikely(&netpoll_block_tx));
+	WARN_ON(atomic_read(&netpoll_block_tx));
 #endif
 }
 

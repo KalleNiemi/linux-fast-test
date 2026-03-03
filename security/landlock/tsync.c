@@ -203,40 +203,6 @@ static struct tsync_work *tsync_works_provide(struct tsync_works *s,
 	return ctx;
 }
 
-/**
- * tsync_works_trim - Put the last tsync_work element
- *
- * @s: TSYNC works to trim.
- *
- * Put the last task and decrement the size of @s.
- *
- * This helper does not cancel a running task, but just reset the last element
- * to zero.
- */
-static void tsync_works_trim(struct tsync_works *s)
-{
-	struct tsync_work *ctx;
-
-	if (WARN_ON_ONCE(s->size <= 0))
-		return;
-
-	ctx = s->works[s->size - 1];
-
-	/*
-	 * For consistency, remove the task from ctx so that it does not look like
-	 * we handed it a task_work.
-	 */
-	put_task_struct(ctx->task);
-	*ctx = (typeof(*ctx)){};
-
-	/*
-	 * Cancel the tsync_works_provide() change to recycle the reserved memory
-	 * for the next thread, if any.  This also ensures that cancel_tsync_works()
-	 * and tsync_works_release() do not see any NULL task pointers.
-	 */
-	s->size--;
-}
-
 /*
  * tsync_works_grow_by - preallocates space for n more contexts in s
  *
@@ -290,14 +256,13 @@ static int tsync_works_grow_by(struct tsync_works *s, size_t n, gfp_t flags)
  * tsync_works_contains - checks for presence of task in s
  */
 static bool tsync_works_contains_task(const struct tsync_works *s,
-				      const struct task_struct *task)
+				      struct task_struct *task)
 {
 	size_t i;
 
 	for (i = 0; i < s->size; i++)
 		if (s->works[i]->task == task)
 			return true;
-
 	return false;
 }
 
@@ -311,7 +276,7 @@ static void tsync_works_release(struct tsync_works *s)
 	size_t i;
 
 	for (i = 0; i < s->size; i++) {
-		if (WARN_ON_ONCE(!s->works[i]->task))
+		if (!s->works[i]->task)
 			continue;
 
 		put_task_struct(s->works[i]->task);
@@ -319,7 +284,6 @@ static void tsync_works_release(struct tsync_works *s)
 
 	for (i = 0; i < s->capacity; i++)
 		kfree(s->works[i]);
-
 	kfree(s->works);
 	s->works = NULL;
 	s->size = 0;
@@ -331,7 +295,7 @@ static void tsync_works_release(struct tsync_works *s)
  */
 static size_t count_additional_threads(const struct tsync_works *works)
 {
-	const struct task_struct *caller, *thread;
+	struct task_struct *thread, *caller;
 	size_t n = 0;
 
 	caller = current;
@@ -370,8 +334,7 @@ static bool schedule_task_work(struct tsync_works *works,
 			       struct tsync_shared_context *shared_ctx)
 {
 	int err;
-	const struct task_struct *caller;
-	struct task_struct *thread;
+	struct task_struct *thread, *caller;
 	struct tsync_work *ctx;
 	bool found_more_threads = false;
 
@@ -416,14 +379,16 @@ static bool schedule_task_work(struct tsync_works *works,
 
 		init_task_work(&ctx->work, restrict_one_thread_callback);
 		err = task_work_add(thread, &ctx->work, TWA_SIGNAL);
-		if (unlikely(err)) {
+		if (err) {
 			/*
 			 * task_work_add() only fails if the task is about to exit.  We
 			 * checked that earlier, but it can happen as a race.  Resume
 			 * without setting an error, as the task is probably gone in the
-			 * next loop iteration.
+			 * next loop iteration.  For consistency, remove the task from ctx
+			 * so that it does not look like we handed it a task_work.
 			 */
-			tsync_works_trim(works);
+			put_task_struct(ctx->task);
+			ctx->task = NULL;
 
 			atomic_dec(&shared_ctx->num_preparing);
 			atomic_dec(&shared_ctx->num_unfinished);
@@ -441,15 +406,12 @@ static bool schedule_task_work(struct tsync_works *works,
  * shared_ctx->num_preparing and shared_ctx->num_unfished and mark the two
  * completions if needed, as if the task was never scheduled.
  */
-static void cancel_tsync_works(const struct tsync_works *works,
+static void cancel_tsync_works(struct tsync_works *works,
 			       struct tsync_shared_context *shared_ctx)
 {
-	size_t i;
+	int i;
 
 	for (i = 0; i < works->size; i++) {
-		if (WARN_ON_ONCE(!works->works[i]->task))
-			continue;
-
 		if (!task_work_cancel(works->works[i]->task,
 				      &works->works[i]->work))
 			continue;
@@ -484,13 +446,6 @@ int landlock_restrict_sibling_threads(const struct cred *old_cred,
 	shared_ctx.old_cred = old_cred;
 	shared_ctx.new_cred = new_cred;
 	shared_ctx.set_no_new_privs = task_no_new_privs(current);
-
-	/*
-	 * Serialize concurrent TSYNC operations to prevent deadlocks when multiple
-	 * threads call landlock_restrict_self() simultaneously.
-	 */
-	if (!down_write_trylock(&current->signal->exec_update_lock))
-		return -ERESTARTNOINTR;
 
 	/*
 	 * We schedule a pseudo-signal task_work for each of the calling task's
@@ -572,27 +527,24 @@ int landlock_restrict_sibling_threads(const struct cred *old_cred,
 					   -ERESTARTNOINTR);
 
 				/*
-				 * Opportunistic improvement: try to cancel task works for tasks
-				 * that did not start running yet. We do not have a guarantee
-				 * that it cancels any of the enqueued task works (because
-				 * task_work_run() might already have dequeued them).
+				 * Cancel task works for tasks that did not start running yet,
+				 * and decrement all_prepared and num_unfinished accordingly.
 				 */
 				cancel_tsync_works(&works, &shared_ctx);
 
 				/*
-				 * Break the loop with error. The cleanup code after the loop
-				 * unblocks the remaining task_works.
+				 * The remaining task works have started running, so waiting for
+				 * their completion will finish.
 				 */
-				break;
+				wait_for_completion(&shared_ctx.all_prepared);
 			}
 		}
 	} while (found_more_threads &&
 		 !atomic_read(&shared_ctx.preparation_error));
 
 	/*
-	 * We now have either (a) all sibling threads blocking and in "prepared"
-	 * state in the task work, or (b) the preparation error is set. Ask all
-	 * threads to commit (or abort).
+	 * We now have all sibling threads blocking and in "prepared" state in the
+	 * task work. Ask all threads to commit.
 	 */
 	complete_all(&shared_ctx.ready_to_commit);
 
@@ -604,7 +556,6 @@ int landlock_restrict_sibling_threads(const struct cred *old_cred,
 		wait_for_completion(&shared_ctx.all_finished);
 
 	tsync_works_release(&works);
-	up_write(&current->signal->exec_update_lock);
 
 	return atomic_read(&shared_ctx.preparation_error);
 }

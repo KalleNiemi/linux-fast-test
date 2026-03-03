@@ -110,6 +110,8 @@ struct channel_space {
 	unsigned long		*guaranteed;
 };
 
+DEFINE_CORESIGHT_DEVLIST(stm_devs, "stm");
+
 /**
  * struct stm_drvdata - specifics associated to an STM component
  * @base:		memory mapped base address for this component.
@@ -832,7 +834,7 @@ static int __stm_probe(struct device *dev, struct resource *res)
 	struct resource ch_res;
 	struct coresight_desc desc = { 0 };
 
-	desc.name = coresight_alloc_device_name("stm", dev);
+	desc.name = coresight_alloc_device_name(&stm_devs, dev);
 	if (!desc.name)
 		return -ENOMEM;
 

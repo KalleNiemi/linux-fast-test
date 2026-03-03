@@ -973,8 +973,7 @@ static void idxd_device_config_restore(struct idxd_device *idxd,
 
 	idxd->rdbuf_limit = idxd_saved->saved_idxd.rdbuf_limit;
 
-	if (idxd->evl)
-		idxd->evl->size = saved_evl->size;
+	idxd->evl->size = saved_evl->size;
 
 	for (i = 0; i < idxd->max_groups; i++) {
 		struct idxd_group *saved_group, *group;
@@ -1105,10 +1104,12 @@ static void idxd_reset_done(struct pci_dev *pdev)
 	idxd_device_config_restore(idxd, idxd->idxd_saved);
 
 	/* Re-configure IDXD device if allowed. */
-	rc = idxd_device_config(idxd);
-	if (rc < 0) {
-		dev_err(dev, "HALT: %s config fails\n", idxd_name);
-		goto out;
+	if (test_bit(IDXD_FLAG_CONFIGURABLE, &idxd->flags)) {
+		rc = idxd_device_config(idxd);
+		if (rc < 0) {
+			dev_err(dev, "HALT: %s config fails\n", idxd_name);
+			goto out;
+		}
 	}
 
 	/* Bind IDXD device to driver. */
@@ -1146,7 +1147,6 @@ static void idxd_reset_done(struct pci_dev *pdev)
 	}
 out:
 	kfree(idxd->idxd_saved);
-	idxd->idxd_saved = NULL;
 }
 
 static const struct pci_error_handlers idxd_error_handler = {

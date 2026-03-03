@@ -48,6 +48,15 @@ static int nr_cti_cpu;
 /* quick lookup list for CPU bound CTIs when power handling */
 static struct cti_drvdata *cti_cpu_drvdata[NR_CPUS];
 
+/*
+ * CTI naming. CTI bound to cores will have the name cti_cpu<N> where
+ * N is the CPU ID. System CTIs will have the name cti_sys<I> where I
+ * is an index allocated by order of discovery.
+ *
+ * CTI device name list - for CTI not bound to cores.
+ */
+DEFINE_CORESIGHT_DEVLIST(cti_sys_devs, "cti_sys");
+
 /* write set of regs to hardware - call with spinlock claimed */
 void cti_write_all_hw_regs(struct cti_drvdata *drvdata)
 {
@@ -814,13 +823,16 @@ static const struct coresight_ops cti_ops = {
 	.helper_ops = &cti_ops_ect,
 };
 
-static void cti_remove(struct amba_device *adev)
+/*
+ * Free up CTI specific resources
+ * called by dev->release, need to call down to underlying csdev release.
+ */
+static void cti_device_release(struct device *dev)
 {
-	struct cti_drvdata *drvdata = dev_get_drvdata(&adev->dev);
+	struct cti_drvdata *drvdata = dev_get_drvdata(dev->parent);
 	struct cti_drvdata *ect_item, *ect_tmp;
 
 	mutex_lock(&ect_mutex);
-	cti_remove_conn_xrefs(drvdata);
 	cti_pm_release(drvdata);
 
 	/* remove from the list */
@@ -830,6 +842,17 @@ static void cti_remove(struct amba_device *adev)
 			break;
 		}
 	}
+	mutex_unlock(&ect_mutex);
+
+	if (drvdata->csdev_release)
+		drvdata->csdev_release(dev);
+}
+static void cti_remove(struct amba_device *adev)
+{
+	struct cti_drvdata *drvdata = dev_get_drvdata(&adev->dev);
+
+	mutex_lock(&ect_mutex);
+	cti_remove_conn_xrefs(drvdata);
 	mutex_unlock(&ect_mutex);
 
 	coresight_unregister(drvdata->csdev);
@@ -880,18 +903,12 @@ static int cti_probe(struct amba_device *adev, const struct amba_id *id)
 	/* default to powered - could change on PM notifications */
 	drvdata->config.hw_powered = true;
 
-	/*
-	 * Set up device name - will depend if cpu bound or otherwise.
-	 *
-	 * CTI bound to cores will have the name cti_cpu<N> where N is th
-	 * eCPU ID. System CTIs will have the name cti_sys<I> where I is an
-	 * index allocated by order of discovery.
-	 */
+	/* set up device name - will depend if cpu bound or otherwise */
 	if (drvdata->ctidev.cpu >= 0)
 		cti_desc.name = devm_kasprintf(dev, GFP_KERNEL, "cti_cpu%d",
 					       drvdata->ctidev.cpu);
 	else
-		cti_desc.name = coresight_alloc_device_name("cti_sys", dev);
+		cti_desc.name = coresight_alloc_device_name(&cti_sys_devs, dev);
 	if (!cti_desc.name)
 		return -ENOMEM;
 
@@ -929,6 +946,10 @@ static int cti_probe(struct amba_device *adev, const struct amba_id *id)
 	/* set any cross references */
 	cti_update_conn_xrefs(drvdata);
 	mutex_unlock(&ect_mutex);
+
+	/* set up release chain */
+	drvdata->csdev_release = drvdata->csdev->dev.release;
+	drvdata->csdev->dev.release = cti_device_release;
 
 	/* all done - dec pm refcount */
 	pm_runtime_put(&adev->dev);
