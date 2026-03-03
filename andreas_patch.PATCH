@@ -1,0 +1,35 @@
+Parent device is not set up there, so use the new of_node pointer to
+handle aliases.
+
+Fixes: 0ab80451c70f ("i2c: allow setting the parent device and OF node through the adapter struct")
+Reported-by: Kalle Niemi <kaleposti@gmail.com>
+Closes: https://lore.kernel.org/lkml/EDF3FB58-4747-442E-8463-6F1C6E568962@gmail.com/
+Signed-off-by: Andreas Kemnade <andreas@kemnade.info>
+---
+ drivers/i2c/i2c-core-base.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/drivers/i2c/i2c-core-base.c b/drivers/i2c/i2c-core-base.c
+index dd8cec9b04c6..e22d784202b8 100644
+--- a/drivers/i2c/i2c-core-base.c
++++ b/drivers/i2c/i2c-core-base.c
+@@ -1657,10 +1657,9 @@ static int __i2c_add_numbered_adapter(struct i2c_adapter *adap)
+  */
+ int i2c_add_adapter(struct i2c_adapter *adapter)
+ {
+-	struct device *dev = &adapter->dev;
+ 	int id;
+ 
+-	id = of_alias_get_id(dev->of_node, "i2c");
++	id = of_alias_get_id(adapter->of_node, "i2c");
+ 	if (id >= 0) {
+ 		adapter->nr = id;
+ 		return __i2c_add_numbered_adapter(adapter);
+
+---
+base-commit: 3fa5e5702a82d259897bd7e209469bc06368bf31
+change-id: 20260302-i2cfix-56ec3cfedff6
+
+Best regards,
+--  
+Andreas Kemnade <andreas@kemnade.info>
