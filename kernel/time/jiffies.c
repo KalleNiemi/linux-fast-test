@@ -32,7 +32,6 @@ static u64 jiffies_read(struct clocksource *cs)
 static struct clocksource clocksource_jiffies = {
 	.name			= "jiffies",
 	.rating			= 1, /* lowest valid rating*/
-	.uncertainty_margin	= 32 * NSEC_PER_MSEC,
 	.read			= jiffies_read,
 	.mask			= CLOCKSOURCE_MASK(32),
 	.mult			= TICK_NSEC << JIFFIES_SHIFT, /* details above */
@@ -61,15 +60,14 @@ EXPORT_SYMBOL(get_jiffies_64);
 
 EXPORT_SYMBOL(jiffies);
 
-static int __init init_jiffies_clocksource(void)
-{
-	return __clocksource_register(&clocksource_jiffies);
-}
-
-core_initcall(init_jiffies_clocksource);
+static bool cs_jiffies_registered __initdata;
 
 struct clocksource * __init __weak clocksource_default_clock(void)
 {
+	if (!cs_jiffies_registered) {
+		__clocksource_register(&clocksource_jiffies);
+		cs_jiffies_registered = true;
+	}
 	return &clocksource_jiffies;
 }
 
@@ -256,8 +254,6 @@ EXPORT_SYMBOL(proc_dointvec_jiffies);
 int proc_dointvec_userhz_jiffies(const struct ctl_table *table, int dir,
 				 void *buffer, size_t *lenp, loff_t *ppos)
 {
-	if (SYSCTL_USER_TO_KERN(dir) && USER_HZ < HZ)
-		return -EINVAL;
 	return proc_dointvec_conv(table, dir, buffer, lenp, ppos,
 				  do_proc_int_conv_userhz_jiffies);
 }

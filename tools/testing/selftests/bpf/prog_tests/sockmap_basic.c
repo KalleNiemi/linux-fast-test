@@ -14,6 +14,7 @@
 #include "test_sockmap_pass_prog.skel.h"
 #include "test_sockmap_drop_prog.skel.h"
 #include "test_sockmap_change_tail.skel.h"
+#include "test_sockmap_msg_pop_data.skel.h"
 #include "bpf_iter_sockmap.skel.h"
 
 #include "sockmap_helpers.h"
@@ -204,7 +205,7 @@ static void test_skmsg_helpers_with_link(enum bpf_map_type map_type)
 	/* Fail since bpf_link for the same prog type has been created. */
 	link2 = bpf_program__attach_sockmap(prog_clone, map);
 	if (!ASSERT_ERR_PTR(link2, "bpf_program__attach_sockmap")) {
-		bpf_link__detach(link2);
+		bpf_link__destroy(link2);
 		goto out;
 	}
 
@@ -230,7 +231,7 @@ static void test_skmsg_helpers_with_link(enum bpf_map_type map_type)
 	if (!ASSERT_OK(err, "bpf_link_update"))
 		goto out;
 out:
-	bpf_link__detach(link);
+	bpf_link__destroy(link);
 	test_skmsg_load_helpers__destroy(skel);
 }
 
@@ -417,7 +418,7 @@ static void test_sockmap_skb_verdict_attach_with_link(void)
 	if (!ASSERT_OK_PTR(link, "bpf_program__attach_sockmap"))
 		goto out;
 
-	bpf_link__detach(link);
+	bpf_link__destroy(link);
 
 	err = bpf_prog_attach(bpf_program__fd(prog), map, BPF_SK_SKB_STREAM_VERDICT, 0);
 	if (!ASSERT_OK(err, "bpf_prog_attach"))
@@ -426,7 +427,7 @@ static void test_sockmap_skb_verdict_attach_with_link(void)
 	/* Fail since attaching with the same prog/map has been done. */
 	link = bpf_program__attach_sockmap(prog, map);
 	if (!ASSERT_ERR_PTR(link, "bpf_program__attach_sockmap"))
-		bpf_link__detach(link);
+		bpf_link__destroy(link);
 
 	err = bpf_prog_detach2(bpf_program__fd(prog), map, BPF_SK_SKB_STREAM_VERDICT);
 	if (!ASSERT_OK(err, "bpf_prog_detach2"))
@@ -666,6 +667,51 @@ out:
 	test_sockmap_change_tail__destroy(skel);
 }
 
+static void test_sockmap_msg_verdict_pop_data(void)
+{
+	struct test_sockmap_msg_pop_data *skel;
+	int err, map, verdict;
+	int c1 = -1, p1 = -1, sent;
+	int zero = 0;
+	char *buf;
+	const size_t len = 32 * 1024;
+
+	skel = test_sockmap_msg_pop_data__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open_and_load"))
+		return;
+
+	verdict = bpf_program__fd(skel->progs.prog_msg_pop_data);
+	map = bpf_map__fd(skel->maps.sock_map);
+
+	err = bpf_prog_attach(verdict, map, BPF_SK_MSG_VERDICT, 0);
+	if (!ASSERT_OK(err, "bpf_prog_attach"))
+		goto out;
+
+	err = create_pair(AF_INET, SOCK_STREAM, &c1, &p1);
+	if (!ASSERT_OK(err, "create_pair"))
+		goto out;
+
+	err = bpf_map_update_elem(map, &zero, &c1, BPF_NOEXIST);
+	if (!ASSERT_OK(err, "bpf_map_update_elem"))
+		goto out_close;
+
+	buf = calloc(len, 1);
+	if (!ASSERT_OK_PTR(buf, "calloc"))
+		goto out_close;
+
+	sent = xsend(c1, buf, len, 0);
+	ASSERT_EQ(sent, (ssize_t)len, "xsend");
+	ASSERT_EQ(skel->data->pop_data_ret, -EINVAL, "pop_data_rejects overflow");
+
+	free(buf);
+
+out_close:
+	close(c1);
+	close(p1);
+out:
+	test_sockmap_msg_pop_data__destroy(skel);
+}
+
 static void test_sockmap_skb_verdict_peek_helper(int map)
 {
 	int err, c1, p1, zero = 0, sent, recvd, avail;
@@ -747,13 +793,13 @@ static void test_sockmap_skb_verdict_peek_with_link(void)
 	test_sockmap_skb_verdict_peek_helper(map);
 	ASSERT_EQ(pass->bss->clone_called, 1, "clone_called");
 out:
-	bpf_link__detach(link);
+	bpf_link__destroy(link);
 	test_sockmap_pass_prog__destroy(pass);
 }
 
 static void test_sockmap_unconnected_unix(void)
 {
-	int err, map, stream = 0, dgram = 0, zero = 0;
+	int err, map, stream = -1, dgram = -1, zero = 0;
 	struct test_sockmap_pass_prog *skel;
 
 	skel = test_sockmap_pass_prog__open_and_load();
@@ -764,22 +810,22 @@ static void test_sockmap_unconnected_unix(void)
 
 	stream = xsocket(AF_UNIX, SOCK_STREAM, 0);
 	if (stream < 0)
-		return;
+		goto out;
 
 	dgram = xsocket(AF_UNIX, SOCK_DGRAM, 0);
-	if (dgram < 0) {
-		close(stream);
-		return;
-	}
+	if (dgram < 0)
+		goto out;
 
 	err = bpf_map_update_elem(map, &zero, &stream, BPF_ANY);
-	ASSERT_ERR(err, "bpf_map_update_elem(stream)");
+	if (!ASSERT_ERR(err, "bpf_map_update_elem(stream)"))
+		goto out;
 
 	err = bpf_map_update_elem(map, &zero, &dgram, BPF_ANY);
 	ASSERT_OK(err, "bpf_map_update_elem(dgram)");
-
+out:
 	close(stream);
 	close(dgram);
+	test_sockmap_pass_prog__destroy(skel);
 }
 
 static void test_sockmap_many_socket(void)
@@ -807,7 +853,7 @@ static void test_sockmap_many_socket(void)
 		return;
 	}
 
-	udp = xsocket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0);
+	udp = socket_loopback(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK);
 	if (udp < 0) {
 		close(dgram);
 		close(tcp);
@@ -876,7 +922,7 @@ static void test_sockmap_many_maps(void)
 		return;
 	}
 
-	udp = xsocket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0);
+	udp = socket_loopback(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK);
 	if (udp < 0) {
 		close(dgram);
 		close(tcp);
@@ -947,7 +993,7 @@ static void test_sockmap_same_sock(void)
 		return;
 	}
 
-	udp = xsocket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0);
+	udp = socket_loopback(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK);
 	if (udp < 0) {
 		close(dgram);
 		close(tcp);
@@ -1027,7 +1073,7 @@ static void test_sockmap_skb_verdict_vsock_poll(void)
 	if (xrecv_nonblock(conn, &buf, 1, 0) != 1)
 		FAIL("xrecv_nonblock");
 detach:
-	bpf_link__detach(link);
+	bpf_link__destroy(link);
 close:
 	xclose(conn);
 	xclose(peer);
@@ -1298,10 +1344,23 @@ static void test_sockmap_multi_channels(int sotype)
 	avail = wait_for_fionread(p1, expected, IO_TIMEOUT_SEC);
 	ASSERT_EQ(avail, expected, "ioctl(FIONREAD) full return");
 
-	recvd = recv_timeout(p1, rcv, sizeof(rcv), MSG_DONTWAIT, 1);
-	if (!ASSERT_EQ(recvd, sizeof(buf), "recv_timeout(p1)") ||
+	recvd = recv_timeout(p1, rcv, expected, MSG_DONTWAIT, 1);
+	if (!ASSERT_EQ(recvd, expected, "recv_timeout(p1)") ||
 	    !ASSERT_OK(memcmp(buf, rcv, recvd), "data mismatch"))
 		goto end;
+
+	/* process remaining data for udp if secondary data is available */
+	expected = sizeof(buf) - expected;
+	if (expected) {
+		avail = wait_for_fionread(p1, expected, IO_TIMEOUT_SEC);
+		ASSERT_EQ(avail, expected, "second ioctl(FIONREAD) full return");
+
+		recvd = recv_timeout(p1, rcv, expected, MSG_DONTWAIT, 1);
+		if (!ASSERT_EQ(recvd, expected, "second recv_timeout(p1)") ||
+		    !ASSERT_OK(memcmp(buf + sizeof(buf) - expected, rcv, recvd),
+			       "second data mismatch"))
+			goto end;
+	}
 end:
 	if (c0 >= 0)
 		close(c0);
@@ -1311,6 +1370,43 @@ end:
 		close(c1);
 	if (p1 >= 0)
 		close(p1);
+	test_sockmap_pass_prog__destroy(skel);
+}
+
+/* A socket in a sockmap without a verdict program keeps its ingress data
+ * in sk_receive_queue: FIONREAD must account for it.
+ */
+static void test_sockmap_no_verdict_fionread(void)
+{
+	int err, map, zero = 0, sent, avail;
+	int c0 = -1, c1 = -1, p0 = -1, p1 = -1;
+	struct test_sockmap_pass_prog *skel;
+	char buf[256] = "0123456789";
+
+	skel = test_sockmap_pass_prog__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open_and_load"))
+		return;
+	map = bpf_map__fd(skel->maps.sock_map_rx);
+
+	err = create_socket_pairs(AF_INET, SOCK_STREAM, &c0, &c1, &p0, &p1);
+	if (!ASSERT_OK(err, "create_socket_pairs()"))
+		goto out;
+
+	err = bpf_map_update_elem(map, &zero, &c1, BPF_NOEXIST);
+	if (!ASSERT_OK(err, "bpf_map_update_elem(c1)"))
+		goto out_close;
+
+	sent = xsend(p1, &buf, sizeof(buf), 0);
+	ASSERT_EQ(sent, sizeof(buf), "xsend(p1)");
+	avail = wait_for_fionread(c1, sizeof(buf), IO_TIMEOUT_SEC);
+	ASSERT_EQ(avail, sizeof(buf), "ioctl(FIONREAD)");
+
+out_close:
+	close(c0);
+	close(p0);
+	close(c1);
+	close(p1);
+out:
 	test_sockmap_pass_prog__destroy(skel);
 }
 
@@ -1356,10 +1452,14 @@ void test_sockmap_basic(void)
 		test_sockmap_skb_verdict_shutdown();
 	if (test__start_subtest("sockmap skb_verdict fionread"))
 		test_sockmap_skb_verdict_fionread(true);
+	if (test__start_subtest("sockmap no_verdict fionread"))
+		test_sockmap_no_verdict_fionread();
 	if (test__start_subtest("sockmap skb_verdict fionread on drop"))
 		test_sockmap_skb_verdict_fionread(false);
 	if (test__start_subtest("sockmap skb_verdict change tail"))
 		test_sockmap_skb_verdict_change_tail();
+	if (test__start_subtest("sockmap msg_verdict pop_data overflow"))
+		test_sockmap_msg_verdict_pop_data();
 	if (test__start_subtest("sockmap skb_verdict msg_f_peek"))
 		test_sockmap_skb_verdict_peek();
 	if (test__start_subtest("sockmap skb_verdict msg_f_peek with link"))

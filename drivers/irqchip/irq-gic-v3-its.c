@@ -3290,11 +3290,9 @@ static void its_cpu_init_collection(struct its_node *its)
 
 	/* avoid cross node collections and its mapping */
 	if (its->flags & ITS_FLAGS_WORKAROUND_CAVIUM_23144) {
-		struct device_node *cpu_node;
+		struct device_node *cpu_node __free(device_node) = of_get_cpu_node(cpu, NULL);
 
-		cpu_node = of_get_cpu_node(cpu, NULL);
-		if (its->numa_node != NUMA_NO_NODE &&
-			its->numa_node != of_node_to_nid(cpu_node))
+		if (its->numa_node != NUMA_NO_NODE && its->numa_node != of_node_to_nid(cpu_node))
 			return;
 	}
 
@@ -3474,6 +3472,7 @@ static struct its_device *its_create_device(struct its_node *its, u32 dev_id,
 	int lpi_base;
 	int nr_lpis;
 	int nr_ites;
+	int id_bits;
 	int sz;
 
 	if (!its_alloc_device_table(its, dev_id))
@@ -3485,7 +3484,10 @@ static struct its_device *its_create_device(struct its_node *its, u32 dev_id,
 	/*
 	 * Even if the device wants a single LPI, the ITT must be
 	 * sized as a power of two (and you need at least one bit...).
+	 * Also honor the ITS's own EID limit.
 	 */
+	id_bits = FIELD_GET(GITS_TYPER_IDBITS, its->typer) + 1;
+	nvecs = min_t(unsigned int, nvecs, BIT(id_bits));
 	nr_ites = max(2, nvecs);
 	sz = nr_ites * (FIELD_GET(GITS_TYPER_ITT_ENTRY_SIZE, its->typer) + 1);
 	sz = max(sz, ITS_ITT_ALIGN);
@@ -4780,8 +4782,7 @@ static bool __maybe_unused its_enable_quirk_cavium_22375(void *data)
 	struct its_node *its = data;
 
 	/* erratum 22375: only alloc 8MB table size (20 bits) */
-	its->typer &= ~GITS_TYPER_DEVBITS;
-	its->typer |= FIELD_PREP(GITS_TYPER_DEVBITS, 20 - 1);
+	FIELD_MODIFY(GITS_TYPER_DEVBITS, &its->typer, 20 - 1);
 	its->flags |= ITS_FLAGS_WORKAROUND_CAVIUM_22375;
 
 	return true;
@@ -4801,8 +4802,7 @@ static bool __maybe_unused its_enable_quirk_qdf2400_e0065(void *data)
 	struct its_node *its = data;
 
 	/* On QDF2400, the size of the ITE is 16Bytes */
-	its->typer &= ~GITS_TYPER_ITT_ENTRY_SIZE;
-	its->typer |= FIELD_PREP(GITS_TYPER_ITT_ENTRY_SIZE, 16 - 1);
+	FIELD_MODIFY(GITS_TYPER_ITT_ENTRY_SIZE, &its->typer, 16 - 1);
 
 	return true;
 }
@@ -4836,10 +4836,8 @@ static bool __maybe_unused its_enable_quirk_socionext_synquacer(void *data)
 		its->get_msi_base = its_irq_get_msi_base_pre_its;
 
 		ids = ilog2(pre_its_window[1]) - 2;
-		if (device_ids(its) > ids) {
-			its->typer &= ~GITS_TYPER_DEVBITS;
-			its->typer |= FIELD_PREP(GITS_TYPER_DEVBITS, ids - 1);
-		}
+		if (device_ids(its) > ids)
+			FIELD_MODIFY(GITS_TYPER_DEVBITS, &its->typer, ids - 1);
 
 		/* the pre-ITS breaks isolation, so disable MSI remapping */
 		its->msi_domain_flags &= ~IRQ_DOMAIN_FLAG_ISOLATED_MSI;
@@ -5833,6 +5831,7 @@ int __init its_init(struct fwnode_handle *handle, struct rdists *rdists,
 		its_acpi_probe();
 
 	if (list_empty(&its_nodes)) {
+		rdists->has_vlpis = false;
 		pr_warn("ITS: No ITS available, not enabling LPIs\n");
 		return -ENXIO;
 	}

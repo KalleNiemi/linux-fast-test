@@ -116,7 +116,8 @@ config RPMB
 config TI_FPC202
 	tristate "TI FPC202 Dual Port Controller"
 	depends on I2C
-	select GPIOLIB
+	depends on GPIOLIB
+	depends on LEDS_CLASS
 	select I2C_ATR
 	help
 	  If you say yes here you get support for the Texas Instruments FPC202
@@ -380,16 +381,6 @@ config SENSORS_BH1770
 	   To compile this driver as a module, choose M here: the
 	   module will be called bh1770glc. If unsure, say N here.
 
-config SENSORS_APDS990X
-	 tristate "APDS990X combined als and proximity sensors"
-	 depends on I2C
-	help
-	   Say Y here if you want to build a driver for Avago APDS990x
-	   combined ambient light and proximity sensor chip.
-
-	   To compile this driver as a module, choose M here: the
-	   module will be called apds990x. If unsure, say N here.
-
 config HMC6352
 	tristate "Honeywell HMC6352 compass"
 	depends on I2C
@@ -635,18 +626,13 @@ config MCHP_LAN966X_PCI
 	  Even if this driver does not depend on those other drivers, in order
 	  to have a fully functional board, the following drivers are needed:
 	    - fixed-clock (COMMON_CLK)
-	    - i2c-mux-pinctrl (I2C_MUX_PINCTRL)
-	    - lan966x-cpu-syscon (MFD_SYSCON)
-	    - lan966x-gck (COMMON_CLK_LAN966X)
-	    - lan966x-miim (MDIO_MSCC_MIIM)
 	    - lan966x-oic (LAN966X_OIC)
+	    - lan966x-cpu-syscon (MFD_SYSCON)
+	    - lan966x-switch-reset (RESET_MCHP_SPARX5)
 	    - lan966x-pinctrl (PINCTRL_OCELOT)
 	    - lan966x-serdes (PHY_LAN966X_SERDES)
+	    - lan966x-miim (MDIO_MSCC_MIIM)
 	    - lan966x-switch (LAN966X_SWITCH)
-	    - lan966x-switch-reset (RESET_MCHP_SPARX5)
-	    - sam9x60-i2c (I2C_AT91)
-	    - sama5d2-flexcom (MFD_ATMEL_FLEXCOM)
-	    - sfp (SFP)
 
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"

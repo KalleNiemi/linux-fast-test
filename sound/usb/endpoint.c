@@ -160,8 +160,8 @@ int snd_usb_endpoint_implicit_feedback_sink(struct snd_usb_endpoint *ep)
  * This won't be used for implicit feedback which takes the packet size
  * returned from the sync source
  */
-static int slave_next_packet_size(struct snd_usb_endpoint *ep,
-				  unsigned int avail)
+static int synced_next_packet_size(struct snd_usb_endpoint *ep,
+				   unsigned int avail)
 {
 	unsigned int phase;
 	int ret;
@@ -221,13 +221,14 @@ int snd_usb_endpoint_next_packet_size(struct snd_usb_endpoint *ep,
 
 	packet = ctx->packet_size[idx];
 	if (packet) {
+		packet = min(packet, ep->maxframesize);
 		if (avail && packet >= avail)
 			return -EAGAIN;
 		return packet;
 	}
 
 	if (ep->sync_source)
-		return slave_next_packet_size(ep, avail);
+		return synced_next_packet_size(ep, avail);
 	else
 		return next_packet_size(ep, avail);
 }
@@ -1167,10 +1168,12 @@ static int data_ep_set_params(struct snd_usb_endpoint *ep)
 				<< (16 - ep->datainterval);
 	}
 
-	if (ep->fill_max)
+	if (ep->fill_max) {
 		ep->curpacksize = ep->maxpacksize;
-	else
+		maxsize = ep->curpacksize;
+	} else {
 		ep->curpacksize = maxsize;
+	}
 
 	if (snd_usb_get_speed(chip->dev) != USB_SPEED_FULL) {
 		packs_per_ms = 8 >> ep->datainterval;
@@ -1403,6 +1406,9 @@ int snd_usb_endpoint_set_params(struct snd_usb_audio *chip,
 	/* some unit conversions in runtime */
 	ep->maxframesize = ep->maxpacksize / ep->cur_frame_bytes;
 	ep->curframesize = ep->curpacksize / ep->cur_frame_bytes;
+
+	ep->packsize[0] = min(ep->packsize[0], ep->maxframesize);
+	ep->packsize[1] = min(ep->packsize[1], ep->maxframesize);
 
 	err = update_clock_ref_rate(chip, ep);
 	if (err >= 0) {
@@ -1776,8 +1782,16 @@ static void snd_usb_handle_sync_urb(struct snd_usb_endpoint *ep,
 		/*
 		 * skip empty packets. At least M-Audio's Fast Track Ultra stops
 		 * streaming once it received a 0-byte OUT URB
+		 *
+		 * However, on devices where bytes==0 means every sync-source
+		 * packet errored (e.g. Behringer Flow 8 returning -EXDEV bursts
+		 * for entire capture URBs), an unconditional return starves the
+		 * IFB-fed OUT ring permanently. Such devices set
+		 * QUIRK_FLAG_IFB_SILENCE_ON_EMPTY to fall through and enqueue a
+		 * packet_info with size 0 packets, so playback emits silence
+		 * and the OUT ring keeps moving.
 		 */
-		if (bytes == 0)
+		if (bytes == 0 && !(ep->chip->quirk_flags & QUIRK_FLAG_IFB_SILENCE_ON_EMPTY))
 			return;
 
 		spin_lock_irqsave(&ep->lock, flags);
@@ -1805,11 +1819,13 @@ static void snd_usb_handle_sync_urb(struct snd_usb_endpoint *ep,
 
 		out_packet->packets = in_ctx->packets;
 		for (i = 0; i < in_ctx->packets; i++) {
-			if (urb->iso_frame_desc[i].status == 0)
-				out_packet->packet_size[i] =
+			if (urb->iso_frame_desc[i].status == 0) {
+				unsigned int frames =
 					urb->iso_frame_desc[i].actual_length / sender->stride;
-			else
+				out_packet->packet_size[i] = min(frames, ep->maxframesize);
+			} else {
 				out_packet->packet_size[i] = 0;
+			}
 		}
 
 		spin_unlock_irqrestore(&ep->lock, flags);

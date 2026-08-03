@@ -36,21 +36,20 @@ static int simple_pm_bus_probe(struct platform_device *pdev)
 	 * that's not listed in simple_pm_bus_of_match. We don't want to do any
 	 * of the simple-pm-bus tasks for these devices, so return early.
 	 */
-	if (pdev->driver_override)
+	if (device_has_driver_override(&pdev->dev))
 		return 0;
 
 	match = of_match_device(dev->driver->of_match_table, dev);
 	/*
 	 * These are transparent bus devices (not simple-pm-bus matches) that
-	 * need to have their child nodes populated. So, don't need to do
-	 * anything more except populate child nodes during this probe(). We
-	 * only match with the device if this driver is the most specific match
-	 * because we don't want to incorrectly bind to a device that has a more
-	 * specific driver.
+	 * have their child nodes populated automatically.  So, don't need to
+	 * do anything more. We only match with the device if this driver is
+	 * the most specific match because we don't want to incorrectly bind to
+	 * a device that has a more specific driver.
 	 */
 	if (match && match->data) {
 		if (of_property_match_string(np, "compatible", match->compatible) == 0)
-			goto populate;
+			return 0;
 		else
 			return -ENODEV;
 	}
@@ -65,13 +64,12 @@ static int simple_pm_bus_probe(struct platform_device *pdev)
 
 	dev_set_drvdata(&pdev->dev, bus);
 
+	dev_dbg(&pdev->dev, "%s\n", __func__);
+
 	pm_runtime_enable(&pdev->dev);
 
-populate:
 	if (np)
 		of_platform_populate(np, NULL, lookup, &pdev->dev);
-
-	dev_dbg(&pdev->dev, "%s\n", __func__);
 
 	return 0;
 }
@@ -80,16 +78,12 @@ static void simple_pm_bus_remove(struct platform_device *pdev)
 {
 	const void *data = of_device_get_match_data(&pdev->dev);
 
-	if (pdev->driver_override)
+	if (device_has_driver_override(&pdev->dev) || data)
 		return;
 
 	dev_dbg(&pdev->dev, "%s\n", __func__);
 
-	if (pdev->dev.of_node)
-		of_platform_depopulate(&pdev->dev);
-
-	if (!data)
-		pm_runtime_disable(&pdev->dev);
+	pm_runtime_disable(&pdev->dev);
 }
 
 static int simple_pm_bus_runtime_suspend(struct device *dev)

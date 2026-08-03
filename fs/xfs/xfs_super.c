@@ -534,8 +534,11 @@ xfs_open_devices(
  out_free_rtdev_targ:
 	if (mp->m_rtdev_targp)
 		xfs_free_buftarg(mp->m_rtdev_targp);
+	mp->m_rtdev_targp = NULL;
+	rtdev_file = NULL;	/* released by xfs_free_buftarg() */
  out_free_ddev_targ:
 	xfs_free_buftarg(mp->m_ddev_targp);
+	mp->m_ddev_targp = NULL;
  out_close_rtdev:
 	 if (rtdev_file)
 		bdev_fput(rtdev_file);
@@ -712,8 +715,8 @@ xfs_fs_destroy_inode(
 	trace_xfs_destroy_inode(ip);
 
 	ASSERT(!rwsem_is_locked(&inode->i_rwsem));
-	XFS_STATS_INC(ip->i_mount, vn_rele);
-	XFS_STATS_INC(ip->i_mount, vn_remove);
+	XFS_STATS_INC(ip->i_mount, xs_inode_destroy);
+	XFS_STATS_INC(ip->i_mount, xs_inode_destroy2);
 	xfs_inode_mark_reclaimable(ip);
 }
 
@@ -1901,7 +1904,6 @@ xfs_fs_fill_super(
 			error = -EINVAL;
 			goto out_filestream_unmount;
 		}
-		xfs_warn_experimental(mp, XFS_EXPERIMENTAL_ZONED);
 	}
 
 	if (xfs_has_reflink(mp)) {

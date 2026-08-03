@@ -80,18 +80,20 @@ void reset_cifs_unix_caps(unsigned int xid, struct cifs_tcon *tcon,
 			cap &= ~CIFS_UNIX_POSIX_ACL_CAP;
 		else if (CIFS_UNIX_POSIX_ACL_CAP & cap) {
 			cifs_dbg(FYI, "negotiated posix acl support\n");
-			if (cifs_sb)
-				cifs_sb->mnt_cifs_flags |=
-					CIFS_MOUNT_POSIXACL;
+			if (cifs_sb) {
+				atomic_or(CIFS_MOUNT_POSIXACL,
+					  &cifs_sb->mnt_cifs_flags);
+			}
 		}
 
 		if (ctx && ctx->posix_paths == 0)
 			cap &= ~CIFS_UNIX_POSIX_PATHNAMES_CAP;
 		else if (cap & CIFS_UNIX_POSIX_PATHNAMES_CAP) {
 			cifs_dbg(FYI, "negotiate posix pathnames\n");
-			if (cifs_sb)
-				cifs_sb->mnt_cifs_flags |=
-					CIFS_MOUNT_POSIX_PATHS;
+			if (cifs_sb) {
+				atomic_or(CIFS_MOUNT_POSIX_PATHS,
+					  &cifs_sb->mnt_cifs_flags);
+			}
 		}
 
 		cifs_dbg(FYI, "Negotiate caps 0x%x\n", (int)cap);
@@ -503,21 +505,27 @@ static int
 cifs_is_path_accessible(const unsigned int xid, struct cifs_tcon *tcon,
 			struct cifs_sb_info *cifs_sb, const char *full_path)
 {
-	int rc;
-	FILE_ALL_INFO *file_info;
+	int rc = -EOPNOTSUPP;
+	FILE_ALL_INFO file_info;
 
-	file_info = kmalloc_obj(FILE_ALL_INFO);
-	if (file_info == NULL)
-		return -ENOMEM;
+	if (tcon->ses->capabilities & CAP_NT_SMBS)
+		rc = CIFSSMBQPathInfo(xid, tcon, full_path, &file_info,
+				      0 /* not legacy */, cifs_sb->local_nls,
+				      cifs_remap(cifs_sb));
 
-	rc = CIFSSMBQPathInfo(xid, tcon, full_path, file_info,
-			      0 /* not legacy */, cifs_sb->local_nls,
-			      cifs_remap(cifs_sb));
+	/*
+	 * Non-UNICODE variant of fallback functions below expands wildcards,
+	 * so they cannot be used for querying paths with wildcard characters.
+	 * Therefore for such paths returns -ENOENT as they cannot exist.
+	 */
+	if ((rc == -EOPNOTSUPP || rc == -EINVAL) &&
+	    !(tcon->ses->capabilities & CAP_UNICODE) &&
+	    strpbrk(full_path, "*?\"><"))
+		rc = -ENOENT;
 
 	if (rc == -EOPNOTSUPP || rc == -EINVAL)
-		rc = SMBQueryInformation(xid, tcon, full_path, file_info,
+		rc = SMBQueryInformation(xid, tcon, full_path, &file_info,
 				cifs_sb->local_nls, cifs_remap(cifs_sb));
-	kfree(file_info);
 	return rc;
 }
 
@@ -947,7 +955,7 @@ smb_set_file_info(struct inode *inode, const char *full_path,
 	struct cifs_open_parms oparms;
 	struct cifsFileInfo *open_file;
 	FILE_BASIC_INFO new_buf;
-	struct cifs_open_info_data query_data;
+	struct cifs_open_info_data query_data = {};
 	__le64 write_time = buf->LastWriteTime;
 	struct cifsInodeInfo *cinode = CIFS_I(inode);
 	struct cifs_sb_info *cifs_sb = CIFS_SB(inode->i_sb);
@@ -955,7 +963,7 @@ smb_set_file_info(struct inode *inode, const char *full_path,
 	struct cifs_tcon *tcon;
 
 	/* if the file is already open for write, just use that fileid */
-	open_file = find_writable_file(cinode, FIND_WR_FSUID_ONLY);
+	open_file = find_writable_file(cinode, FIND_FSUID_ONLY);
 
 	if (open_file) {
 		fid.netfid = open_file->fid.netfid;
@@ -1108,9 +1116,10 @@ out:
 
 static int
 cifs_set_compression(const unsigned int xid, struct cifs_tcon *tcon,
-		   struct cifsFileInfo *cfile)
+		   struct cifsFileInfo *cfile, __u16 compression_state)
 {
-	return CIFSSMB_set_compression(xid, tcon, cfile->fid.netfid);
+	return CIFSSMB_set_compression(xid, tcon, cfile->fid.netfid,
+				       compression_state);
 }
 
 static int
@@ -1147,7 +1156,7 @@ static int cifs_oplock_response(struct cifs_tcon *tcon, __u64 persistent_fid,
 				__u64 volatile_fid, __u16 net_fid,
 				struct cifsInodeInfo *cinode, unsigned int oplock)
 {
-	unsigned int sbflags = CIFS_SB(cinode->netfs.inode.i_sb)->mnt_cifs_flags;
+	unsigned int sbflags = cifs_sb_flags(CIFS_SB(cinode));
 	__u8 op;
 
 	op = !!((oplock & CIFS_CACHE_READ_FLG) || (sbflags & CIFS_MOUNT_RO_CACHE));
@@ -1282,7 +1291,8 @@ cifs_make_node(unsigned int xid, struct inode *inode,
 	       struct dentry *dentry, struct cifs_tcon *tcon,
 	       const char *full_path, umode_t mode, dev_t dev)
 {
-	struct cifs_sb_info *cifs_sb = CIFS_SB(inode->i_sb);
+	struct cifs_sb_info *cifs_sb = CIFS_SB(inode);
+	unsigned int sbflags = cifs_sb_flags(cifs_sb);
 	struct inode *newinode = NULL;
 	int rc;
 
@@ -1298,7 +1308,7 @@ cifs_make_node(unsigned int xid, struct inode *inode,
 			.mtime	= NO_CHANGE_64,
 			.device	= dev,
 		};
-		if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_SET_UID) {
+		if (sbflags & CIFS_MOUNT_SET_UID) {
 			args.uid = current_fsuid();
 			args.gid = current_fsgid();
 		} else {
@@ -1317,7 +1327,7 @@ cifs_make_node(unsigned int xid, struct inode *inode,
 		if (rc == 0)
 			d_instantiate(dentry, newinode);
 		return rc;
-	} else if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_UNX_EMUL) {
+	} else if (sbflags & CIFS_MOUNT_UNX_EMUL) {
 		/*
 		 * Check if mounted with mount parm 'sfu' mount parm.
 		 * SFU emulation should work with all servers

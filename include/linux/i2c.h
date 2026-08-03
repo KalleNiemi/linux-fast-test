@@ -12,7 +12,7 @@
 
 #include <linux/acpi.h>		/* for acpi_handle */
 #include <linux/bits.h>
-#include <linux/mod_devicetable.h>
+#include <linux/device-id/i2c.h>
 #include <linux/device.h>	/* for struct device */
 #include <linux/sched.h>	/* for completion */
 #include <linux/mutex.h>
@@ -744,7 +744,6 @@ struct i2c_adapter {
 	int timeout;			/* in jiffies */
 	int retries;
 	struct device dev;		/* the adapter device */
-	struct device *physdev;		/* the physical device */
 	unsigned long locked_flags;	/* owned by the I2C core */
 #define I2C_ALF_IS_SUSPENDED		0
 #define I2C_ALF_SUSPEND_REPORTED	1
@@ -911,8 +910,6 @@ void i2c_clients_command(struct i2c_adapter *adap,
 struct i2c_adapter *i2c_get_adapter(int nr);
 void i2c_put_adapter(struct i2c_adapter *adap);
 unsigned int i2c_adapter_depth(struct i2c_adapter *adapter);
-
-struct device *i2c_get_adapter_physdev(struct i2c_adapter *adap);
 
 void i2c_parse_fw_timings(struct device *dev, struct i2c_timings *t, bool use_defaults);
 
