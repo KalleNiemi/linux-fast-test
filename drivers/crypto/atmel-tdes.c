@@ -28,6 +28,7 @@
 #include <linux/irq.h>
 #include <linux/scatterlist.h>
 #include <linux/dma-mapping.h>
+#include <linux/mod_devicetable.h>
 #include <linux/delay.h>
 #include <linux/crypto.h>
 #include <crypto/scatterwalk.h>
@@ -784,7 +785,7 @@ static int atmel_tdes_init_tfm(struct crypto_skcipher *tfm)
 static void atmel_tdes_skcipher_alg_init(struct skcipher_alg *alg)
 {
 	alg->base.cra_priority = ATMEL_TDES_PRIORITY;
-	alg->base.cra_flags = CRYPTO_ALG_ASYNC | CRYPTO_ALG_KERN_DRIVER_ONLY;
+	alg->base.cra_flags = CRYPTO_ALG_ASYNC;
 	alg->base.cra_ctxsize = sizeof(struct atmel_tdes_ctx);
 	alg->base.cra_module = THIS_MODULE;
 
@@ -871,7 +872,7 @@ static void atmel_tdes_done_task(unsigned long data)
 		if (!err)
 			err = atmel_tdes_crypt_start(dd);
 		if (!err)
-			return; /* DMA started. Not finishing. */
+			return; /* DMA started. Not fininishing. */
 	}
 
 	atmel_tdes_finish_req(dd, err);
@@ -1060,7 +1061,7 @@ static void atmel_tdes_remove(struct platform_device *pdev)
 
 static struct platform_driver atmel_tdes_driver = {
 	.probe		= atmel_tdes_probe,
-	.remove		= atmel_tdes_remove,
+	.remove_new	= atmel_tdes_remove,
 	.driver		= {
 		.name	= "atmel_tdes",
 		.of_match_table = atmel_tdes_dt_ids,

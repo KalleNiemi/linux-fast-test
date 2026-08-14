@@ -6,6 +6,7 @@
 #include <linux/i2c.h>
 #include <linux/init.h>
 #include <linux/leds.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/regmap.h>
@@ -14,6 +15,8 @@
 #include <uapi/linux/uleds.h>
 
 #include <linux/led-class-multicolor.h>
+
+#include "leds.h"
 
 #define LP50XX_DEV_CFG0		0x00
 #define LP50XX_DEV_CFG1		0x01
@@ -458,6 +461,7 @@ static int lp50xx_probe_leds(struct fwnode_handle *child, struct lp50xx *priv,
 
 static int lp50xx_probe_dt(struct lp50xx *priv)
 {
+	struct fwnode_handle *child = NULL;
 	struct fwnode_handle *led_node = NULL;
 	struct led_init_data init_data = {};
 	struct led_classdev *led_cdev;
@@ -481,17 +485,17 @@ static int lp50xx_probe_dt(struct lp50xx *priv)
 	if (IS_ERR(priv->regulator))
 		priv->regulator = NULL;
 
-	device_for_each_child_node_scoped(priv->dev, child) {
+	device_for_each_child_node(priv->dev, child) {
 		led = &priv->leds[i];
 		ret = fwnode_property_count_u32(child, "reg");
 		if (ret < 0) {
 			dev_err(priv->dev, "reg property is invalid\n");
-			return ret;
+			goto child_out;
 		}
 
 		ret = lp50xx_probe_leds(child, priv, led, ret);
 		if (ret)
-			return ret;
+			goto child_out;
 
 		init_data.fwnode = child;
 		num_colors = 0;
@@ -502,8 +506,10 @@ static int lp50xx_probe_dt(struct lp50xx *priv)
 		 */
 		mc_led_info = devm_kcalloc(priv->dev, LP50XX_LEDS_PER_MODULE,
 					   sizeof(*mc_led_info), GFP_KERNEL);
-		if (!mc_led_info)
-			return -ENOMEM;
+		if (!mc_led_info) {
+			ret = -ENOMEM;
+			goto child_out;
+		}
 
 		fwnode_for_each_child_node(child, led_node) {
 			int multi_index;
@@ -512,7 +518,7 @@ static int lp50xx_probe_dt(struct lp50xx *priv)
 			if (ret) {
 				fwnode_handle_put(led_node);
 				dev_err(priv->dev, "Cannot read color\n");
-				return ret;
+				goto child_out;
 			}
 			ret = fwnode_property_read_u32(led_node, "reg", &multi_index);
 			if (ret != 0) {
@@ -524,7 +530,6 @@ static int lp50xx_probe_dt(struct lp50xx *priv)
 			}
 
 			mc_led_info[multi_index].color_index = color_id;
-			mc_led_info[multi_index].max_intensity = 255;
 			num_colors++;
 		}
 
@@ -539,12 +544,16 @@ static int lp50xx_probe_dt(struct lp50xx *priv)
 						       &init_data);
 		if (ret) {
 			dev_err(priv->dev, "led register err: %d\n", ret);
-			return ret;
+			goto child_out;
 		}
 		i++;
 	}
 
 	return 0;
+
+child_out:
+	fwnode_handle_put(child);
+	return ret;
 }
 
 static int lp50xx_probe(struct i2c_client *client)
@@ -600,12 +609,12 @@ static void lp50xx_remove(struct i2c_client *client)
 }
 
 static const struct i2c_device_id lp50xx_id[] = {
-	{ .name = "lp5009", .driver_data = (kernel_ulong_t)&lp50xx_chip_info_tbl[LP5009] },
-	{ .name = "lp5012", .driver_data = (kernel_ulong_t)&lp50xx_chip_info_tbl[LP5012] },
-	{ .name = "lp5018", .driver_data = (kernel_ulong_t)&lp50xx_chip_info_tbl[LP5018] },
-	{ .name = "lp5024", .driver_data = (kernel_ulong_t)&lp50xx_chip_info_tbl[LP5024] },
-	{ .name = "lp5030", .driver_data = (kernel_ulong_t)&lp50xx_chip_info_tbl[LP5030] },
-	{ .name = "lp5036", .driver_data = (kernel_ulong_t)&lp50xx_chip_info_tbl[LP5036] },
+	{ "lp5009", (kernel_ulong_t)&lp50xx_chip_info_tbl[LP5009] },
+	{ "lp5012", (kernel_ulong_t)&lp50xx_chip_info_tbl[LP5012] },
+	{ "lp5018", (kernel_ulong_t)&lp50xx_chip_info_tbl[LP5018] },
+	{ "lp5024", (kernel_ulong_t)&lp50xx_chip_info_tbl[LP5024] },
+	{ "lp5030", (kernel_ulong_t)&lp50xx_chip_info_tbl[LP5030] },
+	{ "lp5036", (kernel_ulong_t)&lp50xx_chip_info_tbl[LP5036] },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, lp50xx_id);

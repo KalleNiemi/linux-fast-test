@@ -840,7 +840,7 @@ static int sata_dwc_port_start(struct ata_port *ap)
 	}
 
 	/* Allocate Port Struct */
-	hsdevp = kzalloc_obj(*hsdevp);
+	hsdevp = kzalloc(sizeof(*hsdevp), GFP_KERNEL);
 	if (!hsdevp) {
 		err = -ENOMEM;
 		goto CLEANUP;
@@ -1031,7 +1031,6 @@ static unsigned int sata_dwc_qc_issue(struct ata_queued_cmd *qc)
 }
 
 static void sata_dwc_error_handler(struct ata_port *ap)
-	__must_hold(&ap->host->eh_mutex)
 {
 	ata_sff_error_handler(ap);
 }
@@ -1088,7 +1087,7 @@ static struct ata_port_operations sata_dwc_ops = {
 	.inherits		= &ata_sff_port_ops,
 
 	.error_handler		= sata_dwc_error_handler,
-	.reset.hardreset	= sata_dwc_hardreset,
+	.hardreset		= sata_dwc_hardreset,
 
 	.qc_issue		= sata_dwc_qc_issue,
 
@@ -1227,7 +1226,7 @@ static struct platform_driver sata_dwc_driver = {
 		.of_match_table = sata_dwc_match,
 	},
 	.probe = sata_dwc_probe,
-	.remove = sata_dwc_remove,
+	.remove_new = sata_dwc_remove,
 };
 
 module_platform_driver(sata_dwc_driver);

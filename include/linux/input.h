@@ -19,7 +19,7 @@
 #include <linux/device.h>
 #include <linux/fs.h>
 #include <linux/timer.h>
-#include <linux/device-id/input.h>
+#include <linux/mod_devicetable.h>
 
 struct input_dev_poller;
 
@@ -286,10 +286,6 @@ struct input_handle;
  * @start: starts handler for given handle. This function is called by
  *	input core right after connect() method and also when a process
  *	that "grabbed" a device releases it
- * @passive_observer: set to %true by drivers only interested in observing
- *	data stream from devices if there are other users present. Such
- *	drivers will not result in starting underlying hardware device
- *	when input_open_device() is called for their handles
  * @legacy_minors: set to %true by drivers using legacy minor ranges
  * @minor: beginning of range of 32 legacy minors for devices this driver
  *	can provide
@@ -325,7 +321,6 @@ struct input_handler {
 	void (*disconnect)(struct input_handle *handle);
 	void (*start)(struct input_handle *handle);
 
-	bool passive_observer;
 	bool legacy_minors;
 	int minor;
 	const char *name;
@@ -517,10 +512,6 @@ INPUT_GENERATE_ABS_ACCESSORS(res, resolution)
 int input_scancode_to_scalar(const struct input_keymap_entry *ke,
 			     unsigned int *scancode);
 
-int input_default_setkeycode(struct input_dev *dev,
-			     const struct input_keymap_entry *ke,
-			     unsigned int *old_keycode);
-
 int input_get_keycode(struct input_dev *dev, struct input_keymap_entry *ke);
 int input_set_keycode(struct input_dev *dev,
 		      const struct input_keymap_entry *ke);
@@ -543,8 +534,6 @@ extern const struct class input_class;
  * @set_autocenter: Called to auto-center device
  * @destroy: called by input core when parent input device is being
  *	destroyed
- * @stop: called by input core when parent input device is being
- *	unregistered
  * @private: driver-specific data, will be freed automatically
  * @ffbit: bitmap of force feedback capabilities truly supported by
  *	device (not emulated like ones in input_dev->ffbit)
@@ -573,7 +562,6 @@ struct ff_device {
 	void (*set_autocenter)(struct input_dev *dev, u16 magnitude);
 
 	void (*destroy)(struct ff_device *);
-	void (*stop)(struct ff_device *);
 
 	void *private;
 

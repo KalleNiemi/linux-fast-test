@@ -13,6 +13,7 @@
 #include <linux/delay.h>
 #include <linux/interrupt.h>
 #include <linux/timekeeping.h>
+#include <linux/mod_devicetable.h>
 
 #define PM8916_PERPH_TYPE 0x04
 #define PM8916_BMS_VM_TYPE 0x020D
@@ -200,7 +201,7 @@ static int pm8916_bms_vm_battery_probe(struct platform_device *pdev)
 	bat->vbat_now = bat->last_ocv;
 
 	psy_cfg.drv_data = bat;
-	psy_cfg.fwnode = dev_fwnode(dev);
+	psy_cfg.of_node = dev->of_node;
 
 	bat->battery = devm_power_supply_register(dev, &pm8916_bms_vm_battery_psy_desc, &psy_cfg);
 	if (IS_ERR(bat->battery))

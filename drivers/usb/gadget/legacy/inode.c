@@ -150,6 +150,7 @@ struct dev_data {
 	void				*buf;
 	wait_queue_head_t		wait;
 	struct super_block		*sb;
+	struct dentry			*dentry;
 
 	/* except this scratch i/o buffer for ep0 */
 	u8				rbuf[RBUF_SIZE];
@@ -173,7 +174,7 @@ static struct dev_data *dev_new (void)
 {
 	struct dev_data		*dev;
 
-	dev = kzalloc_obj(*dev);
+	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
 	if (!dev)
 		return NULL;
 	dev->state = STATE_DEV_DISABLED;
@@ -207,6 +208,7 @@ struct ep_data {
 	struct usb_endpoint_descriptor	desc, hs_desc;
 	struct list_head		epfiles;
 	wait_queue_head_t		wait;
+	struct dentry			*dentry;
 };
 
 static inline void get_ep (struct ep_data *data)
@@ -614,7 +616,7 @@ ep_read_iter(struct kiocb *iocb, struct iov_iter *to)
 		if (value >= 0 && (copy_to_iter(buf, value, to) != value))
 			value = -EFAULT;
 	} else {
-		struct kiocb_priv *priv = kzalloc_obj(*priv);
+		struct kiocb_priv *priv = kzalloc(sizeof *priv, GFP_KERNEL);
 		value = -ENOMEM;
 		if (!priv)
 			goto fail;
@@ -682,7 +684,7 @@ ep_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	} else if (is_sync_kiocb(iocb)) {
 		value = ep_io(epdata, buf, len);
 	} else {
-		struct kiocb_priv *priv = kzalloc_obj(*priv);
+		struct kiocb_priv *priv = kzalloc(sizeof *priv, GFP_KERNEL);
 		value = -ENOMEM;
 		if (priv) {
 			value = ep_aio(iocb, priv, epdata, buf, len);
@@ -1559,11 +1561,17 @@ static void destroy_ep_files (struct dev_data *dev)
 	spin_lock_irq (&dev->lock);
 	while (!list_empty(&dev->epfiles)) {
 		struct ep_data	*ep;
+		struct inode	*parent;
+		struct dentry	*dentry;
 
 		/* break link to FS */
 		ep = list_first_entry (&dev->epfiles, struct ep_data, epfiles);
 		list_del_init (&ep->epfiles);
 		spin_unlock_irq (&dev->lock);
+
+		dentry = ep->dentry;
+		ep->dentry = NULL;
+		parent = d_inode(dentry->d_parent);
 
 		/* break link to controller */
 		mutex_lock(&ep->lock);
@@ -1575,11 +1583,13 @@ static void destroy_ep_files (struct dev_data *dev)
 		mutex_unlock(&ep->lock);
 
 		wake_up (&ep->wait);
+		put_ep (ep);
 
 		/* break link to dcache */
-		simple_remove_by_name(dev->sb->s_root, ep->name, NULL);
-
-		put_ep (ep);
+		inode_lock(parent);
+		d_delete (dentry);
+		dput (dentry);
+		inode_unlock(parent);
 
 		spin_lock_irq (&dev->lock);
 	}
@@ -1587,25 +1597,25 @@ static void destroy_ep_files (struct dev_data *dev)
 }
 
 
-static int gadgetfs_create_file (struct super_block *sb, char const *name,
+static struct dentry *
+gadgetfs_create_file (struct super_block *sb, char const *name,
 		void *data, const struct file_operations *fops);
 
 static int activate_ep_files (struct dev_data *dev)
 {
 	struct usb_ep	*ep;
 	struct ep_data	*data;
-	int err;
 
 	gadget_for_each_ep (ep, dev->gadget) {
 
-		data = kzalloc_obj(*data);
+		data = kzalloc(sizeof(*data), GFP_KERNEL);
 		if (!data)
 			goto enomem0;
 		data->state = STATE_EP_DISABLED;
 		mutex_init(&data->lock);
 		init_waitqueue_head (&data->wait);
 
-		strscpy(data->name, ep->name);
+		strncpy (data->name, ep->name, sizeof (data->name) - 1);
 		refcount_set (&data->count, 1);
 		data->dev = dev;
 		get_dev (dev);
@@ -1617,9 +1627,9 @@ static int activate_ep_files (struct dev_data *dev)
 		if (!data->req)
 			goto enomem1;
 
-		err = gadgetfs_create_file (dev->sb, data->name,
+		data->dentry = gadgetfs_create_file (dev->sb, data->name,
 				data, &ep_io_operations);
-		if (err)
+		if (!data->dentry)
 			goto enomem2;
 		list_add_tail (&data->epfiles, &dev->epfiles);
 	}
@@ -1983,32 +1993,30 @@ gadgetfs_make_inode (struct super_block *sb,
 /* creates in fs root directory, so non-renamable and non-linkable.
  * so inode and dentry are paired, until device reconfig.
  */
-static int gadgetfs_create_file (struct super_block *sb, char const *name,
+static struct dentry *
+gadgetfs_create_file (struct super_block *sb, char const *name,
 		void *data, const struct file_operations *fops)
 {
 	struct dentry	*dentry;
 	struct inode	*inode;
 
+	dentry = d_alloc_name(sb->s_root, name);
+	if (!dentry)
+		return NULL;
+
 	inode = gadgetfs_make_inode (sb, data, fops,
 			S_IFREG | (default_perm & S_IRWXUGO));
-	if (!inode)
-		return -ENOMEM;
-
-	dentry = simple_start_creating(sb->s_root, name);
-	if (IS_ERR(dentry)) {
-		iput(inode);
-		return PTR_ERR(dentry);
+	if (!inode) {
+		dput(dentry);
+		return NULL;
 	}
-
-	d_make_persistent(dentry, inode);
-
-	simple_done_creating(dentry);
-	return 0;
+	d_add (dentry, inode);
+	return dentry;
 }
 
 static const struct super_operations gadget_fs_operations = {
 	.statfs =	simple_statfs,
-	.drop_inode =	inode_just_drop,
+	.drop_inode =	generic_delete_inode,
 };
 
 static int
@@ -2056,8 +2064,8 @@ gadgetfs_fill_super (struct super_block *sb, struct fs_context *fc)
 		goto Enomem;
 
 	dev->sb = sb;
-	rc = gadgetfs_create_file(sb, CHIP, dev, &ep0_operations);
-	if (rc) {
+	dev->dentry = gadgetfs_create_file(sb, CHIP, dev, &ep0_operations);
+	if (!dev->dentry) {
 		put_dev(dev);
 		goto Enomem;
 	}
@@ -2099,7 +2107,7 @@ static void
 gadgetfs_kill_sb (struct super_block *sb)
 {
 	mutex_lock(&sb_mutex);
-	kill_anon_super (sb);
+	kill_litter_super (sb);
 	if (the_device) {
 		put_dev (the_device);
 		the_device = NULL;

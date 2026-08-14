@@ -26,18 +26,16 @@
  * Authors: Dave Airlie <airlied@redhat.com>
  */
 
-#include <linux/aperture.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/pci.h>
 
-#include <drm/clients/drm_client_setup.h>
+#include <drm/drm_aperture.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_fbdev_shmem.h>
 #include <drm/drm_gem_shmem_helper.h>
 #include <drm/drm_module.h>
-#include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
 
 #include "ast_drv.h"
@@ -46,105 +44,6 @@ static int ast_modeset = -1;
 
 MODULE_PARM_DESC(modeset, "Disable/Enable modesetting");
 module_param_named(modeset, ast_modeset, int, 0400);
-
-/*
- * Register access
- */
-
-/* Select R/W segment */
-static void __ast_selseg(void __iomem *regs, u32 r)
-{
-	u32 p2a04, p2a04_base;
-
-	p2a04 = r & AST_REG_P2A04_BASE_MASK;
-	__ast_write32(regs, AST_REG_P2A04, p2a04);
-	__ast_write32(regs, AST_REG_P2A00, AST_REG_P2A00_PROTECTION_KEY);
-
-	do {
-		cpu_relax();
-		p2a04_base = __ast_read32(regs, AST_REG_P2A04);
-		p2a04_base &= AST_REG_P2A04_BASE_MASK;
-	} while (p2a04_base != p2a04);
-}
-
-/* Read within segment */
-static u32 __ast_rdseg32(void __iomem *regs, u32 r)
-{
-	return __ast_read32(regs, AST_REG_P2A_ADDR(r));
-}
-
-/* Write within segment */
-static void __ast_wrseg32(void __iomem *regs, u32 r, u32 v)
-{
-	__ast_write32(regs, AST_REG_P2A_ADDR(r), v);
-}
-
-u32 __ast_mindwm(void __iomem *regs, u32 r)
-{
-	__ast_selseg(regs, r);
-
-	return __ast_rdseg32(regs, r);
-}
-
-void __ast_moutdwm(void __iomem *regs, u32 r, u32 v)
-{
-	__ast_selseg(regs, r);
-	__ast_wrseg32(regs, r, v);
-}
-
-u32 ast_mindwm(struct ast_device *ast, u32 r)
-{
-	return __ast_mindwm(ast->regs, r);
-}
-
-void ast_moutdwm(struct ast_device *ast, u32 r, u32 v)
-{
-	__ast_moutdwm(ast->regs, r, v);
-}
-
-void ast_moutdwm_poll(struct ast_device *ast, u32 r, u32 v, u32 res)
-{
-	void __iomem *regs = ast->regs;
-
-	__ast_selseg(regs, r);
-	__ast_wrseg32(regs, r, v);
-
-	do {
-		cpu_relax();
-	} while (__ast_rdseg32(regs, r) != res);
-}
-
-/*
- * AST device
- */
-
-void ast_device_init(struct ast_device *ast,
-		     enum ast_chip chip,
-		     enum ast_config_mode config_mode,
-		     void __iomem *regs,
-		     void __iomem *ioregs,
-		     const struct ast_device_quirks *quirks)
-{
-	ast->quirks = quirks;
-	ast->chip = chip;
-	ast->config_mode = config_mode;
-	ast->regs = regs;
-	ast->ioregs = ioregs;
-}
-
-void __ast_device_set_tx_chip(struct ast_device *ast, enum ast_tx_chip tx_chip)
-{
-	static const char * const info_str[] = {
-		"analog VGA",
-		"Sil164 TMDS transmitter",
-		"DP501 DisplayPort transmitter",
-		"ASPEED DisplayPort transmitter",
-	};
-
-	drm_info(&ast->base, "Using %s\n", info_str[tx_chip]);
-
-	ast->tx_chip = tx_chip;
-}
 
 /*
  * DRM driver
@@ -160,12 +59,12 @@ static const struct drm_driver ast_driver = {
 	.fops = &ast_fops,
 	.name = DRIVER_NAME,
 	.desc = DRIVER_DESC,
+	.date = DRIVER_DATE,
 	.major = DRIVER_MAJOR,
 	.minor = DRIVER_MINOR,
 	.patchlevel = DRIVER_PATCHLEVEL,
 
-	DRM_GEM_SHMEM_DRIVER_OPS,
-	DRM_FBDEV_SHMEM_DRIVER_OPS,
+	DRM_GEM_SHMEM_DRIVER_OPS
 };
 
 /*
@@ -242,7 +141,7 @@ static int ast_detect_chip(struct pci_dev *pdev,
 	enum ast_config_mode config_mode = ast_use_defaults;
 	uint32_t scu_rev = 0xffffffff;
 	enum ast_chip chip;
-	u32 data, p2a04, scu07c;
+	u32 data;
 	u8 vgacrd0, vgacrd1;
 
 	/*
@@ -270,18 +169,19 @@ static int ast_detect_chip(struct pci_dev *pdev,
 
 			/* Patch AST2500/AST2510 */
 			if ((pdev->revision & 0xf0) == 0x40) {
-				if (!(vgacrd0 & AST_IO_VGACRD0_VRAM_INIT_STATUS_MASK))
-					ast_2500_patch_ahb(regs);
+				if (!(vgacrd0 & AST_VRAM_INIT_STATUS_MASK))
+					ast_patch_ahb_2500(regs);
 			}
 
 			/* Double check that it's actually working */
-			p2a04 = __ast_read32(regs, AST_REG_P2A04);
-			if (p2a04 != 0xffffffff && p2a04 != 0x00000000) {
+			data = __ast_read32(regs, 0xf004);
+			if ((data != 0xffffffff) && (data != 0x00)) {
 				config_mode = ast_use_p2a;
 
-				/* Read SCU7C (silicon revision register) */
-				scu07c = __ast_mindwm(regs, AST_REG_SCU07C);
-				scu_rev = scu07c & AST_REG_SCU07C_CHIP_BONDING_MASK;
+				/* Read SCU7c (silicon revision register) */
+				__ast_write32(regs, 0xf004, 0x1e6e0000);
+				__ast_write32(regs, 0xf000, 0x1);
+				scu_rev = __ast_read32(regs, 0x1207c);
 			}
 		}
 	}
@@ -365,7 +265,7 @@ static int ast_detect_chip(struct pci_dev *pdev,
 	*chip_out = chip;
 	*config_mode_out = config_mode;
 
-	return __AST_CHIP_GEN(chip);
+	return 0;
 }
 
 static int ast_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
@@ -376,11 +276,10 @@ static int ast_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	void __iomem *ioregs;
 	enum ast_config_mode config_mode;
 	enum ast_chip chip;
-	unsigned int chip_gen;
 	struct drm_device *drm;
 	bool need_post = false;
 
-	ret = aperture_remove_conflicting_pci_devices(pdev, ast_driver.name);
+	ret = drm_aperture_remove_conflicting_pci_framebuffers(pdev, &ast_driver);
 	if (ret)
 		return ret;
 
@@ -449,43 +348,10 @@ static int ast_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		return ret;
 
 	ret = ast_detect_chip(pdev, regs, ioregs, &chip, &config_mode);
-	if (ret < 0)
+	if (ret)
 		return ret;
-	chip_gen = ret;
 
-	switch (chip_gen) {
-	case 1:
-		drm = ast_2000_device_create(pdev, &ast_driver, chip, config_mode,
-					     regs, ioregs, need_post);
-		break;
-	case 2:
-		drm = ast_2100_device_create(pdev, &ast_driver, chip, config_mode,
-					     regs, ioregs, need_post);
-		break;
-	case 3:
-		drm = ast_2200_device_create(pdev, &ast_driver, chip, config_mode,
-					     regs, ioregs, need_post);
-		break;
-	case 4:
-		drm = ast_2300_device_create(pdev, &ast_driver, chip, config_mode,
-					     regs, ioregs, need_post);
-		break;
-	case 5:
-		drm = ast_2400_device_create(pdev, &ast_driver, chip, config_mode,
-					     regs, ioregs, need_post);
-		break;
-	case 6:
-		drm = ast_2500_device_create(pdev, &ast_driver, chip, config_mode,
-					     regs, ioregs, need_post);
-		break;
-	case 7:
-		drm = ast_2600_device_create(pdev, &ast_driver, chip, config_mode,
-					     regs, ioregs, need_post);
-		break;
-	default:
-		dev_err(&pdev->dev, "Gen%d not supported\n", chip_gen);
-		return -ENODEV;
-	}
+	drm = ast_device_create(pdev, &ast_driver, chip, config_mode, regs, ioregs, need_post);
 	if (IS_ERR(drm))
 		return PTR_ERR(drm);
 	pci_set_drvdata(pdev, drm);
@@ -494,7 +360,7 @@ static int ast_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (ret)
 		return ret;
 
-	drm_client_setup(drm, NULL);
+	drm_fbdev_shmem_setup(drm, 32);
 
 	return 0;
 }
@@ -526,15 +392,11 @@ static int ast_drm_freeze(struct drm_device *dev)
 static int ast_drm_thaw(struct drm_device *dev)
 {
 	struct ast_device *ast = to_ast_device(dev);
-	int ret;
 
 	ast_enable_vga(ast->ioregs);
 	ast_open_key(ast->ioregs);
 	ast_enable_mmio(dev->dev, ast->ioregs);
-
-	ret = ast_post_gpu(ast);
-	if (ret)
-		return ret;
+	ast_post_gpu(dev);
 
 	return drm_mode_config_helper_resume(dev);
 }

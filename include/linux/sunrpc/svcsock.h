@@ -43,9 +43,7 @@ struct svc_sock {
 
 	struct completion	sk_handshake_done;
 
-	/* received data */
-	unsigned long		sk_maxpages;
-	struct page *		sk_pages[] __counted_by(sk_maxpages);
+	struct page *		sk_pages[RPCSVC_MAXPAGES];	/* received data */
 };
 
 static inline u32 svc_sock_reclen(struct svc_sock *svsk)
@@ -61,7 +59,7 @@ static inline u32 svc_sock_final_rec(struct svc_sock *svsk)
 /*
  * Function prototypes.
  */
-int		svc_recv(struct svc_rqst *rqstp, long timeo);
+void		svc_recv(struct svc_rqst *rqstp);
 void		svc_send(struct svc_rqst *rqstp);
 int		svc_addsock(struct svc_serv *serv, struct net *net,
 			    const int fd, char *name_return, const size_t len,

@@ -20,8 +20,6 @@
 # OTHER DEALINGS IN THE SOFTWARE.
 #
 #
-gpu-sched-y := sched_main.o sched_fence.o sched_entity.o sched_rq.o
+gpu-sched-y := sched_main.o sched_fence.o sched_entity.o
 
 obj-$(CONFIG_DRM_SCHED) += gpu-sched.o
-
-obj-$(CONFIG_DRM_SCHED_KUNIT_TEST) += tests/

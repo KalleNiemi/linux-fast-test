@@ -519,13 +519,12 @@ static int sof_ipc3_widget_setup_comp_mixer(struct snd_sof_widget *swidget)
 static int sof_ipc3_widget_setup_comp_pipeline(struct snd_sof_widget *swidget)
 {
 	struct snd_soc_component *scomp = swidget->scomp;
-	struct snd_sof_dev *sdev = snd_soc_component_get_drvdata(scomp);
 	struct snd_sof_pipeline *spipe = swidget->spipe;
 	struct sof_ipc_pipe_new *pipeline;
 	struct snd_sof_widget *comp_swidget;
 	int ret;
 
-	pipeline = kzalloc_obj(*pipeline);
+	pipeline = kzalloc(sizeof(*pipeline), GFP_KERNEL);
 	if (!pipeline)
 		return -ENOMEM;
 
@@ -560,15 +559,8 @@ static int sof_ipc3_widget_setup_comp_pipeline(struct snd_sof_widget *swidget)
 	if (ret < 0)
 		goto err;
 
-	if (sof_debug_check_flag(SOF_DBG_DISABLE_MULTICORE)) {
+	if (sof_debug_check_flag(SOF_DBG_DISABLE_MULTICORE))
 		pipeline->core = SOF_DSP_PRIMARY_CORE;
-	} else if (pipeline->core > sdev->num_cores - 1) {
-		dev_info(scomp->dev,
-			 "out of range core id for %s, moving it %d -> %d\n",
-			 swidget->widget->name, pipeline->core,
-			 SOF_DSP_PRIMARY_CORE);
-		pipeline->core = SOF_DSP_PRIMARY_CORE;
-	}
 
 	if (sof_debug_check_flag(SOF_DBG_DYNAMIC_PIPELINES_OVERRIDE))
 		swidget->dynamic_pipeline_widget =
@@ -597,7 +589,7 @@ static int sof_ipc3_widget_setup_comp_buffer(struct snd_sof_widget *swidget)
 	struct sof_ipc_buffer *buffer;
 	int ret;
 
-	buffer = kzalloc_obj(*buffer);
+	buffer = kzalloc(sizeof(*buffer), GFP_KERNEL);
 	if (!buffer)
 		return -ENOMEM;
 
@@ -901,7 +893,7 @@ static int sof_process_load(struct snd_soc_component *scomp,
 
 	/* allocate struct for widget control data sizes and types */
 	if (widget->num_kcontrols) {
-		wdata = kzalloc_objs(*wdata, widget->num_kcontrols);
+		wdata = kcalloc(widget->num_kcontrols, sizeof(*wdata), GFP_KERNEL);
 		if (!wdata)
 			return -ENOMEM;
 
@@ -1575,7 +1567,7 @@ static int sof_ipc3_widget_setup_comp_dai(struct snd_sof_widget *swidget)
 	struct snd_sof_dai_link *slink;
 	int ret;
 
-	private = kzalloc_obj(*private);
+	private = kzalloc(sizeof(*private), GFP_KERNEL);
 	if (!private)
 		return -ENOMEM;
 
@@ -1630,7 +1622,7 @@ static int sof_ipc3_widget_setup_comp_dai(struct snd_sof_widget *swidget)
 			continue;
 
 		/* Reserve memory for all hw configs, eventually freed by widget */
-		config = kzalloc_objs(*config, slink->num_hw_configs);
+		config = kcalloc(slink->num_hw_configs, sizeof(*config), GFP_KERNEL);
 		if (!config) {
 			ret = -ENOMEM;
 			goto free_comp;
@@ -2394,16 +2386,28 @@ static int sof_ipc3_set_up_all_pipelines(struct snd_sof_dev *sdev, bool verify)
 static int sof_tear_down_left_over_pipelines(struct snd_sof_dev *sdev)
 {
 	struct snd_sof_widget *swidget;
-	int ret;
+	struct snd_sof_pcm *spcm;
+	int dir, ret;
 
 	/*
 	 * free all PCMs and their associated DAPM widgets if their connected DAPM widget
 	 * list is not NULL. This should only be true for paused streams at this point.
 	 * This is equivalent to the handling of FE DAI suspend trigger for running streams.
 	 */
-	ret = sof_pcm_free_all_streams(sdev);
-	if (ret)
-		return ret;
+	list_for_each_entry(spcm, &sdev->pcm_list, list) {
+		for_each_pcm_streams(dir) {
+			struct snd_pcm_substream *substream = spcm->stream[dir].substream;
+
+			if (!substream || !substream->runtime || spcm->stream[dir].suspend_ignored)
+				continue;
+
+			if (spcm->stream[dir].list) {
+				ret = sof_pcm_stream_free(sdev, substream, spcm, dir, true);
+				if (ret < 0)
+					return ret;
+			}
+		}
+	}
 
 	/*
 	 * free any left over DAI widgets. This is equivalent to the handling of suspend trigger
@@ -2435,9 +2439,9 @@ static int sof_ipc3_free_widgets_in_list(struct snd_sof_dev *sdev, bool include_
 		/* Do not free widgets for static pipelines with FW older than SOF2.2 */
 		if (!verify && !swidget->dynamic_pipeline_widget &&
 		    SOF_FW_VER(v->major, v->minor, v->micro) < SOF_FW_VER(2, 2, 0)) {
-			scoped_guard(mutex, &swidget->setup_mutex)
-				swidget->use_count = 0;
-
+			mutex_lock(&swidget->setup_mutex);
+			swidget->use_count = 0;
+			mutex_unlock(&swidget->setup_mutex);
 			if (swidget->spipe)
 				swidget->spipe->complete = 0;
 			continue;

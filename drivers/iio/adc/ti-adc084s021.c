@@ -10,6 +10,7 @@
 #include <linux/err.h>
 #include <linux/spi/spi.h>
 #include <linux/module.h>
+#include <linux/mod_devicetable.h>
 #include <linux/interrupt.h>
 #include <linux/iio/iio.h>
 #include <linux/iio/buffer.h>
@@ -28,7 +29,7 @@ struct adc084s021 {
 	/* Buffer used to align data */
 	struct {
 		__be16 channels[4];
-		aligned_s64 ts;
+		s64 ts __aligned(8);
 	} scan;
 	/*
 	 * DMA (thus cache coherency maintenance) may require the
@@ -95,18 +96,19 @@ static int adc084s021_read_raw(struct iio_dev *indio_dev,
 
 	switch (mask) {
 	case IIO_CHAN_INFO_RAW:
-		if (!iio_device_claim_direct(indio_dev))
-			return -EBUSY;
+		ret = iio_device_claim_direct_mode(indio_dev);
+		if (ret < 0)
+			return ret;
 
 		ret = regulator_enable(adc->reg);
 		if (ret) {
-			iio_device_release_direct(indio_dev);
+			iio_device_release_direct_mode(indio_dev);
 			return ret;
 		}
 
 		adc->tx_buf[0] = channel->channel << 3;
 		ret = adc084s021_adc_conversion(adc, &be_val);
-		iio_device_release_direct(indio_dev);
+		iio_device_release_direct_mode(indio_dev);
 		regulator_disable(adc->reg);
 		if (ret < 0)
 			return ret;
@@ -150,8 +152,8 @@ static irqreturn_t adc084s021_buffer_trigger_handler(int irq, void *pollfunc)
 	if (adc084s021_adc_conversion(adc, adc->scan.channels) < 0)
 		dev_err(&adc->spi->dev, "Failed to read data\n");
 
-	iio_push_to_buffers_with_ts(indio_dev, &adc->scan, sizeof(adc->scan),
-				    iio_get_time_ns(indio_dev));
+	iio_push_to_buffers_with_timestamp(indio_dev, &adc->scan,
+					   iio_get_time_ns(indio_dev));
 	mutex_unlock(&adc->lock);
 	iio_trigger_notify_done(indio_dev->trig);
 
@@ -199,8 +201,10 @@ static int adc084s021_probe(struct spi_device *spi)
 	int ret;
 
 	indio_dev = devm_iio_device_alloc(&spi->dev, sizeof(*adc));
-	if (!indio_dev)
+	if (!indio_dev) {
+		dev_err(&spi->dev, "Failed to allocate IIO device\n");
 		return -ENOMEM;
+	}
 
 	adc = iio_priv(indio_dev);
 	adc->spi = spi;

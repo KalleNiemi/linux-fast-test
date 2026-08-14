@@ -45,6 +45,7 @@
 #include <linux/dmaengine.h>
 #include <linux/dma-mapping.h>
 #include <linux/list.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
@@ -351,7 +352,7 @@ static int hidma_alloc_chan_resources(struct dma_chan *dmach)
 
 	/* Alloc descriptors for this channel */
 	for (i = 0; i < dmadev->nr_descriptors; i++) {
-		mdesc = kzalloc_obj(struct hidma_desc, GFP_NOWAIT);
+		mdesc = kzalloc(sizeof(struct hidma_desc), GFP_NOWAIT);
 		if (!mdesc) {
 			rc = -ENOMEM;
 			break;
@@ -623,10 +624,12 @@ static ssize_t hidma_show_values(struct device *dev,
 {
 	struct hidma_dev *mdev = dev_get_drvdata(dev);
 
-	if (strcmp(attr->attr.name, "chid") == 0)
-		return sysfs_emit(buf, "%d\n", mdev->chidx);
+	buf[0] = 0;
 
-	return 0;
+	if (strcmp(attr->attr.name, "chid") == 0)
+		sprintf(buf, "%d\n", mdev->chidx);
+
+	return strlen(buf);
 }
 
 static inline void  hidma_sysfs_uninit(struct hidma_dev *dev)
@@ -945,7 +948,7 @@ MODULE_DEVICE_TABLE(acpi, hidma_acpi_ids);
 
 static struct platform_driver hidma_driver = {
 	.probe = hidma_probe,
-	.remove = hidma_remove,
+	.remove_new = hidma_remove,
 	.shutdown = hidma_shutdown,
 	.driver = {
 		   .name = "hidma",

@@ -16,6 +16,7 @@
 #define KMB_MIN_WIDTH                   1920 /*Max width in pixels */
 #define KMB_MIN_HEIGHT                  1080 /*Max height in pixels */
 
+#define DRIVER_DATE			"20210223"
 #define DRIVER_MAJOR			1
 #define DRIVER_MINOR			1
 
@@ -52,7 +53,7 @@ struct kmb_drm_private {
 	struct kmb_clock		kmb_clk;
 	struct drm_crtc			crtc;
 	struct kmb_plane		*plane;
-	struct drm_atomic_commit		*state;
+	struct drm_atomic_state		*state;
 	spinlock_t			irq_lock;
 	int				irq_lcd;
 	int				sys_clk_mhz;

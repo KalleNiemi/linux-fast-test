@@ -643,7 +643,7 @@ static DEVICE_ATTR(gsm_log, S_IRUGO, pm8001_ctl_gsm_log_show, NULL);
 #define FLASH_CMD_SET_NVMD    0x02
 
 struct flash_command {
-     u8      command[8] __nonstring;
+     u8      command[8];
      int     code;
 };
 
@@ -818,14 +818,6 @@ static ssize_t pm8001_store_update_fw(struct device *cdev,
 	filename_ptr = cmd_ptr + count;
 	res = sscanf(buf, "%s %s", cmd_ptr, filename_ptr);
 	if (res != 2) {
-		pm8001_ha->fw_status = FAIL_PARAMETERS;
-		ret = -EINVAL;
-		goto out;
-	}
-
-	if (pm8001_ha->controller_fatal_error) {
-		pm8001_dbg(pm8001_ha, FAIL,
-			   "controller in fatal error state, firmware update rejected\n");
 		pm8001_ha->fw_status = FAIL_PARAMETERS;
 		ret = -EINVAL;
 		goto out;

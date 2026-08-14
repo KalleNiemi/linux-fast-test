@@ -6,6 +6,7 @@
 
 #include <linux/clk.h>
 #include <linux/device.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
@@ -417,15 +418,15 @@ static void sun50i_dmic_remove(struct platform_device *pdev)
 }
 
 static const struct dev_pm_ops sun50i_dmic_pm = {
-	RUNTIME_PM_OPS(sun50i_dmic_runtime_suspend,
-		       sun50i_dmic_runtime_resume, NULL)
+	SET_RUNTIME_PM_OPS(sun50i_dmic_runtime_suspend,
+			   sun50i_dmic_runtime_resume, NULL)
 };
 
 static struct platform_driver sun50i_dmic_driver = {
 	.driver         = {
 		.name   = "sun50i-dmic",
 		.of_match_table = sun50i_dmic_of_match,
-		.pm     = pm_ptr(&sun50i_dmic_pm),
+		.pm     = &sun50i_dmic_pm,
 	},
 	.probe          = sun50i_dmic_probe,
 	.remove         = sun50i_dmic_remove,

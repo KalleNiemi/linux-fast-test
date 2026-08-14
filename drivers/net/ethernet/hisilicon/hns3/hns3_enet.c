@@ -25,7 +25,6 @@
 #include <net/tcp.h>
 #include <net/vxlan.h>
 #include <net/geneve.h>
-#include <net/netdev_queues.h>
 
 #include "hnae3.h"
 #include "hns3_enet.h"
@@ -86,39 +85,25 @@ module_param(page_pool_enabled, bool, 0400);
  *   Class, Class Mask, private data (not used) }
  */
 static const struct pci_device_id hns3_pci_tbl[] = {
-	{
-		PCI_VDEVICE(HUAWEI, HNAE3_DEV_ID_GE),
-		.driver_data = 0,
-	}, {
-		PCI_VDEVICE(HUAWEI, HNAE3_DEV_ID_25GE),
-		.driver_data = 0,
-	}, {
-		PCI_VDEVICE(HUAWEI, HNAE3_DEV_ID_25GE_RDMA),
-		.driver_data = HNAE3_DEV_SUPPORT_ROCE_DCB_BITS,
-	}, {
-		PCI_VDEVICE(HUAWEI, HNAE3_DEV_ID_25GE_RDMA_MACSEC),
-		.driver_data = HNAE3_DEV_SUPPORT_ROCE_DCB_BITS,
-	}, {
-		PCI_VDEVICE(HUAWEI, HNAE3_DEV_ID_50GE_RDMA),
-		.driver_data = HNAE3_DEV_SUPPORT_ROCE_DCB_BITS,
-	}, {
-		PCI_VDEVICE(HUAWEI, HNAE3_DEV_ID_50GE_RDMA_MACSEC),
-		.driver_data = HNAE3_DEV_SUPPORT_ROCE_DCB_BITS,
-	}, {
-		PCI_VDEVICE(HUAWEI, HNAE3_DEV_ID_100G_RDMA_MACSEC),
-		.driver_data = HNAE3_DEV_SUPPORT_ROCE_DCB_BITS,
-	}, {
-		PCI_VDEVICE(HUAWEI, HNAE3_DEV_ID_200G_RDMA),
-		.driver_data = HNAE3_DEV_SUPPORT_ROCE_DCB_BITS,
-	}, {
-		PCI_VDEVICE(HUAWEI, HNAE3_DEV_ID_VF),
-		.driver_data = 0,
-	}, {
-		PCI_VDEVICE(HUAWEI, HNAE3_DEV_ID_RDMA_DCB_PFC_VF),
-		.driver_data = HNAE3_DEV_SUPPORT_ROCE_DCB_BITS,
-	},
+	{PCI_VDEVICE(HUAWEI, HNAE3_DEV_ID_GE), 0},
+	{PCI_VDEVICE(HUAWEI, HNAE3_DEV_ID_25GE), 0},
+	{PCI_VDEVICE(HUAWEI, HNAE3_DEV_ID_25GE_RDMA),
+	 HNAE3_DEV_SUPPORT_ROCE_DCB_BITS},
+	{PCI_VDEVICE(HUAWEI, HNAE3_DEV_ID_25GE_RDMA_MACSEC),
+	 HNAE3_DEV_SUPPORT_ROCE_DCB_BITS},
+	{PCI_VDEVICE(HUAWEI, HNAE3_DEV_ID_50GE_RDMA),
+	 HNAE3_DEV_SUPPORT_ROCE_DCB_BITS},
+	{PCI_VDEVICE(HUAWEI, HNAE3_DEV_ID_50GE_RDMA_MACSEC),
+	 HNAE3_DEV_SUPPORT_ROCE_DCB_BITS},
+	{PCI_VDEVICE(HUAWEI, HNAE3_DEV_ID_100G_RDMA_MACSEC),
+	 HNAE3_DEV_SUPPORT_ROCE_DCB_BITS},
+	{PCI_VDEVICE(HUAWEI, HNAE3_DEV_ID_200G_RDMA),
+	 HNAE3_DEV_SUPPORT_ROCE_DCB_BITS},
+	{PCI_VDEVICE(HUAWEI, HNAE3_DEV_ID_VF), 0},
+	{PCI_VDEVICE(HUAWEI, HNAE3_DEV_ID_RDMA_DCB_PFC_VF),
+	 HNAE3_DEV_SUPPORT_ROCE_DCB_BITS},
 	/* required last entry */
-	{ }
+	{0,}
 };
 MODULE_DEVICE_TABLE(pci, hns3_pci_tbl);
 
@@ -2132,7 +2117,7 @@ static void hns3_tx_doorbell(struct hns3_enet_ring *ring, int num,
 	 */
 	if (test_bit(HNS3_NIC_STATE_TX_PUSH_ENABLE, &priv->state) && num &&
 	    !ring->pending_buf && num <= HNS3_MAX_PUSH_BD_NUM && doorbell) {
-		/* This smp_store_release() pairs with smp_load_acquire() in
+		/* This smp_store_release() pairs with smp_load_aquire() in
 		 * hns3_nic_reclaim_desc(). Ensure that the BD valid bit
 		 * is updated.
 		 */
@@ -2148,7 +2133,7 @@ static void hns3_tx_doorbell(struct hns3_enet_ring *ring, int num,
 		return;
 	}
 
-	/* This smp_store_release() pairs with smp_load_acquire() in
+	/* This smp_store_release() pairs with smp_load_aquire() in
 	 * hns3_nic_reclaim_desc(). Ensure that the BD valid bit is updated.
 	 */
 	smp_store_release(&ring->last_to_use, ring->next_to_use);
@@ -2441,35 +2426,6 @@ static int hns3_nic_do_ioctl(struct net_device *netdev,
 	return h->ae_algo->ops->do_ioctl(h, ifr, cmd);
 }
 
-static int hns3_nic_hwtstamp_get(struct net_device *netdev,
-				 struct kernel_hwtstamp_config *config)
-{
-	struct hnae3_handle *h = hns3_get_handle(netdev);
-
-	if (!netif_running(netdev))
-		return -EINVAL;
-
-	if (!h->ae_algo->ops->hwtstamp_get)
-		return -EOPNOTSUPP;
-
-	return h->ae_algo->ops->hwtstamp_get(h, config);
-}
-
-static int hns3_nic_hwtstamp_set(struct net_device *netdev,
-				 struct kernel_hwtstamp_config *config,
-				 struct netlink_ext_ack *extack)
-{
-	struct hnae3_handle *h = hns3_get_handle(netdev);
-
-	if (!netif_running(netdev))
-		return -EINVAL;
-
-	if (!h->ae_algo->ops->hwtstamp_set)
-		return -EOPNOTSUPP;
-
-	return h->ae_algo->ops->hwtstamp_set(h, config, extack);
-}
-
 static int hns3_nic_set_features(struct net_device *netdev,
 				 netdev_features_t features)
 {
@@ -2502,7 +2458,7 @@ static int hns3_nic_set_features(struct net_device *netdev,
 	if ((netdev->features & NETIF_F_HW_TC) > (features & NETIF_F_HW_TC) &&
 	    h->ae_algo->ops->cls_flower_active(h)) {
 		netdev_err(netdev,
-			   "there are offloaded TC filters active, cannot disable HW TC offload\n");
+			   "there are offloaded TC filters active, cannot disable HW TC offload");
 		return -EINVAL;
 	}
 
@@ -2678,12 +2634,13 @@ static int hns3_setup_tc(struct net_device *netdev, void *type_data)
 static int hns3_setup_tc_cls_flower(struct hns3_nic_priv *priv,
 				    struct flow_cls_offload *flow)
 {
+	int tc = tc_classid_to_hwtc(priv->netdev, flow->classid);
 	struct hnae3_handle *h = hns3_get_handle(priv->netdev);
 
 	switch (flow->command) {
 	case FLOW_CLS_REPLACE:
 		if (h->ae_algo->ops->add_cls_flower)
-			return h->ae_algo->ops->add_cls_flower(h, flow);
+			return h->ae_algo->ops->add_cls_flower(h, flow, tc);
 		break;
 	case FLOW_CLS_DESTROY:
 		if (h->ae_algo->ops->del_cls_flower)
@@ -2831,12 +2788,14 @@ static int hns3_get_timeout_queue(struct net_device *ndev)
 
 	/* Find the stopped queue the same way the stack does */
 	for (i = 0; i < ndev->num_tx_queues; i++) {
-		unsigned int timedout_ms;
 		struct netdev_queue *q;
+		unsigned long trans_start;
 
 		q = netdev_get_tx_queue(ndev, i);
-		timedout_ms = netif_xmit_timeout_ms(q);
-		if (timedout_ms) {
+		trans_start = READ_ONCE(q->trans_start);
+		if (netif_xmit_stopped(q) &&
+		    time_after(jiffies,
+			       (trans_start + ndev->watchdog_timeo))) {
 #ifdef CONFIG_BQL
 			struct dql *dql = &q->dql;
 
@@ -2845,7 +2804,8 @@ static int hns3_get_timeout_queue(struct net_device *ndev)
 				    dql->adj_limit, dql->num_completed);
 #endif
 			netdev_info(ndev, "queue state: 0x%lx, delta msecs: %u\n",
-				    q->state, timedout_ms);
+				    q->state,
+				    jiffies_to_msecs(jiffies - trans_start));
 			break;
 		}
 	}
@@ -3098,8 +3058,6 @@ static const struct net_device_ops hns3_nic_netdev_ops = {
 	.ndo_set_vf_rate	= hns3_nic_set_vf_rate,
 	.ndo_set_vf_mac		= hns3_nic_set_vf_mac,
 	.ndo_select_queue	= hns3_nic_select_queue,
-	.ndo_hwtstamp_get	= hns3_nic_hwtstamp_get,
-	.ndo_hwtstamp_set	= hns3_nic_hwtstamp_set,
 };
 
 bool hns3_is_phys_func(struct pci_dev *pdev)
@@ -4510,7 +4468,7 @@ static void hns3_update_rx_int_coalesce(struct hns3_enet_tqp_vector *tqp_vector)
 
 	dim_update_sample(tqp_vector->event_cnt, rx_group->total_packets,
 			  rx_group->total_bytes, &sample);
-	net_dim(&rx_group->dim, &sample);
+	net_dim(&rx_group->dim, sample);
 }
 
 static void hns3_update_tx_int_coalesce(struct hns3_enet_tqp_vector *tqp_vector)
@@ -4523,7 +4481,7 @@ static void hns3_update_tx_int_coalesce(struct hns3_enet_tqp_vector *tqp_vector)
 
 	dim_update_sample(tqp_vector->event_cnt, tx_group->total_packets,
 			  tx_group->total_bytes, &sample);
-	net_dim(&tx_group->dim, &sample);
+	net_dim(&tx_group->dim, sample);
 }
 
 static int hns3_nic_common_poll(struct napi_struct *napi, int budget)
@@ -5380,8 +5338,6 @@ static int hns3_client_init(struct hnae3_handle *handle)
 	struct net_device *netdev;
 	int ret;
 
-	ae_dev->handle = handle;
-
 	handle->ae_algo->ops->get_tqps_and_rss_info(handle, &alloc_tqps,
 						    &max_rss_size);
 	netdev = alloc_etherdev_mq(sizeof(struct hns3_nic_priv), alloc_tqps);
@@ -6046,8 +6002,8 @@ static int __init hns3_init_module(void)
 {
 	int ret;
 
-	pr_debug("%s: %s - version\n", hns3_driver_name, hns3_driver_string);
-	pr_debug("%s: %s\n", hns3_driver_name, hns3_copyright);
+	pr_info("%s: %s - version\n", hns3_driver_name, hns3_driver_string);
+	pr_info("%s: %s\n", hns3_driver_name, hns3_copyright);
 
 	client.type = HNAE3_CLIENT_KNIC;
 	snprintf(client.name, HNAE3_CLIENT_NAME_LENGTH, "%s",

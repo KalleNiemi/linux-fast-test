@@ -474,6 +474,7 @@ reinit:
 	rt5682->first_hw_init = true;
 
 err_nodev:
+	pm_runtime_mark_last_busy(&slave->dev);
 	pm_runtime_put_autosuspend(&slave->dev);
 
 	dev_dbg(&slave->dev, "%s hw_init complete: %d\n", __func__, ret);
@@ -690,7 +691,7 @@ static int rt5682_sdw_probe(struct sdw_slave *slave,
 	return rt5682_sdw_init(&slave->dev, regmap, slave);
 }
 
-static void rt5682_sdw_remove(struct sdw_slave *slave)
+static int rt5682_sdw_remove(struct sdw_slave *slave)
 {
 	struct rt5682_priv *rt5682 = dev_get_drvdata(&slave->dev);
 
@@ -698,6 +699,8 @@ static void rt5682_sdw_remove(struct sdw_slave *slave)
 		cancel_delayed_work_sync(&rt5682->jack_detect_work);
 
 	pm_runtime_disable(&slave->dev);
+
+	return 0;
 }
 
 static const struct sdw_device_id rt5682_id[] = {
@@ -706,7 +709,7 @@ static const struct sdw_device_id rt5682_id[] = {
 };
 MODULE_DEVICE_TABLE(sdw, rt5682_id);
 
-static int rt5682_dev_suspend(struct device *dev)
+static int __maybe_unused rt5682_dev_suspend(struct device *dev)
 {
 	struct rt5682_priv *rt5682 = dev_get_drvdata(dev);
 
@@ -722,7 +725,7 @@ static int rt5682_dev_suspend(struct device *dev)
 	return 0;
 }
 
-static int rt5682_dev_system_suspend(struct device *dev)
+static int __maybe_unused rt5682_dev_system_suspend(struct device *dev)
 {
 	struct rt5682_priv *rt5682 = dev_get_drvdata(dev);
 	struct sdw_slave *slave = dev_to_sdw_dev(dev);
@@ -750,11 +753,11 @@ static int rt5682_dev_system_suspend(struct device *dev)
 	return rt5682_dev_suspend(dev);
 }
 
-static int rt5682_dev_resume(struct device *dev)
+static int __maybe_unused rt5682_dev_resume(struct device *dev)
 {
 	struct sdw_slave *slave = dev_to_sdw_dev(dev);
 	struct rt5682_priv *rt5682 = dev_get_drvdata(dev);
-	int ret;
+	unsigned long time;
 
 	if (!rt5682->first_hw_init)
 		return 0;
@@ -766,14 +769,20 @@ static int rt5682_dev_resume(struct device *dev)
 			rt5682->disable_irq = false;
 		}
 		mutex_unlock(&rt5682->disable_irq_lock);
+		goto regmap_sync;
 	}
 
-	ret = sdw_slave_wait_for_init(slave, RT5682_PROBE_TIMEOUT);
-	if (ret) {
+	time = wait_for_completion_timeout(&slave->initialization_complete,
+				msecs_to_jiffies(RT5682_PROBE_TIMEOUT));
+	if (!time) {
+		dev_err(&slave->dev, "%s: Initialization not complete, timed out\n", __func__);
 		sdw_show_ping_status(slave->bus, true);
-		return ret;
+
+		return -ETIMEDOUT;
 	}
 
+regmap_sync:
+	slave->unattach_request = 0;
 	regcache_cache_only(rt5682->sdw_regmap, false);
 	regcache_cache_only(rt5682->regmap, false);
 	regcache_sync(rt5682->regmap);
@@ -782,14 +791,14 @@ static int rt5682_dev_resume(struct device *dev)
 }
 
 static const struct dev_pm_ops rt5682_pm = {
-	SYSTEM_SLEEP_PM_OPS(rt5682_dev_system_suspend, rt5682_dev_resume)
-	RUNTIME_PM_OPS(rt5682_dev_suspend, rt5682_dev_resume, NULL)
+	SET_SYSTEM_SLEEP_PM_OPS(rt5682_dev_system_suspend, rt5682_dev_resume)
+	SET_RUNTIME_PM_OPS(rt5682_dev_suspend, rt5682_dev_resume, NULL)
 };
 
 static struct sdw_driver rt5682_sdw_driver = {
 	.driver = {
 		.name = "rt5682",
-		.pm = pm_ptr(&rt5682_pm),
+		.pm = &rt5682_pm,
 	},
 	.probe = rt5682_sdw_probe,
 	.remove = rt5682_sdw_remove,

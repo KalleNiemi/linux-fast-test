@@ -204,7 +204,7 @@ static int __lf_x_usb_enable_rx(struct plfxlc_usb *usb)
 	int i, r;
 
 	r = -ENOMEM;
-	urbs = kzalloc_objs(struct urb *, RX_URBS_COUNT);
+	urbs = kcalloc(RX_URBS_COUNT, sizeof(struct urb *), GFP_KERNEL);
 	if (!urbs)
 		goto error;
 
@@ -548,7 +548,7 @@ error:
 
 static void slif_data_plane_sap_timer_callb(struct timer_list *t)
 {
-	struct plfxlc_usb *usb = timer_container_of(usb, t, tx.tx_retry_timer);
+	struct plfxlc_usb *usb = from_timer(usb, t, tx.tx_retry_timer);
 
 	plfxlc_send_packet_from_data_queue(usb);
 	timer_setup(&usb->tx.tx_retry_timer,
@@ -558,7 +558,7 @@ static void slif_data_plane_sap_timer_callb(struct timer_list *t)
 
 static void sta_queue_cleanup_timer_callb(struct timer_list *t)
 {
-	struct plfxlc_usb *usb = timer_container_of(usb, t, sta_queue_cleanup);
+	struct plfxlc_usb *usb = from_timer(usb, t, sta_queue_cleanup);
 	struct plfxlc_usb_tx *tx = &usb->tx;
 	int sidx;
 
@@ -716,8 +716,8 @@ static void disconnect(struct usb_interface *intf)
 	mac = plfxlc_hw_mac(hw);
 	usb = &mac->chip.usb;
 
-	timer_delete_sync(&usb->tx.tx_retry_timer);
-	timer_delete_sync(&usb->sta_queue_cleanup);
+	del_timer_sync(&usb->tx.tx_retry_timer);
+	del_timer_sync(&usb->sta_queue_cleanup);
 
 	ieee80211_unregister_hw(hw);
 
@@ -851,7 +851,7 @@ static int resume(struct usb_interface *interface)
 
 #endif
 
-static struct usb_driver usbdriver = {
+static struct usb_driver driver = {
 	.name = KBUILD_MODNAME,
 	.id_table = usb_ids,
 	.probe = probe,
@@ -865,7 +865,25 @@ static struct usb_driver usbdriver = {
 	.disable_hub_initiated_lpm = 1,
 };
 
-module_usb_driver(usbdriver);
+static int __init usb_init(void)
+{
+	int r;
+
+	r = usb_register(&driver);
+	if (r) {
+		pr_err("%s usb_register() failed %d\n", driver.name, r);
+		return r;
+	}
+
+	pr_debug("Driver initialized :%s\n", driver.name);
+	return 0;
+}
+
+static void __exit usb_exit(void)
+{
+	usb_deregister(&driver);
+	pr_debug("%s %s\n", driver.name, __func__);
+}
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("USB driver for pureLiFi devices");
@@ -873,3 +891,6 @@ MODULE_AUTHOR("pureLiFi");
 MODULE_VERSION("1.0");
 MODULE_FIRMWARE("plfxlc/lifi-x.bin");
 MODULE_DEVICE_TABLE(usb, usb_ids);
+
+module_init(usb_init);
+module_exit(usb_exit);

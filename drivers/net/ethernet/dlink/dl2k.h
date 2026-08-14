@@ -270,7 +270,7 @@ enum _pcs_reg {
 	PCS_ESR = 15,
 };
 
-/* IEEE Extended Status Register */
+/* IEEE Extened Status Register */
 enum _mii_esr {
 	MII_ESR_1000BX_FD = 0x8000,
 	MII_ESR_1000BX_HD = 0x4000,
@@ -329,18 +329,18 @@ enum _pcs_anlpar {
 };
 
 typedef struct t_SROM {
-	__le16 config_param;	/* 0x00 */
-	__le16 asic_ctrl;	/* 0x02 */
-	__le16 sub_vendor_id;	/* 0x04 */
-	__le16 sub_system_id;	/* 0x06 */
-	__le16 pci_base_1;	/* 0x08 (IP1000A only) */
-	__le16 pci_base_2;	/* 0x0a (IP1000A only) */
+	u16 config_param;	/* 0x00 */
+	u16 asic_ctrl;		/* 0x02 */
+	u16 sub_vendor_id;	/* 0x04 */
+	u16 sub_system_id;	/* 0x06 */
+	u16 pci_base_1;		/* 0x08 (IP1000A only) */
+	u16 pci_base_2;		/* 0x0a (IP1000A only) */
 	__le16 led_mode;	/* 0x0c (IP1000A only) */
-	__le16 reserved1[9];	/* 0x0e-0x1f */
+	u16 reserved1[9];	/* 0x0e-0x1f */
 	u8 mac_addr[6];		/* 0x20-0x25 */
 	u8 reserved2[10];	/* 0x26-0x2f */
 	u8 sib[204];		/* 0x30-0xfb */
-	__le32 crc;		/* 0xfc-0xff */
+	u32 crc;		/* 0xfc-0xff */
 } SROM_t, *PSROM_t;
 
 /* Ioctl custom data */
@@ -403,8 +403,6 @@ struct netdev_private {
 	u16 negotiate;		/* Negotiated media */
 	int phy_addr;		/* PHY addresses. */
 	u16 led_mode;		/* LED mode read from EEPROM (IP1000A only) */
-
-	bool rmon_enable;
 };
 
 /* The station address location in the EEPROM. */
@@ -418,12 +416,12 @@ struct netdev_private {
 #define CHIP_IP1000A	1
 
 static const struct pci_device_id rio_pci_tbl[] = {
-	{ PCI_DEVICE(0x1186, 0x4000) },
-	{ PCI_DEVICE(0x13f0, 0x1021) },
-	{ PCI_VDEVICE(SUNDANCE,	0x1023), .driver_data = CHIP_IP1000A },
-	{ PCI_VDEVICE(SUNDANCE,	0x2021), .driver_data = CHIP_IP1000A },
-	{ PCI_VDEVICE(DLINK,	0x9021), .driver_data = CHIP_IP1000A },
-	{ PCI_VDEVICE(DLINK,	0x4020), .driver_data = CHIP_IP1000A },
+	{0x1186, 0x4000, PCI_ANY_ID, PCI_ANY_ID, },
+	{0x13f0, 0x1021, PCI_ANY_ID, PCI_ANY_ID, },
+	{ PCI_VDEVICE(SUNDANCE,	0x1023), CHIP_IP1000A },
+	{ PCI_VDEVICE(SUNDANCE,	0x2021), CHIP_IP1000A },
+	{ PCI_VDEVICE(DLINK,	0x9021), CHIP_IP1000A },
+	{ PCI_VDEVICE(DLINK,	0x4020), CHIP_IP1000A },
 	{ }
 };
 MODULE_DEVICE_TABLE (pci, rio_pci_tbl);

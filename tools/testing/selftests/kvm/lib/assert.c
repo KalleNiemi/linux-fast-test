@@ -6,13 +6,10 @@
  */
 #include "test_util.h"
 
-
+#include <execinfo.h>
 #include <sys/syscall.h>
 
 #include "kselftest.h"
-
-#ifdef __GLIBC__
-#include <execinfo.h>
 
 /* Dumps the current stack trace to stderr. */
 static void __attribute__((noinline)) test_dump_stack(void);
@@ -60,9 +57,6 @@ static void test_dump_stack(void)
 	system(cmd);
 #pragma GCC diagnostic pop
 }
-#else
-static void test_dump_stack(void) {}
-#endif
 
 static pid_t _gettid(void)
 {

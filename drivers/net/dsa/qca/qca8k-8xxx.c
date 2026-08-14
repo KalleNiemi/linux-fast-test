@@ -342,7 +342,7 @@ static int qca8k_read_eth(struct qca8k_priv *priv, u32 reg, u32 *val, int len)
 	dev_queue_xmit(skb);
 
 	ret = wait_for_completion_timeout(&mgmt_eth_data->rw_done,
-					  QCA8K_ETHERNET_TIMEOUT);
+					  msecs_to_jiffies(QCA8K_ETHERNET_TIMEOUT));
 
 	*val = mgmt_eth_data->data[0];
 	if (len > QCA_HDR_MGMT_DATA1_LEN)
@@ -394,7 +394,7 @@ static int qca8k_write_eth(struct qca8k_priv *priv, u32 reg, u32 *val, int len)
 	dev_queue_xmit(skb);
 
 	ret = wait_for_completion_timeout(&mgmt_eth_data->rw_done,
-					  QCA8K_ETHERNET_TIMEOUT);
+					  msecs_to_jiffies(QCA8K_ETHERNET_TIMEOUT));
 
 	ack = mgmt_eth_data->ack;
 
@@ -1019,7 +1019,7 @@ qca8k_setup_mdio_bus(struct qca8k_priv *priv)
 
 		of_get_phy_mode(port, &mode);
 
-		if (of_property_present(port, "phy-handle") &&
+		if (of_property_read_bool(port, "phy-handle") &&
 		    mode != PHY_INTERFACE_MODE_INTERNAL)
 			external_mdio_mask |= BIT(reg);
 		else
@@ -1491,7 +1491,7 @@ static struct qca8k_pcs *pcs_to_qca8k_pcs(struct phylink_pcs *pcs)
 	return container_of(pcs, struct qca8k_pcs, pcs);
 }
 
-static void qca8k_pcs_get_state(struct phylink_pcs *pcs, unsigned int neg_mode,
+static void qca8k_pcs_get_state(struct phylink_pcs *pcs,
 				struct phylink_link_state *state)
 {
 	struct qca8k_priv *priv = pcs_to_qca8k_pcs(pcs)->priv;
@@ -1538,7 +1538,7 @@ static int qca8k_pcs_config(struct phylink_pcs *pcs, unsigned int neg_mode,
 {
 	struct qca8k_priv *priv = pcs_to_qca8k_pcs(pcs)->priv;
 	int cpu_port_index, ret, port;
-	u32 mask, reg, val;
+	u32 reg, val;
 
 	port = pcs_to_qca8k_pcs(pcs)->port;
 	switch (port) {
@@ -1611,21 +1611,11 @@ static int qca8k_pcs_config(struct phylink_pcs *pcs, unsigned int neg_mode,
 	if (priv->ports_config.sgmii_tx_clk_falling_edge)
 		val |= QCA8K_PORT0_PAD_SGMII_TXCLK_FALLING_EDGE;
 
-	mask = (val) ? (QCA8K_PORT0_PAD_SGMII_RXCLK_FALLING_EDGE |
-			QCA8K_PORT0_PAD_SGMII_TXCLK_FALLING_EDGE) : 0;
-
-	/*
-	 * (Un)set force mode on QCA8337 only, don't include it in the mask for
-	 * others. It is written to the PORT0 PAD register for both port 0 and 6.
-	 */
-	if (priv->switch_id == QCA8K_ID_QCA8337) {
-		if (neg_mode == PHYLINK_PCS_NEG_OUTBAND)
-			val |= QCA8K_PORT_PAD_SGMII_FORCE_MODE;
-		mask |= QCA8K_PORT_PAD_SGMII_FORCE_MODE;
-	}
-
-	if (mask)
-		ret = qca8k_rmw(priv, reg, mask, val);
+	if (val)
+		ret = qca8k_rmw(priv, reg,
+				QCA8K_PORT0_PAD_SGMII_RXCLK_FALLING_EDGE |
+				QCA8K_PORT0_PAD_SGMII_TXCLK_FALLING_EDGE,
+				val);
 
 	return 0;
 }
@@ -1644,6 +1634,7 @@ static void qca8k_setup_pcs(struct qca8k_priv *priv, struct qca8k_pcs *qpcs,
 			    int port)
 {
 	qpcs->pcs.ops = &qca8k_pcs_ops;
+	qpcs->pcs.neg_mode = true;
 
 	/* We don't have interrupts for link changes, so we need to poll */
 	qpcs->pcs.poll = true;
@@ -2025,7 +2016,7 @@ static const struct dsa_switch_ops qca8k_switch_ops = {
 	.get_ethtool_stats	= qca8k_get_ethtool_stats,
 	.get_sset_count		= qca8k_get_sset_count,
 	.set_ageing_time	= qca8k_set_ageing_time,
-	.support_eee		= dsa_supports_eee,
+	.get_mac_eee		= qca8k_get_mac_eee,
 	.set_mac_eee		= qca8k_set_mac_eee,
 	.port_enable		= qca8k_port_enable,
 	.port_disable		= qca8k_port_disable,

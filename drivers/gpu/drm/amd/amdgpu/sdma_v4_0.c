@@ -129,6 +129,7 @@ static const struct amdgpu_hwip_reg_entry sdma_reg_list_4_0[] = {
 
 static void sdma_v4_0_set_ring_funcs(struct amdgpu_device *adev);
 static void sdma_v4_0_set_buffer_funcs(struct amdgpu_device *adev);
+static void sdma_v4_0_set_vm_pte_funcs(struct amdgpu_device *adev);
 static void sdma_v4_0_set_irq_funcs(struct amdgpu_device *adev);
 static void sdma_v4_0_set_ras_funcs(struct amdgpu_device *adev);
 
@@ -1564,7 +1565,7 @@ static int sdma_v4_0_ring_test_ib(struct amdgpu_ring *ring, long timeout)
 		r = -EINVAL;
 
 err1:
-	amdgpu_ib_free(&ib, NULL);
+	amdgpu_ib_free(adev, &ib, NULL);
 	dma_fence_put(f);
 err0:
 	amdgpu_device_wb_free(adev, index);
@@ -1750,14 +1751,6 @@ static bool sdma_v4_0_fw_support_paging_queue(struct amdgpu_device *adev)
 	}
 }
 
-static const struct amdgpu_vm_pte_funcs sdma_v4_0_vm_pte_funcs = {
-	.copy_pte_num_dw = 7,
-	.copy_pte = sdma_v4_0_vm_copy_pte,
-
-	.write_pte = sdma_v4_0_vm_write_pte,
-	.set_pte_pde = sdma_v4_0_vm_set_pte_pde,
-};
-
 static int sdma_v4_0_early_init(struct amdgpu_ip_block *ip_block)
 {
 	struct amdgpu_device *adev = ip_block->adev;
@@ -1775,7 +1768,8 @@ static int sdma_v4_0_early_init(struct amdgpu_ip_block *ip_block)
 		adev->sdma.has_page_queue = true;
 
 	sdma_v4_0_set_ring_funcs(adev);
-	amdgpu_sdma_set_vm_pte_scheds(adev, &sdma_v4_0_vm_pte_funcs);
+	sdma_v4_0_set_buffer_funcs(adev);
+	sdma_v4_0_set_vm_pte_funcs(adev);
 	sdma_v4_0_set_irq_funcs(adev);
 	sdma_v4_0_set_ras_funcs(adev);
 
@@ -1786,9 +1780,9 @@ static int sdma_v4_0_process_ras_data_cb(struct amdgpu_device *adev,
 		void *err_data,
 		struct amdgpu_iv_entry *entry);
 
-static int sdma_v4_0_late_init(struct amdgpu_ip_block *ip_block)
+static int sdma_v4_0_late_init(void *handle)
 {
-	struct amdgpu_device *adev = ip_block->adev;
+	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 
 	sdma_v4_0_setup_ulv(adev);
 
@@ -1798,11 +1792,11 @@ static int sdma_v4_0_late_init(struct amdgpu_ip_block *ip_block)
 	return 0;
 }
 
-static int sdma_v4_0_sw_init(struct amdgpu_ip_block *ip_block)
+static int sdma_v4_0_sw_init(void *handle)
 {
 	struct amdgpu_ring *ring;
 	int r, i;
-	struct amdgpu_device *adev = ip_block->adev;
+	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 	uint32_t reg_count = ARRAY_SIZE(sdma_reg_list_4_0);
 	uint32_t *ptr;
 
@@ -1935,9 +1929,9 @@ static int sdma_v4_0_sw_init(struct amdgpu_ip_block *ip_block)
 	return r;
 }
 
-static int sdma_v4_0_sw_fini(struct amdgpu_ip_block *ip_block)
+static int sdma_v4_0_sw_fini(void *handle)
 {
-	struct amdgpu_device *adev = ip_block->adev;
+	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 	int i;
 
 	for (i = 0; i < adev->sdma.num_instances; i++) {
@@ -1957,28 +1951,22 @@ static int sdma_v4_0_sw_fini(struct amdgpu_ip_block *ip_block)
 	return 0;
 }
 
-static int sdma_v4_0_hw_init(struct amdgpu_ip_block *ip_block)
+static int sdma_v4_0_hw_init(void *handle)
 {
-	struct amdgpu_device *adev = ip_block->adev;
-	int r;
+	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 
 	if (adev->flags & AMD_IS_APU)
-		amdgpu_dpm_set_powergating_by_smu(adev, AMD_IP_BLOCK_TYPE_SDMA, false, 0);
+		amdgpu_dpm_set_powergating_by_smu(adev, AMD_IP_BLOCK_TYPE_SDMA, false);
 
 	if (!amdgpu_sriov_vf(adev))
 		sdma_v4_0_init_golden_registers(adev);
 
-	r = sdma_v4_0_start(adev);
-	if (r)
-		return r;
-	sdma_v4_0_set_buffer_funcs(adev);
-
-	return 0;
+	return sdma_v4_0_start(adev);
 }
 
-static int sdma_v4_0_hw_fini(struct amdgpu_ip_block *ip_block)
+static int sdma_v4_0_hw_fini(void *handle)
 {
-	struct amdgpu_device *adev = ip_block->adev;
+	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 	int i;
 
 	if (amdgpu_sriov_vf(adev))
@@ -1995,14 +1983,14 @@ static int sdma_v4_0_hw_fini(struct amdgpu_ip_block *ip_block)
 	sdma_v4_0_enable(adev, false);
 
 	if (adev->flags & AMD_IS_APU)
-		amdgpu_dpm_set_powergating_by_smu(adev, AMD_IP_BLOCK_TYPE_SDMA, true, 0);
+		amdgpu_dpm_set_powergating_by_smu(adev, AMD_IP_BLOCK_TYPE_SDMA, true);
 
 	return 0;
 }
 
-static int sdma_v4_0_suspend(struct amdgpu_ip_block *ip_block)
+static int sdma_v4_0_suspend(void *handle)
 {
-	struct amdgpu_device *adev = ip_block->adev;
+	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 
 	/* SMU saves SDMA state for us */
 	if (adev->in_s0ix) {
@@ -2010,12 +1998,12 @@ static int sdma_v4_0_suspend(struct amdgpu_ip_block *ip_block)
 		return 0;
 	}
 
-	return sdma_v4_0_hw_fini(ip_block);
+	return sdma_v4_0_hw_fini(adev);
 }
 
-static int sdma_v4_0_resume(struct amdgpu_ip_block *ip_block)
+static int sdma_v4_0_resume(void *handle)
 {
-	struct amdgpu_device *adev = ip_block->adev;
+	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 
 	/* SMU restores SDMA state for us */
 	if (adev->in_s0ix) {
@@ -2024,12 +2012,12 @@ static int sdma_v4_0_resume(struct amdgpu_ip_block *ip_block)
 		return 0;
 	}
 
-	return sdma_v4_0_hw_init(ip_block);
+	return sdma_v4_0_hw_init(adev);
 }
 
-static bool sdma_v4_0_is_idle(struct amdgpu_ip_block *ip_block)
+static bool sdma_v4_0_is_idle(void *handle)
 {
-	struct amdgpu_device *adev = ip_block->adev;
+	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 	u32 i;
 
 	for (i = 0; i < adev->sdma.num_instances; i++) {
@@ -2042,11 +2030,11 @@ static bool sdma_v4_0_is_idle(struct amdgpu_ip_block *ip_block)
 	return true;
 }
 
-static int sdma_v4_0_wait_for_idle(struct amdgpu_ip_block *ip_block)
+static int sdma_v4_0_wait_for_idle(void *handle)
 {
 	unsigned i, j;
 	u32 sdma[AMDGPU_MAX_SDMA_INSTANCES];
-	struct amdgpu_device *adev = ip_block->adev;
+	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 
 	for (i = 0; i < adev->usec_timeout; i++) {
 		for (j = 0; j < adev->sdma.num_instances; j++) {
@@ -2061,7 +2049,7 @@ static int sdma_v4_0_wait_for_idle(struct amdgpu_ip_block *ip_block)
 	return -ETIMEDOUT;
 }
 
-static int sdma_v4_0_soft_reset(struct amdgpu_ip_block *ip_block)
+static int sdma_v4_0_soft_reset(void *handle)
 {
 	/* todo */
 
@@ -2199,7 +2187,7 @@ static int sdma_v4_0_print_iv_entry(struct amdgpu_device *adev,
 		dev_dbg_ratelimited(adev->dev,
 				    " for process %s pid %d thread %s pid %d\n",
 				    task_info->process_name, task_info->tgid,
-				    task_info->task.comm, task_info->task.pid);
+				    task_info->task_name, task_info->pid);
 		amdgpu_vm_put_task_info(task_info);
 	}
 
@@ -2309,10 +2297,10 @@ static void sdma_v4_0_update_medium_grain_light_sleep(
 	}
 }
 
-static int sdma_v4_0_set_clockgating_state(struct amdgpu_ip_block *ip_block,
+static int sdma_v4_0_set_clockgating_state(void *handle,
 					  enum amd_clockgating_state state)
 {
-	struct amdgpu_device *adev = ip_block->adev;
+	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 
 	if (amdgpu_sriov_vf(adev))
 		return 0;
@@ -2324,10 +2312,10 @@ static int sdma_v4_0_set_clockgating_state(struct amdgpu_ip_block *ip_block,
 	return 0;
 }
 
-static int sdma_v4_0_set_powergating_state(struct amdgpu_ip_block *ip_block,
+static int sdma_v4_0_set_powergating_state(void *handle,
 					  enum amd_powergating_state state)
 {
-	struct amdgpu_device *adev = ip_block->adev;
+	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 
 	switch (amdgpu_ip_version(adev, SDMA0_HWIP, 0)) {
 	case IP_VERSION(4, 1, 0):
@@ -2343,9 +2331,9 @@ static int sdma_v4_0_set_powergating_state(struct amdgpu_ip_block *ip_block,
 	return 0;
 }
 
-static void sdma_v4_0_get_clockgating_state(struct amdgpu_ip_block *ip_block, u64 *flags)
+static void sdma_v4_0_get_clockgating_state(void *handle, u64 *flags)
 {
-	struct amdgpu_device *adev = ip_block->adev;
+	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 	int data;
 
 	if (amdgpu_sriov_vf(adev))
@@ -2362,9 +2350,9 @@ static void sdma_v4_0_get_clockgating_state(struct amdgpu_ip_block *ip_block, u6
 		*flags |= AMD_CG_SUPPORT_SDMA_LS;
 }
 
-static void sdma_v4_0_print_ip_state(struct amdgpu_ip_block *ip_block, struct drm_printer *p)
+static void sdma_v4_0_print_ip_state(void *handle, struct drm_printer *p)
 {
-	struct amdgpu_device *adev = ip_block->adev;
+	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 	int i, j;
 	uint32_t reg_count = ARRAY_SIZE(sdma_reg_list_4_0);
 	uint32_t instance_offset;
@@ -2393,6 +2381,7 @@ static void sdma_v4_0_dump_ip_state(struct amdgpu_ip_block *ip_block)
 	if (!adev->sdma.ip_dump)
 		return;
 
+	amdgpu_gfx_off_ctrl(adev, false);
 	for (i = 0; i < adev->sdma.num_instances; i++) {
 		instance_offset = i * reg_count;
 		for (j = 0; j < reg_count; j++)
@@ -2400,6 +2389,7 @@ static void sdma_v4_0_dump_ip_state(struct amdgpu_ip_block *ip_block)
 				RREG32(sdma_v4_0_get_reg_offset(adev, i,
 				       sdma_reg_list_4_0[j].reg_offset));
 	}
+	amdgpu_gfx_off_ctrl(adev, true);
 }
 
 const struct amd_ip_funcs sdma_v4_0_ip_funcs = {
@@ -2609,31 +2599,46 @@ static void sdma_v4_0_emit_fill_buffer(struct amdgpu_ib *ib,
 }
 
 static const struct amdgpu_buffer_funcs sdma_v4_0_buffer_funcs = {
-	.copy_max_bytes = 1 << 22,
+	.copy_max_bytes = 0x400000,
 	.copy_num_dw = 7,
 	.emit_copy_buffer = sdma_v4_0_emit_copy_buffer,
 
-	.fill_max_bytes = 1 << 22,
-	.fill_num_dw = 5,
-	.emit_fill_buffer = sdma_v4_0_emit_fill_buffer,
-};
-
-static const struct amdgpu_buffer_funcs sdma_v4_4_buffer_funcs = {
-	.copy_max_bytes = 1 << 30,
-	.copy_num_dw = 7,
-	.emit_copy_buffer = sdma_v4_0_emit_copy_buffer,
-
-	.fill_max_bytes = 1 << 30,
+	.fill_max_bytes = 0x400000,
 	.fill_num_dw = 5,
 	.emit_fill_buffer = sdma_v4_0_emit_fill_buffer,
 };
 
 static void sdma_v4_0_set_buffer_funcs(struct amdgpu_device *adev)
 {
-	if (amdgpu_ip_version(adev, SDMA0_HWIP, 0) >= IP_VERSION(4, 4, 0))
-		amdgpu_sdma_set_buffer_funcs_scheds(adev, &sdma_v4_4_buffer_funcs);
+	adev->mman.buffer_funcs = &sdma_v4_0_buffer_funcs;
+	if (adev->sdma.has_page_queue)
+		adev->mman.buffer_funcs_ring = &adev->sdma.instance[0].page;
 	else
-		amdgpu_sdma_set_buffer_funcs_scheds(adev, &sdma_v4_0_buffer_funcs);
+		adev->mman.buffer_funcs_ring = &adev->sdma.instance[0].ring;
+}
+
+static const struct amdgpu_vm_pte_funcs sdma_v4_0_vm_pte_funcs = {
+	.copy_pte_num_dw = 7,
+	.copy_pte = sdma_v4_0_vm_copy_pte,
+
+	.write_pte = sdma_v4_0_vm_write_pte,
+	.set_pte_pde = sdma_v4_0_vm_set_pte_pde,
+};
+
+static void sdma_v4_0_set_vm_pte_funcs(struct amdgpu_device *adev)
+{
+	struct drm_gpu_scheduler *sched;
+	unsigned i;
+
+	adev->vm_manager.vm_pte_funcs = &sdma_v4_0_vm_pte_funcs;
+	for (i = 0; i < adev->sdma.num_instances; i++) {
+		if (adev->sdma.has_page_queue)
+			sched = &adev->sdma.instance[i].page.sched;
+		else
+			sched = &adev->sdma.instance[i].ring.sched;
+		adev->vm_manager.vm_pte_scheds[i] = sched;
+	}
+	adev->vm_manager.vm_pte_num_scheds = adev->sdma.num_instances;
 }
 
 static void sdma_v4_0_get_ras_error_count(uint32_t value,

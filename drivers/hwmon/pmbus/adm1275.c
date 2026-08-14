@@ -18,8 +18,7 @@
 #include <linux/log2.h>
 #include "pmbus.h"
 
-enum chips { adm1075, adm1272, adm1273, adm1275, adm1276, adm1278, adm1281,
-	 adm1293, adm1294, sq24905c };
+enum chips { adm1075, adm1272, adm1275, adm1276, adm1278, adm1281, adm1293, adm1294 };
 
 #define ADM1275_MFR_STATUS_IOUT_WARN2	BIT(0)
 #define ADM1293_MFR_STATUS_VAUX_UV_WARN	BIT(5)
@@ -478,16 +477,14 @@ static int adm1275_read_byte_data(struct i2c_client *client, int page, int reg)
 }
 
 static const struct i2c_device_id adm1275_id[] = {
-	{ .name = "adm1075", .driver_data = adm1075 },
-	{ .name = "adm1272", .driver_data = adm1272 },
-	{ .name = "adm1273", .driver_data = adm1273 },
-	{ .name = "adm1275", .driver_data = adm1275 },
-	{ .name = "adm1276", .driver_data = adm1276 },
-	{ .name = "adm1278", .driver_data = adm1278 },
-	{ .name = "adm1281", .driver_data = adm1281 },
-	{ .name = "adm1293", .driver_data = adm1293 },
-	{ .name = "adm1294", .driver_data = adm1294 },
-	{ .name = "mc09c", .driver_data = sq24905c },
+	{ "adm1075", adm1075 },
+	{ "adm1272", adm1272 },
+	{ "adm1275", adm1275 },
+	{ "adm1276", adm1276 },
+	{ "adm1278", adm1278 },
+	{ "adm1281", adm1281 },
+	{ "adm1293", adm1293 },
+	{ "adm1294", adm1294 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, adm1275_id);
@@ -534,8 +531,7 @@ static int adm1275_probe(struct i2c_client *client)
 		dev_err(&client->dev, "Failed to read Manufacturer ID\n");
 		return ret;
 	}
-	if ((ret != 3 || strncmp(block_buffer, "ADI", 3)) &&
-	    (ret != 2 || strncmp(block_buffer, "SY", 2))) {
+	if (ret != 3 || strncmp(block_buffer, "ADI", 3)) {
 		dev_err(&client->dev, "Unsupported Manufacturer ID\n");
 		return -ENODEV;
 	}
@@ -559,10 +555,9 @@ static int adm1275_probe(struct i2c_client *client)
 			   "Device mismatch: Configured %s, detected %s\n",
 			   client->name, mid->name);
 
-	if (mid->driver_data == adm1272 || mid->driver_data == adm1273 ||
-	    mid->driver_data == adm1278 || mid->driver_data == adm1281 ||
-	    mid->driver_data == adm1293 || mid->driver_data == adm1294 ||
-	    mid->driver_data == sq24905c)
+	if (mid->driver_data == adm1272 || mid->driver_data == adm1278 ||
+	    mid->driver_data == adm1281 || mid->driver_data == adm1293 ||
+	    mid->driver_data == adm1294)
 		config_read_fn = i2c_smbus_read_word_data;
 	else
 		config_read_fn = i2c_smbus_read_byte_data;
@@ -635,7 +630,6 @@ static int adm1275_probe(struct i2c_client *client)
 			  PMBUS_HAVE_VOUT | PMBUS_HAVE_STATUS_VOUT;
 		break;
 	case adm1272:
-	case adm1273:
 		data->have_vout = true;
 		data->have_pin_max = true;
 		data->have_temp_max = true;
@@ -712,7 +706,6 @@ static int adm1275_probe(struct i2c_client *client)
 		break;
 	case adm1278:
 	case adm1281:
-	case sq24905c:
 		data->have_vout = true;
 		data->have_pin_max = true;
 		data->have_temp_max = true;
@@ -839,25 +832,15 @@ static int adm1275_probe(struct i2c_client *client)
 		info->R[PSC_VOLTAGE_OUT] = coefficients[voindex].R;
 	}
 	if (cindex >= 0) {
-		u32 m;
-
 		/* Scale current with sense resistor value */
-		if (unlikely(check_mul_overflow(coefficients[cindex].m, shunt, &m))) {
-			dev_err(&client->dev, "Current coefficient overflow\n");
-			return -EOVERFLOW;
-		}
-		info->m[PSC_CURRENT_OUT] = m / 1000;
+		info->m[PSC_CURRENT_OUT] =
+			coefficients[cindex].m * shunt / 1000;
 		info->b[PSC_CURRENT_OUT] = coefficients[cindex].b;
 		info->R[PSC_CURRENT_OUT] = coefficients[cindex].R;
 	}
 	if (pindex >= 0) {
-		u32 m;
-
-		if (unlikely(check_mul_overflow(coefficients[pindex].m, shunt, &m))) {
-			dev_err(&client->dev, "Power coefficient overflow\n");
-			return -EOVERFLOW;
-		}
-		info->m[PSC_POWER] = m / 1000;
+		info->m[PSC_POWER] =
+			coefficients[pindex].m * shunt / 1000;
 		info->b[PSC_POWER] = coefficients[pindex].b;
 		info->R[PSC_POWER] = coefficients[pindex].R;
 	}
@@ -883,4 +866,4 @@ module_i2c_driver(adm1275_driver);
 MODULE_AUTHOR("Guenter Roeck");
 MODULE_DESCRIPTION("PMBus driver for Analog Devices ADM1275 and compatibles");
 MODULE_LICENSE("GPL");
-MODULE_IMPORT_NS("PMBUS");
+MODULE_IMPORT_NS(PMBUS);

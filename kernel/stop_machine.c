@@ -248,9 +248,8 @@ static int multi_cpu_stop(void *data)
 			 * be detected and reported on their side.
 			 */
 			touch_nmi_watchdog();
-			/* Also suppress RCU CPU stall warnings. */
-			rcu_momentary_eqs();
 		}
+		rcu_momentary_eqs();
 	} while (curstate != MULTI_STOP_EXIT);
 
 	local_irq_restore(flags);
@@ -633,11 +632,6 @@ int stop_machine(cpu_stop_fn_t fn, void *data, const struct cpumask *cpus)
 EXPORT_SYMBOL_GPL(stop_machine);
 
 #ifdef CONFIG_SCHED_SMT
-/*
- * INTEL_IFS is the only user of this API. That selftest can
- * only be compiled if SMP=y. On x86 it selects SCHED_SMT.
- * Keep the ifdefs for now.
- */
 int stop_core_cpuslocked(unsigned int cpu, cpu_stop_fn_t fn, void *data)
 {
 	const struct cpumask *smt_mask = cpu_smt_mask(cpu);

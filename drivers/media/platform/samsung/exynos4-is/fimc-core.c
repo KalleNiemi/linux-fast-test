@@ -1020,15 +1020,11 @@ err_sclk:
 static int fimc_runtime_resume(struct device *dev)
 {
 	struct fimc_dev *fimc =	dev_get_drvdata(dev);
-	int ret;
 
 	dbg("fimc%d: state: 0x%lx", fimc->id, fimc->state);
 
 	/* Enable clocks and perform basic initialization */
-	ret = clk_enable(fimc->clock[CLK_GATE]);
-	if (ret)
-		return ret;
-
+	clk_enable(fimc->clock[CLK_GATE]);
 	fimc_hw_reset(fimc);
 
 	/* Resume the capture or mem-to-mem device */
@@ -1161,7 +1157,7 @@ static const struct dev_pm_ops fimc_pm_ops = {
 
 static struct platform_driver fimc_driver = {
 	.probe		= fimc_probe,
-	.remove		= fimc_remove,
+	.remove_new	= fimc_remove,
 	.driver = {
 		.of_match_table = fimc_of_match,
 		.name		= FIMC_DRIVER_NAME,

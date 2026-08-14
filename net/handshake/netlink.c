@@ -92,7 +92,8 @@ int handshake_nl_accept_doit(struct sk_buff *skb, struct genl_info *info)
 	struct net *net = sock_net(skb->sk);
 	struct handshake_net *hn = handshake_pernet(net);
 	struct handshake_req *req = NULL;
-	int class, err;
+	struct socket *sock;
+	int class, fd, err;
 
 	err = -EOPNOTSUPP;
 	if (!hn)
@@ -105,26 +106,29 @@ int handshake_nl_accept_doit(struct sk_buff *skb, struct genl_info *info)
 
 	err = -EAGAIN;
 	req = handshake_req_next(hn, class);
-	if (req) {
-		FD_PREPARE(fdf, O_CLOEXEC, req->hr_file);
-		if (fdf.err) {
-			fput(req->hr_file); /* drop ref from handshake_req_next() */
-			err = fdf.err;
-			goto out_complete;
-		}
+	if (!req)
+		goto out_status;
 
-		err = req->hr_proto->hp_accept(req, info, fd_prepare_fd(fdf));
-		if (err)
-			goto out_complete; /* Automatic cleanup handles fput */
-
-		trace_handshake_cmd_accept(net, req, req->hr_sk, fd_prepare_fd(fdf));
-		fd_publish(fdf);
-		return 0;
+	sock = req->hr_sk->sk_socket;
+	fd = get_unused_fd_flags(O_CLOEXEC);
+	if (fd < 0) {
+		err = fd;
+		goto out_complete;
 	}
 
+	err = req->hr_proto->hp_accept(req, info, fd);
+	if (err) {
+		put_unused_fd(fd);
+		goto out_complete;
+	}
+
+	fd_install(fd, get_file(sock->file));
+
+	trace_handshake_cmd_accept(net, req, req->hr_sk, fd);
+	return 0;
+
 out_complete:
-	if (req)
-		handshake_complete(req, -EIO, NULL);
+	handshake_complete(req, -EIO, NULL);
 out_status:
 	trace_handshake_cmd_accept_err(net, req, NULL, err);
 	return err;

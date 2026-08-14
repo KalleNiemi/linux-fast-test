@@ -5,6 +5,9 @@
 //
 // Copyright 2019 SolidRun Ltd.
 
+/dts-v1/;
+
+#include "fsl-lx2160a-cex7.dtsi"
 #include <dt-bindings/input/linux-event-codes.h>
 
 / {
@@ -95,14 +98,6 @@
 	status = "okay";
 };
 
-&pcie3 {
-	status = "okay";
-};
-
-&pcie5 {
-	status = "okay";
-};
-
 &pcs_mdio7 {
 	status = "okay";
 };
@@ -140,9 +135,5 @@
 };
 
 &uart1 {
-	status = "okay";
-};
-
-&usb0 {
 	status = "okay";
 };

@@ -106,7 +106,7 @@ struct crypto4xx_core_device {
 	struct crypto4xx_device *dev;
 	struct hwrng *trng;
 	u32 int_status;
-	int irq;
+	u32 irq;
 	struct tasklet_struct tasklet;
 	spinlock_t lock;
 };
@@ -141,12 +141,6 @@ struct crypto4xx_alg {
 	struct crypto4xx_device *dev;
 };
 
-#if IS_ENABLED(CONFIG_CC_IS_GCC) && CONFIG_GCC_VERSION >= 120000
-#define BUILD_PD_ACCESS __attribute__((access(read_only, 6, 7)))
-#else
-#define BUILD_PD_ACCESS
-#endif
-
 int crypto4xx_alloc_sa(struct crypto4xx_ctx *ctx, u32 size);
 void crypto4xx_free_sa(struct crypto4xx_ctx *ctx);
 int crypto4xx_build_pd(struct crypto_async_request *req,
@@ -154,11 +148,11 @@ int crypto4xx_build_pd(struct crypto_async_request *req,
 		       struct scatterlist *src,
 		       struct scatterlist *dst,
 		       const unsigned int datalen,
-		       const void *iv, const u32 iv_len,
+		       const __le32 *iv, const u32 iv_len,
 		       const struct dynamic_sa_ctl *sa,
 		       const unsigned int sa_len,
 		       const unsigned int assoclen,
-		       struct scatterlist *dst_tmp) BUILD_PD_ACCESS;
+		       struct scatterlist *dst_tmp);
 int crypto4xx_setkey_aes_cbc(struct crypto_skcipher *cipher,
 			     const u8 *key, unsigned int keylen);
 int crypto4xx_setkey_aes_ctr(struct crypto_skcipher *cipher,

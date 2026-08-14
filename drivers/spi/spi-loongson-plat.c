@@ -3,6 +3,7 @@
 // Copyright (C) 2023 Loongson Technology Corporation Limited
 
 #include <linux/err.h>
+#include <linux/mod_devicetable.h>
 #include <linux/platform_device.h>
 
 #include "spi-loongson.h"
@@ -43,4 +44,4 @@ module_platform_driver(loongson_spi_plat_driver);
 
 MODULE_DESCRIPTION("Loongson spi platform driver");
 MODULE_LICENSE("GPL");
-MODULE_IMPORT_NS("SPI_LOONGSON_CORE");
+MODULE_IMPORT_NS(SPI_LOONGSON_CORE);

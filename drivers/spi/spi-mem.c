@@ -12,9 +12,6 @@
 #include <linux/spi/spi-mem.h>
 #include <linux/sched/task_stack.h>
 
-#define CREATE_TRACE_POINTS
-#include <trace/events/spi-mem.h>
-
 #include "internals.h"
 
 #define SPI_MEM_MAX_BUSWIDTH		8
@@ -279,20 +276,10 @@ static bool spi_mem_internal_supports_op(struct spi_mem *mem,
  */
 bool spi_mem_supports_op(struct spi_mem *mem, const struct spi_mem_op *op)
 {
-	struct spi_mem_op eval_op = *op;
-
-	/*
-	 * Work on a local copy; this is a pure capability check and must
-	 * not modify the caller's op. Stored templates with max_freq == 0
-	 * must remain unset so their frequency is always re-capped to the
-	 * current device maximum at execution time.
-	 */
-	spi_mem_adjust_op_freq(mem, &eval_op);
-
-	if (spi_mem_check_op(&eval_op))
+	if (spi_mem_check_op(op))
 		return false;
 
-	return spi_mem_internal_supports_op(mem, &eval_op);
+	return spi_mem_internal_supports_op(mem, op);
 }
 EXPORT_SYMBOL_GPL(spi_mem_supports_op);
 
@@ -401,17 +388,6 @@ int spi_mem_exec_op(struct spi_mem *mem, const struct spi_mem_op *op)
 	/* Make sure the operation frequency is correct before going futher */
 	spi_mem_adjust_op_freq(mem, (struct spi_mem_op *)op);
 
-	dev_vdbg(&mem->spi->dev, "[cmd: 0x%02x][%dB addr: %#8llx][%2dB dummy][%4dB data %s] %d%c-%d%c-%d%c-%d%c @ %uHz\n",
-		 op->cmd.opcode,
-		 op->addr.nbytes, (op->addr.nbytes ? op->addr.val : 0),
-		 op->dummy.nbytes,
-		 op->data.nbytes, (op->data.nbytes ? (op->data.dir == SPI_MEM_DATA_IN ? " read" : "write") : "     "),
-		 op->cmd.buswidth, op->cmd.dtr ? 'D' : 'S',
-		 op->addr.buswidth, op->addr.dtr ? 'D' : 'S',
-		 op->dummy.buswidth, op->dummy.dtr ? 'D' : 'S',
-		 op->data.buswidth, op->data.dtr ? 'D' : 'S',
-		 op->max_freq ? op->max_freq : mem->spi->max_speed_hz);
-
 	ret = spi_mem_check_op(op);
 	if (ret)
 		return ret;
@@ -424,9 +400,7 @@ int spi_mem_exec_op(struct spi_mem *mem, const struct spi_mem_op *op)
 		if (ret)
 			return ret;
 
-		trace_spi_mem_start_op(mem, op);
 		ret = ctlr->mem_ops->exec_op(mem, op);
-		trace_spi_mem_stop_op(mem, op);
 
 		spi_mem_access_end(mem);
 
@@ -599,62 +573,10 @@ void spi_mem_adjust_op_freq(struct spi_mem *mem, struct spi_mem_op *op)
 }
 EXPORT_SYMBOL_GPL(spi_mem_adjust_op_freq);
 
-/**
- * spi_mem_calc_op_duration() - Derives the theoretical length (in ns) of an
- *			        operation. This helps finding the best variant
- *			        among a list of possible choices.
- * @mem: the SPI memory
- * @op: the operation to benchmark
- *
- * Some chips have per-op frequency limitations, PCBs usually have their own
- * limitations as well, and controllers can support dual, quad or even octal
- * modes, sometimes in DTR. All these combinations make it impossible to
- * statically list the best combination for all situations. If we want something
- * accurate, all these combinations should be rated (eg. with a time estimate)
- * and the best pick should be taken based on these calculations.
- *
- * Returns a ns estimate for the time this op would take, except if no
- * frequency limit has been set, in this case we return the number of
- * cycles nevertheless to allow callers to distinguish which operation
- * would be the fastest at iso-frequency.
- */
-u64 spi_mem_calc_op_duration(struct spi_mem *mem, struct spi_mem_op *op)
-{
-	u64 ncycles = 0;
-	u64 ps_per_cycles, duration;
-
-	spi_mem_adjust_op_freq(mem, op);
-
-	if (op->max_freq) {
-		ps_per_cycles = 1000000000000ULL;
-		do_div(ps_per_cycles, op->max_freq);
-	} else {
-		/* In this case, the unit is no longer a time unit */
-		ps_per_cycles = 1;
-	}
-
-	ncycles += ((op->cmd.nbytes * 8) / op->cmd.buswidth) / (op->cmd.dtr ? 2 : 1);
-	ncycles += ((op->addr.nbytes * 8) / op->addr.buswidth) / (op->addr.dtr ? 2 : 1);
-
-	/* Dummy bytes are optional for some SPI flash memory operations */
-	if (op->dummy.nbytes)
-		ncycles += ((op->dummy.nbytes * 8) / op->dummy.buswidth) / (op->dummy.dtr ? 2 : 1);
-
-	ncycles += ((op->data.nbytes * 8) / op->data.buswidth) / (op->data.dtr ? 2 : 1);
-
-	/* Derive the duration in ps */
-	duration = ncycles * ps_per_cycles;
-	/* Convert into ns */
-	do_div(duration, 1000);
-
-	return duration;
-}
-EXPORT_SYMBOL_GPL(spi_mem_calc_op_duration);
-
 static ssize_t spi_mem_no_dirmap_read(struct spi_mem_dirmap_desc *desc,
 				      u64 offs, size_t len, void *buf)
 {
-	struct spi_mem_op op = *desc->info.op_tmpl;
+	struct spi_mem_op op = desc->info.op_tmpl;
 	int ret;
 
 	op.addr.val = desc->info.offset + offs;
@@ -674,7 +596,7 @@ static ssize_t spi_mem_no_dirmap_read(struct spi_mem_dirmap_desc *desc,
 static ssize_t spi_mem_no_dirmap_write(struct spi_mem_dirmap_desc *desc,
 				       u64 offs, size_t len, const void *buf)
 {
-	struct spi_mem_op op = *desc->info.op_tmpl;
+	struct spi_mem_op op = desc->info.op_tmpl;
 	int ret;
 
 	op.addr.val = desc->info.offset + offs;
@@ -713,37 +635,19 @@ spi_mem_dirmap_create(struct spi_mem *mem,
 	int ret = -ENOTSUPP;
 
 	/* Make sure the number of address cycles is between 1 and 8 bytes. */
-	if (!info->primary_op_tmpl.addr.nbytes || info->primary_op_tmpl.addr.nbytes > 8)
+	if (!info->op_tmpl.addr.nbytes || info->op_tmpl.addr.nbytes > 8)
 		return ERR_PTR(-EINVAL);
 
 	/* data.dir should either be SPI_MEM_DATA_IN or SPI_MEM_DATA_OUT. */
-	if (info->primary_op_tmpl.data.dir == SPI_MEM_NO_DATA)
+	if (info->op_tmpl.data.dir == SPI_MEM_NO_DATA)
 		return ERR_PTR(-EINVAL);
 
-	/* Apply similar constraints to the secondary template */
-	if (info->secondary_op_tmpl.cmd.opcode) {
-		if (!info->secondary_op_tmpl.addr.nbytes ||
-		    info->secondary_op_tmpl.addr.nbytes > 8)
-			return ERR_PTR(-EINVAL);
-
-		if (info->secondary_op_tmpl.data.dir == SPI_MEM_NO_DATA)
-			return ERR_PTR(-EINVAL);
-
-		if (!spi_mem_supports_op(mem, &info->secondary_op_tmpl))
-			return ERR_PTR(-EOPNOTSUPP);
-
-		if (ctlr->mem_ops && ctlr->mem_ops->dirmap_create &&
-		    !spi_mem_controller_is_capable(ctlr, secondary_op_tmpl))
-			return ERR_PTR(-EOPNOTSUPP);
-	}
-
-	desc = kzalloc_obj(*desc);
+	desc = kzalloc(sizeof(*desc), GFP_KERNEL);
 	if (!desc)
 		return ERR_PTR(-ENOMEM);
 
 	desc->mem = mem;
 	desc->info = *info;
-	desc->info.op_tmpl = &desc->info.primary_op_tmpl;
 	if (ctlr->mem_ops && ctlr->mem_ops->dirmap_create) {
 		ret = spi_mem_access_start(mem);
 		if (ret) {
@@ -758,7 +662,7 @@ spi_mem_dirmap_create(struct spi_mem *mem,
 
 	if (ret) {
 		desc->nodirmap = true;
-		if (!spi_mem_supports_op(desc->mem, &desc->info.primary_op_tmpl))
+		if (!spi_mem_supports_op(desc->mem, &desc->info.op_tmpl))
 			ret = -EOPNOTSUPP;
 		else
 			ret = 0;
@@ -882,7 +786,7 @@ ssize_t spi_mem_dirmap_read(struct spi_mem_dirmap_desc *desc,
 	struct spi_controller *ctlr = desc->mem->spi->controller;
 	ssize_t ret;
 
-	if (desc->info.op_tmpl->data.dir != SPI_MEM_DATA_IN)
+	if (desc->info.op_tmpl.data.dir != SPI_MEM_DATA_IN)
 		return -EINVAL;
 
 	if (!len)
@@ -928,7 +832,7 @@ ssize_t spi_mem_dirmap_write(struct spi_mem_dirmap_desc *desc,
 	struct spi_controller *ctlr = desc->mem->spi->controller;
 	ssize_t ret;
 
-	if (desc->info.op_tmpl->data.dir != SPI_MEM_DATA_OUT)
+	if (desc->info.op_tmpl.data.dir != SPI_MEM_DATA_OUT)
 		return -EINVAL;
 
 	if (!len)

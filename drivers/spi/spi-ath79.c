@@ -180,6 +180,7 @@ static int ath79_spi_probe(struct platform_device *pdev)
 	}
 
 	sp = spi_controller_get_devdata(host);
+	host->dev.of_node = pdev->dev.of_node;
 	platform_set_drvdata(pdev, sp);
 
 	host->use_gpio_descriptors = true;
@@ -252,7 +253,7 @@ MODULE_DEVICE_TABLE(of, ath79_spi_of_match);
 
 static struct platform_driver ath79_spi_driver = {
 	.probe		= ath79_spi_probe,
-	.remove		= ath79_spi_remove,
+	.remove_new	= ath79_spi_remove,
 	.shutdown	= ath79_spi_shutdown,
 	.driver		= {
 		.name	= DRV_NAME,

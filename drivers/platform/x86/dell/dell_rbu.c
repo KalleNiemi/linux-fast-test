@@ -46,7 +46,7 @@
 MODULE_AUTHOR("Abhay Salunke <abhay_salunke@dell.com>");
 MODULE_DESCRIPTION("Driver for updating BIOS image on DELL systems");
 MODULE_LICENSE("GPL");
-MODULE_VERSION("3.3");
+MODULE_VERSION("3.2");
 
 #define BIOS_SCAN_LIMIT 0xffffffff
 #define MAX_IMAGE_LENGTH 16
@@ -78,21 +78,21 @@ struct packet_data {
 	int ordernum;
 };
 
-static struct list_head packet_data_list;
+static struct packet_data packet_data_head;
 
 static struct platform_device *rbu_device;
 static int context;
 
 static void init_packet_head(void)
 {
-	INIT_LIST_HEAD(&packet_data_list);
+	INIT_LIST_HEAD(&packet_data_head.list);
 	rbu_data.packet_read_count = 0;
 	rbu_data.num_packets = 0;
 	rbu_data.packetsize = 0;
 	rbu_data.imagesize = 0;
 }
 
-static int create_packet(void *data, size_t length) __must_hold(&rbu_data.lock)
+static int create_packet(void *data, size_t length)
 {
 	struct packet_data *newpacket;
 	int ordernum = 0;
@@ -112,7 +112,7 @@ static int create_packet(void *data, size_t length) __must_hold(&rbu_data.lock)
 
 	spin_unlock(&rbu_data.lock);
 
-	newpacket = kzalloc_obj(struct packet_data);
+	newpacket = kzalloc(sizeof (struct packet_data), GFP_KERNEL);
 
 	if (!newpacket) {
 		pr_warn("failed to allocate new packet\n");
@@ -184,7 +184,7 @@ static int create_packet(void *data, size_t length) __must_hold(&rbu_data.lock)
 
 	/* initialize the newly created packet headers */
 	INIT_LIST_HEAD(&newpacket->list);
-	list_add_tail(&newpacket->list, &packet_data_list);
+	list_add_tail(&newpacket->list, &packet_data_head.list);
 
 	memcpy(newpacket->data, data, length);
 
@@ -233,8 +233,7 @@ static int packetize_data(const u8 *data, size_t length)
 			done = 1;
 		}
 
-		rc = create_packet(temp, packet_length);
-		if (rc)
+		if ((rc = create_packet(temp, packet_length)))
 			return rc;
 
 		pr_debug("%p:%td\n", temp, (end - temp));
@@ -278,7 +277,7 @@ static int do_packet_read(char *data, struct packet_data *newpacket,
 	return bytes_copied;
 }
 
-static int packet_read_list(char *data, size_t *pread_length)
+static int packet_read_list(char *data, size_t * pread_length)
 {
 	struct packet_data *newpacket;
 	int temp_count = 0;
@@ -294,7 +293,7 @@ static int packet_read_list(char *data, size_t *pread_length)
 	remaining_bytes = *pread_length;
 	bytes_read = rbu_data.packet_read_count;
 
-	list_for_each_entry(newpacket, &packet_data_list, list) {
+	list_for_each_entry(newpacket, &packet_data_head.list, list) {
 		bytes_copied = do_packet_read(pdest, newpacket,
 			remaining_bytes, bytes_read, &temp_count);
 		remaining_bytes -= bytes_copied;
@@ -317,7 +316,7 @@ static void packet_empty_list(void)
 {
 	struct packet_data *newpacket, *tmp;
 
-	list_for_each_entry_safe(newpacket, tmp, &packet_data_list, list) {
+	list_for_each_entry_safe(newpacket, tmp, &packet_data_head.list, list) {
 		list_del(&newpacket->list);
 
 		/*
@@ -447,8 +446,7 @@ static ssize_t read_packet_data(char *buffer, loff_t pos, size_t count)
 	bytes_left = rbu_data.imagesize - pos;
 	data_length = min(bytes_left, count);
 
-	retval = packet_read_list(ptempBuf, &data_length);
-	if (retval < 0)
+	if ((retval = packet_read_list(ptempBuf, &data_length)) < 0)
 		goto read_rbu_data_exit;
 
 	if ((pos + count) > rbu_data.imagesize) {
@@ -478,7 +476,7 @@ static ssize_t read_rbu_mono_data(char *buffer, loff_t pos, size_t count)
 }
 
 static ssize_t data_read(struct file *filp, struct kobject *kobj,
-			 const struct bin_attribute *bin_attr,
+			 struct bin_attribute *bin_attr,
 			 char *buffer, loff_t pos, size_t count)
 {
 	ssize_t ret_count = 0;
@@ -495,7 +493,7 @@ static ssize_t data_read(struct file *filp, struct kobject *kobj,
 	spin_unlock(&rbu_data.lock);
 	return ret_count;
 }
-static const BIN_ATTR_RO(data, 0);
+static BIN_ATTR_RO(data, 0);
 
 static void callbackfn_rbu(const struct firmware *fw, void *context)
 {
@@ -533,7 +531,7 @@ static void callbackfn_rbu(const struct firmware *fw, void *context)
 }
 
 static ssize_t image_type_read(struct file *filp, struct kobject *kobj,
-			       const struct bin_attribute *bin_attr,
+			       struct bin_attribute *bin_attr,
 			       char *buffer, loff_t pos, size_t count)
 {
 	int size = 0;
@@ -543,7 +541,7 @@ static ssize_t image_type_read(struct file *filp, struct kobject *kobj,
 }
 
 static ssize_t image_type_write(struct file *filp, struct kobject *kobj,
-				const struct bin_attribute *bin_attr,
+				struct bin_attribute *bin_attr,
 				char *buffer, loff_t pos, size_t count)
 {
 	int rc = count;
@@ -562,9 +560,9 @@ static ssize_t image_type_write(struct file *filp, struct kobject *kobj,
 		buffer[count] = '\0';
 
 	if (strstr(buffer, "mono"))
-		strscpy(image_type, "mono");
+		strcpy(image_type, "mono");
 	else if (strstr(buffer, "packet"))
-		strscpy(image_type, "packet");
+		strcpy(image_type, "packet");
 	else if (strstr(buffer, "init")) {
 		/*
 		 * If due to the user error the driver gets in a bad
@@ -600,10 +598,10 @@ static ssize_t image_type_write(struct file *filp, struct kobject *kobj,
 
 	return rc;
 }
-static const BIN_ATTR_RW(image_type, 0);
+static BIN_ATTR_RW(image_type, 0);
 
 static ssize_t packet_size_read(struct file *filp, struct kobject *kobj,
-				const struct bin_attribute *bin_attr,
+				struct bin_attribute *bin_attr,
 				char *buffer, loff_t pos, size_t count)
 {
 	int size = 0;
@@ -616,7 +614,7 @@ static ssize_t packet_size_read(struct file *filp, struct kobject *kobj,
 }
 
 static ssize_t packet_size_write(struct file *filp, struct kobject *kobj,
-				 const struct bin_attribute *bin_attr,
+				 struct bin_attribute *bin_attr,
 				 char *buffer, loff_t pos, size_t count)
 {
 	unsigned long temp;
@@ -632,9 +630,9 @@ static ssize_t packet_size_write(struct file *filp, struct kobject *kobj,
 	spin_unlock(&rbu_data.lock);
 	return count;
 }
-static const BIN_ATTR_RW(packet_size, 0);
+static BIN_ATTR_RW(packet_size, 0);
 
-static const struct bin_attribute *const rbu_bin_attrs[] = {
+static struct bin_attribute *rbu_bin_attrs[] = {
 	&bin_attr_data,
 	&bin_attr_image_type,
 	&bin_attr_packet_size,

@@ -344,8 +344,8 @@ static int atmel_tcb_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 		return 0;
 	}
 
-	period = min(state->period, INT_MAX);
-	duty_cycle = min(state->duty_cycle, INT_MAX);
+	period = state->period < INT_MAX ? state->period : INT_MAX;
+	duty_cycle = state->duty_cycle < INT_MAX ? state->duty_cycle : INT_MAX;
 
 	ret = atmel_tcb_pwm_config(chip, pwm, duty_cycle, period);
 	if (ret)
@@ -443,7 +443,7 @@ static int atmel_tcb_pwm_probe(struct platform_device *pdev)
 
 	err = clk_prepare_enable(tcbpwmc->slow_clk);
 	if (err)
-		goto err_disable_clk;
+		goto err_disable_clk;;
 
 	err = clk_rate_exclusive_get(tcbpwmc->clk);
 	if (err)

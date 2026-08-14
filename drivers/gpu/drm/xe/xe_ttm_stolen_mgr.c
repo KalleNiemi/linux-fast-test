@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 /*
  * Copyright © 2021-2023 Intel Corporation
- * Copyright (C) 2021-2022 Red Hat
+ * Copyright (C) 2021-2002 Red Hat
  */
 
 #include <drm/drm_managed.h>
@@ -17,12 +17,31 @@
 #include "regs/xe_regs.h"
 #include "xe_bo.h"
 #include "xe_device.h"
+#include "xe_gt.h"
 #include "xe_gt_printk.h"
 #include "xe_mmio.h"
+#include "xe_res_cursor.h"
 #include "xe_sriov.h"
 #include "xe_ttm_stolen_mgr.h"
-#include "xe_vram.h"
+#include "xe_ttm_vram_mgr.h"
 #include "xe_wa.h"
+
+struct xe_ttm_stolen_mgr {
+	struct xe_ttm_vram_mgr base;
+
+	/* PCI base offset */
+	resource_size_t io_base;
+	/* GPU base offset */
+	resource_size_t stolen_base;
+
+	void __iomem *mapping;
+};
+
+static inline struct xe_ttm_stolen_mgr *
+to_stolen_mgr(struct ttm_resource_manager *man)
+{
+	return container_of(man, struct xe_ttm_stolen_mgr, base.manager);
+}
 
 /**
  * xe_ttm_stolen_cpu_access_needs_ggtt() - If we can't directly CPU access
@@ -43,7 +62,7 @@ static u32 get_wopcm_size(struct xe_device *xe)
 	u32 wopcm_size;
 	u64 val;
 
-	val = xe_mmio_read64_2x32(xe_root_tile_mmio(xe), STOLEN_RESERVED);
+	val = xe_mmio_read64_2x32(xe_root_mmio_gt(xe), STOLEN_RESERVED);
 	val = REG_FIELD_GET64(WOPCM_SIZE_MASK, val);
 
 	switch (val) {
@@ -61,18 +80,17 @@ static u32 get_wopcm_size(struct xe_device *xe)
 	return wopcm_size;
 }
 
-static u64 detect_bar2_dgfx(struct xe_device *xe, struct xe_ttm_stolen_mgr *mgr)
+static s64 detect_bar2_dgfx(struct xe_device *xe, struct xe_ttm_stolen_mgr *mgr)
 {
-	struct xe_vram_region *tile_vram = xe_device_get_root_tile(xe)->mem.vram;
-	resource_size_t tile_io_start = xe_vram_region_io_start(tile_vram);
-	struct xe_mmio *mmio = xe_root_tile_mmio(xe);
+	struct xe_tile *tile = xe_device_get_root_tile(xe);
+	struct xe_gt *mmio = xe_root_mmio_gt(xe);
 	struct pci_dev *pdev = to_pci_dev(xe->drm.dev);
 	u64 stolen_size, wopcm_size;
 	u64 tile_offset;
 	u64 tile_size;
 
-	tile_offset = tile_io_start - xe_vram_region_io_start(xe->mem.vram);
-	tile_size = xe_vram_region_actual_physical_size(tile_vram);
+	tile_offset = tile->mem.vram.io_start - xe->mem.vram.io_start;
+	tile_size = tile->mem.vram.actual_physical_size;
 
 	/* Use DSM base address instead for stolen memory */
 	mgr->stolen_base = (xe_mmio_read64_2x32(mmio, DSMBASE) & BDSM_MASK) - tile_offset;
@@ -85,13 +103,11 @@ static u64 detect_bar2_dgfx(struct xe_device *xe, struct xe_ttm_stolen_mgr *mgr)
 		return 0;
 
 	stolen_size = tile_size - mgr->stolen_base;
-
-	xe_assert(xe, stolen_size >= wopcm_size);
 	stolen_size -= wopcm_size;
 
 	/* Verify usage fits in the actual resource available */
 	if (mgr->stolen_base + stolen_size <= pci_resource_len(pdev, LMEM_BAR))
-		mgr->io_base = tile_io_start + mgr->stolen_base;
+		mgr->io_base = tile->mem.vram.io_start + mgr->stolen_base;
 
 	/*
 	 * There may be few KB of platform dependent reserved memory at the end
@@ -109,7 +125,7 @@ static u32 detect_bar2_integrated(struct xe_device *xe, struct xe_ttm_stolen_mgr
 	u32 stolen_size, wopcm_size;
 	u32 ggc, gms;
 
-	ggc = xe_mmio_read32(xe_root_tile_mmio(xe), GGC);
+	ggc = xe_mmio_read32(xe_root_mmio_gt(xe), GGC);
 
 	/*
 	 * Check GGMS: it should be fixed 0x3 (8MB), which corresponds to the
@@ -148,8 +164,8 @@ static u32 detect_bar2_integrated(struct xe_device *xe, struct xe_ttm_stolen_mgr
 
 	stolen_size -= wopcm_size;
 
-	if (media_gt && XE_GT_WA(media_gt, 14019821291)) {
-		u64 gscpsmi_base = xe_mmio_read64_2x32(&media_gt->mmio, GSCPSMI_BASE)
+	if (media_gt && XE_WA(media_gt, 14019821291)) {
+		u64 gscpsmi_base = xe_mmio_read64_2x32(media_gt, GSCPSMI_BASE)
 			& ~GENMASK_ULL(5, 0);
 
 		/*
@@ -191,19 +207,12 @@ static u64 detect_stolen(struct xe_device *xe, struct xe_ttm_stolen_mgr *mgr)
 #endif
 }
 
-static void xe_ttm_stolen_mgr_fini(struct drm_device *dev, void *arg)
-{
-	struct xe_device *xe = to_xe_device(dev);
-
-	ttm_range_man_fini_nocheck(&xe->ttm, XE_PL_STOLEN);
-}
-
 int xe_ttm_stolen_mgr_init(struct xe_device *xe)
 {
 	struct pci_dev *pdev = to_pci_dev(xe->drm.dev);
 	struct xe_ttm_stolen_mgr *mgr;
 	u64 stolen_size, io_size;
-	int ret;
+	int err;
 
 	mgr = drmm_kzalloc(&xe->drm, sizeof(*mgr), GFP_KERNEL);
 	if (!mgr)
@@ -232,12 +241,12 @@ int xe_ttm_stolen_mgr_init(struct xe_device *xe)
 	if (mgr->io_base && !xe_ttm_stolen_cpu_access_needs_ggtt(xe))
 		io_size = stolen_size;
 
-	ret = ttm_range_man_init_nocheck(&xe->ttm, XE_PL_STOLEN, false,
-					 stolen_size >> PAGE_SHIFT);
-	if (ret)
-		return ret;
-
-	xe->mem.stolen_mgr = mgr;
+	err = __xe_ttm_vram_mgr_init(xe, &mgr->base, XE_PL_STOLEN, stolen_size,
+				     io_size, PAGE_SIZE);
+	if (err) {
+		drm_dbg_kms(&xe->drm, "Stolen mgr init failed: %i\n", err);
+		return err;
+	}
 
 	drm_dbg_kms(&xe->drm, "Initialized stolen memory support with %llu bytes\n",
 		    stolen_size);
@@ -245,32 +254,36 @@ int xe_ttm_stolen_mgr_init(struct xe_device *xe)
 	if (io_size)
 		mgr->mapping = devm_ioremap_wc(&pdev->dev, mgr->io_base, io_size);
 
-	return drmm_add_action_or_reset(&xe->drm, xe_ttm_stolen_mgr_fini, mgr);
+	return 0;
 }
 
 u64 xe_ttm_stolen_io_offset(struct xe_bo *bo, u32 offset)
 {
 	struct xe_device *xe = xe_bo_device(bo);
-	struct xe_ttm_stolen_mgr *mgr = xe->mem.stolen_mgr;
+	struct ttm_resource_manager *ttm_mgr = ttm_manager_type(&xe->ttm, XE_PL_STOLEN);
+	struct xe_ttm_stolen_mgr *mgr = to_stolen_mgr(ttm_mgr);
+	struct xe_res_cursor cur;
 
 	XE_WARN_ON(!mgr->io_base);
 
 	if (xe_ttm_stolen_cpu_access_needs_ggtt(xe))
 		return mgr->io_base + xe_bo_ggtt_addr(bo) + offset;
 
-	/* Range allocator: res->start is in pages. */
-	return mgr->io_base + (bo->ttm.resource->start << PAGE_SHIFT) + offset;
+	xe_res_first(bo->ttm.resource, offset, 4096, &cur);
+	return mgr->io_base + cur.start;
 }
 
 static int __xe_ttm_stolen_io_mem_reserve_bar2(struct xe_device *xe,
 					       struct xe_ttm_stolen_mgr *mgr,
 					       struct ttm_resource *mem)
 {
+	struct xe_res_cursor cur;
+
 	if (!mgr->io_base)
 		return -EIO;
 
-	/* Range allocator always produces contiguous allocations. */
-	mem->bus.offset = mem->start << PAGE_SHIFT;
+	xe_res_first(mem, 0, 4096, &cur);
+	mem->bus.offset = cur.start;
 
 	drm_WARN_ON(&xe->drm, !(mem->placement & TTM_PL_FLAG_CONTIGUOUS));
 
@@ -313,7 +326,8 @@ static int __xe_ttm_stolen_io_mem_reserve_stolen(struct xe_device *xe,
 
 int xe_ttm_stolen_io_mem_reserve(struct xe_device *xe, struct ttm_resource *mem)
 {
-	struct xe_ttm_stolen_mgr *mgr = xe->mem.stolen_mgr;
+	struct ttm_resource_manager *ttm_mgr = ttm_manager_type(&xe->ttm, XE_PL_STOLEN);
+	struct xe_ttm_stolen_mgr *mgr = ttm_mgr ? to_stolen_mgr(ttm_mgr) : NULL;
 
 	if (!mgr || !mgr->io_base)
 		return -EIO;
@@ -326,5 +340,8 @@ int xe_ttm_stolen_io_mem_reserve(struct xe_device *xe, struct ttm_resource *mem)
 
 u64 xe_ttm_stolen_gpu_offset(struct xe_device *xe)
 {
-	return xe->mem.stolen_mgr->stolen_base;
+	struct xe_ttm_stolen_mgr *mgr =
+		to_stolen_mgr(ttm_manager_type(&xe->ttm, XE_PL_STOLEN));
+
+	return mgr->stolen_base;
 }

@@ -29,11 +29,9 @@
 #include <linux/efi.h>
 #include <linux/reboot.h>
 #include <linux/static_call.h>
-#include <linux/sched/cputime.h>
 #include <asm/div64.h>
 #include <asm/x86_init.h>
 #include <asm/hypervisor.h>
-#include <asm/cpuid/api.h>
 #include <asm/timer.h>
 #include <asm/apic.h>
 #include <asm/vmware.h>
@@ -340,7 +338,7 @@ arch_initcall(activate_jump_labels);
 static void __init vmware_paravirt_ops_setup(void)
 {
 	pv_info.name = "VMware hypervisor";
-	pv_info.io_delay = false;
+	pv_ops.cpu.io_delay = paravirt_nop;
 
 	if (vmware_tsc_khz == 0)
 		return;

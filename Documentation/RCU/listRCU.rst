@@ -276,7 +276,7 @@ The RCU version of audit_upd_rule() is as follows::
 
 		list_for_each_entry(e, list, list) {
 			if (!audit_compare_rule(rule, &e->rule)) {
-				ne = kmalloc_obj(*entry, GFP_ATOMIC);
+				ne = kmalloc(sizeof(*entry), GFP_ATOMIC);
 				if (ne == NULL)
 					return -ENOMEM;
 				audit_copy_rule(&ne->rule, &e->rule);
@@ -334,7 +334,7 @@ If the system-call audit module were to ever need to reject stale data, one way
 to accomplish this would be to add a ``deleted`` flag and a ``lock`` spinlock to the
 ``audit_entry`` structure, and modify audit_filter_task() as follows::
 
-	static struct audit_entry *audit_filter_task(struct task_struct *tsk, char **key)
+	static enum audit_state audit_filter_task(struct task_struct *tsk)
 	{
 		struct audit_entry *e;
 		enum audit_state   state;
@@ -346,18 +346,16 @@ to accomplish this would be to add a ``deleted`` flag and a ``lock`` spinlock to
 				if (e->deleted) {
 					spin_unlock(&e->lock);
 					rcu_read_unlock();
-					return NULL;
+					return AUDIT_BUILD_CONTEXT;
 				}
 				rcu_read_unlock();
 				if (state == AUDIT_STATE_RECORD)
 					*key = kstrdup(e->rule.filterkey, GFP_ATOMIC);
-				/* As long as e->lock is held, e is valid and
-				 * its value is not stale */
-				return e;
+				return state;
 			}
 		}
 		rcu_read_unlock();
-		return NULL;
+		return AUDIT_BUILD_CONTEXT;
 	}
 
 The ``audit_del_rule()`` function would need to set the ``deleted`` flag under the

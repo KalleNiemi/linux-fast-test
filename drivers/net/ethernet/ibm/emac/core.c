@@ -30,7 +30,6 @@
 #include <linux/skbuff.h>
 #include <linux/crc32.h>
 #include <linux/ethtool.h>
-#include <linux/if_vlan.h>
 #include <linux/mii.h>
 #include <linux/bitops.h>
 #include <linux/of.h>
@@ -458,7 +457,7 @@ static inline u32 emac_iff2rmr(struct net_device *ndev)
 
 	if (emac_has_feature(dev, EMAC_APM821XX_REQ_JUMBO_FRAME_SIZE)) {
 		r &= ~EMAC4_RMR_MJS_MASK;
-		r |= EMAC4_RMR_MJS(ndev->mtu + VLAN_HLEN);
+		r |= EMAC4_RMR_MJS(ndev->mtu);
 	}
 
 	return r;
@@ -1162,17 +1161,6 @@ static void emac_clean_rx_ring(struct emac_instance *dev)
 	}
 }
 
-static void emac_clear_mal_desc(struct mal_descriptor *desc, int count)
-{
-	int i;
-
-	for (i = 0; i < count; i++) {
-		WRITE_ONCE(desc[i].ctrl, 0);
-		WRITE_ONCE(desc[i].data_len, 0);
-		WRITE_ONCE(desc[i].data_ptr, 0);
-	}
-}
-
 static int
 __emac_prepare_rx_skb(struct sk_buff *skb, struct emac_instance *dev, int slot)
 {
@@ -1795,7 +1783,8 @@ static int emac_poll_rx(void *param, int budget)
 		skb->protocol = eth_type_trans(skb, dev->ndev);
 		emac_rx_csum(dev, skb, ctrl);
 
-		napi_gro_receive(&dev->mal->napi, skb);
+		if (unlikely(netif_receive_skb(skb) == NET_RX_DROP))
+			++dev->estats.rx_dropped_stack;
 	next:
 		++dev->stats.rx_packets;
 	skip:
@@ -2563,10 +2552,15 @@ static int emac_dt_mdio_probe(struct emac_instance *dev)
 	struct mii_bus *bus;
 	int res;
 
-	mii_np = of_get_available_child_by_name(dev->ofdev->dev.of_node, "mdio");
+	mii_np = of_get_child_by_name(dev->ofdev->dev.of_node, "mdio");
 	if (!mii_np) {
 		dev_err(&dev->ofdev->dev, "no mdio definition found.");
 		return -ENODEV;
+	}
+
+	if (!of_device_is_available(mii_np)) {
+		res = -ENODEV;
+		goto put_node;
 	}
 
 	bus = devm_mdiobus_alloc(&dev->ofdev->dev);
@@ -2941,12 +2935,9 @@ static int emac_init_config(struct emac_instance *dev)
 
 	/* Read MAC-address */
 	err = of_get_ethdev_address(np, dev->ndev);
-	if (err == -EPROBE_DEFER)
-		return err;
-	if (err) {
-		dev_warn(&dev->ofdev->dev, "Can't get valid mac-address. Generating random.");
-		eth_hw_addr_random(dev->ndev);
-	}
+	if (err)
+		return dev_err_probe(&dev->ofdev->dev, err,
+				     "Can't get valid [local-]mac-address from OF !\n");
 
 	/* IAHT and GAHT filter parameterization */
 	if (emac_has_feature(dev, EMAC_FTR_EMAC4SYNC)) {
@@ -3028,14 +3019,8 @@ static int emac_probe(struct platform_device *ofdev)
 	SET_NETDEV_DEV(ndev, &ofdev->dev);
 
 	/* Initialize some embedded data structures */
-	err = devm_mutex_init(&ofdev->dev, &dev->mdio_lock);
-	if (err)
-		goto err_gone;
-
-	err = devm_mutex_init(&ofdev->dev, &dev->link_lock);
-	if (err)
-		goto err_gone;
-
+	mutex_init(&dev->mdio_lock);
+	mutex_init(&dev->link_lock);
 	spin_lock_init(&dev->lock);
 	INIT_WORK(&dev->reset_work, emac_reset_work);
 
@@ -3044,19 +3029,15 @@ static int emac_probe(struct platform_device *ofdev)
 	if (err)
 		goto err_gone;
 
-	dev->emacp = devm_platform_ioremap_resource(ofdev, 0);
-	if (IS_ERR(dev->emacp)) {
-		err = PTR_ERR(dev->emacp);
+	/* Get interrupts. EMAC irq is mandatory */
+	dev->emac_irq = irq_of_parse_and_map(np, 0);
+	if (!dev->emac_irq) {
+		printk(KERN_ERR "%pOF: Can't map main interrupt\n", np);
+		err = -ENODEV;
 		goto err_gone;
 	}
 
 	/* Setup error IRQ handler */
-	dev->emac_irq = platform_get_irq(ofdev, 0);
-	if (dev->emac_irq < 0) {
-		err = dev->emac_irq;
-		goto err_gone;
-	}
-
 	err = devm_request_irq(&ofdev->dev, dev->emac_irq, emac_irq, 0, "EMAC",
 			       dev);
 	if (err) {
@@ -3066,6 +3047,15 @@ static int emac_probe(struct platform_device *ofdev)
 	}
 
 	ndev->irq = dev->emac_irq;
+
+	/* Map EMAC regs */
+	// TODO : platform_get_resource() and devm_ioremap_resource()
+	dev->emacp = devm_of_iomap(&ofdev->dev, np, 0, NULL);
+	if (!dev->emacp) {
+		dev_err(&ofdev->dev, "can't map device registers");
+		err = -ENOMEM;
+		goto err_gone;
+	}
 
 	/* Wait for dependent devices */
 	err = emac_wait_deps(dev);
@@ -3099,8 +3089,8 @@ static int emac_probe(struct platform_device *ofdev)
 	DBG(dev, "rx_desc %p" NL, dev->rx_desc);
 
 	/* Clean rings */
-	emac_clear_mal_desc(dev->tx_desc, NUM_TX_BUFF);
-	emac_clear_mal_desc(dev->rx_desc, NUM_RX_BUFF);
+	memset(dev->tx_desc, 0, NUM_TX_BUFF * sizeof(struct mal_descriptor));
+	memset(dev->rx_desc, 0, NUM_RX_BUFF * sizeof(struct mal_descriptor));
 	memset(dev->tx_skb, 0, NUM_TX_BUFF * sizeof(struct sk_buff *));
 	memset(dev->rx_skb, 0, NUM_RX_BUFF * sizeof(struct sk_buff *));
 
@@ -3258,7 +3248,7 @@ static struct platform_driver emac_driver = {
 		.of_match_table = emac_match,
 	},
 	.probe = emac_probe,
-	.remove = emac_remove,
+	.remove_new = emac_remove,
 };
 
 static void __init emac_make_bootlist(void)

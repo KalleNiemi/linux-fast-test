@@ -7,18 +7,16 @@
  * Copyright (C) 2014, Freescale Semiconductor, Inc.
  */
 
-#include <linux/cleanup.h>
-#include <linux/delay.h>
-#include <linux/device.h>
 #include <linux/err.h>
 #include <linux/errno.h>
+#include <linux/delay.h>
+#include <linux/device.h>
 #include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/spi-nor.h>
 #include <linux/mutex.h>
-#include <linux/of.h>
-#include <linux/regulator/consumer.h>
+#include <linux/of_platform.h>
 #include <linux/sched/task_stack.h>
 #include <linux/sizes.h>
 #include <linux/slab.h>
@@ -115,9 +113,6 @@ void spi_nor_spimem_setup_op(const struct spi_nor *nor,
 		op->cmd.opcode = (op->cmd.opcode << 8) | ext;
 		op->cmd.nbytes = 2;
 	}
-
-	if (proto == SNOR_PROTO_8_8_8_DTR && nor->flags & SNOR_F_SWAP16)
-		op->data.swap16 = true;
 }
 
 /**
@@ -640,26 +635,32 @@ static bool spi_nor_use_parallel_locking(struct spi_nor *nor)
 static int spi_nor_rww_start_rdst(struct spi_nor *nor)
 {
 	struct spi_nor_rww *rww = &nor->rww;
+	int ret = -EAGAIN;
 
-	guard(mutex)(&nor->lock);
+	mutex_lock(&nor->lock);
 
 	if (rww->ongoing_io || rww->ongoing_rd)
-		return -EAGAIN;
+		goto busy;
 
 	rww->ongoing_io = true;
 	rww->ongoing_rd = true;
+	ret = 0;
 
-	return 0;
+busy:
+	mutex_unlock(&nor->lock);
+	return ret;
 }
 
 static void spi_nor_rww_end_rdst(struct spi_nor *nor)
 {
 	struct spi_nor_rww *rww = &nor->rww;
 
-	guard(mutex)(&nor->lock);
+	mutex_lock(&nor->lock);
 
 	rww->ongoing_io = false;
 	rww->ongoing_rd = false;
+
+	mutex_unlock(&nor->lock);
 }
 
 static int spi_nor_lock_rdst(struct spi_nor *nor)
@@ -869,8 +870,8 @@ static int spi_nor_write_16bit_sr_and_check(struct spi_nor *nor, u8 sr1)
 		ret = spi_nor_read_cr(nor, &sr_cr[1]);
 		if (ret)
 			return ret;
-	} else if ((spi_nor_get_protocol_width(nor->read_proto) == 4 ||
-		    spi_nor_get_protocol_width(nor->write_proto) == 4) &&
+	} else if (spi_nor_get_protocol_width(nor->read_proto) == 4 &&
+		   spi_nor_get_protocol_width(nor->write_proto) == 4 &&
 		   nor->params->quad_enable) {
 		/*
 		 * If the Status Register 2 Read command (35h) is not
@@ -977,54 +978,6 @@ int spi_nor_write_16bit_cr_and_check(struct spi_nor *nor, u8 cr)
 }
 
 /**
- * spi_nor_write_16bit_sr_cr_and_check() - Write the Status Register 1 and the
- * Configuration Register in one shot. Ensure that the bytes written in both
- * registers match the received value.
- * @nor:	pointer to a 'struct spi_nor'.
- * @regs:	two-byte array with values to be written to the status and
- *		configuration registers.
- *
- * Return: 0 on success, -errno otherwise.
- */
-static int spi_nor_write_16bit_sr_cr_and_check(struct spi_nor *nor, const u8 *regs)
-{
-	u8 written_regs[2];
-	int ret;
-
-	written_regs[0] = regs[0];
-	written_regs[1] = regs[1];
-	nor->bouncebuf[0] = regs[0];
-	nor->bouncebuf[1] = regs[1];
-
-	ret = spi_nor_write_sr(nor, nor->bouncebuf, 2);
-	if (ret)
-		return ret;
-
-	ret = spi_nor_read_sr(nor, &nor->bouncebuf[0]);
-	if (ret)
-		return ret;
-
-	if (written_regs[0] != nor->bouncebuf[0]) {
-		dev_dbg(nor->dev, "SR: Read back test failed\n");
-		return -EIO;
-	}
-
-	if (nor->flags & SNOR_F_NO_READ_CR)
-		return 0;
-
-	ret = spi_nor_read_cr(nor, &nor->bouncebuf[1]);
-	if (ret)
-		return ret;
-
-	if (written_regs[1] != nor->bouncebuf[1]) {
-		dev_dbg(nor->dev, "CR: read back test failed\n");
-		return -EIO;
-	}
-
-	return 0;
-}
-
-/**
  * spi_nor_write_sr_and_check() - Write the Status Register 1 and ensure that
  * the byte written match the received value without affecting other bits in the
  * Status Register 1 and 2.
@@ -1039,23 +992,6 @@ int spi_nor_write_sr_and_check(struct spi_nor *nor, u8 sr1)
 		return spi_nor_write_16bit_sr_and_check(nor, sr1);
 
 	return spi_nor_write_sr1_and_check(nor, sr1);
-}
-
-/**
- * spi_nor_write_sr_cr_and_check() - Write the Status Register 1 and ensure that
- * the byte written match the received value. Same for the Control Register if
- * available.
- * @nor:	pointer to a 'struct spi_nor'.
- * @regs:	byte array to be written to the registers.
- *
- * Return: 0 on success, -errno otherwise.
- */
-int spi_nor_write_sr_cr_and_check(struct spi_nor *nor, const u8 *regs)
-{
-	if (nor->flags & SNOR_F_HAS_16BIT_SR)
-		return spi_nor_write_16bit_sr_cr_and_check(nor, regs);
-
-	return spi_nor_write_sr1_and_check(nor, regs[0]);
 }
 
 /**
@@ -1272,21 +1208,26 @@ static void spi_nor_offset_to_banks(u64 bank_size, loff_t start, size_t len,
 static bool spi_nor_rww_start_io(struct spi_nor *nor)
 {
 	struct spi_nor_rww *rww = &nor->rww;
+	bool start = false;
 
-	guard(mutex)(&nor->lock);
+	mutex_lock(&nor->lock);
 
 	if (rww->ongoing_io)
-		return false;
+		goto busy;
 
 	rww->ongoing_io = true;
+	start = true;
 
-	return true;
+busy:
+	mutex_unlock(&nor->lock);
+	return start;
 }
 
 static void spi_nor_rww_end_io(struct spi_nor *nor)
 {
-	guard(mutex)(&nor->lock);
+	mutex_lock(&nor->lock);
 	nor->rww.ongoing_io = false;
+	mutex_unlock(&nor->lock);
 }
 
 static int spi_nor_lock_device(struct spi_nor *nor)
@@ -1309,27 +1250,32 @@ static void spi_nor_unlock_device(struct spi_nor *nor)
 static bool spi_nor_rww_start_exclusive(struct spi_nor *nor)
 {
 	struct spi_nor_rww *rww = &nor->rww;
+	bool start = false;
 
 	mutex_lock(&nor->lock);
 
 	if (rww->ongoing_io || rww->ongoing_rd || rww->ongoing_pe)
-		return false;
+		goto busy;
 
 	rww->ongoing_io = true;
 	rww->ongoing_rd = true;
 	rww->ongoing_pe = true;
+	start = true;
 
-	return true;
+busy:
+	mutex_unlock(&nor->lock);
+	return start;
 }
 
 static void spi_nor_rww_end_exclusive(struct spi_nor *nor)
 {
 	struct spi_nor_rww *rww = &nor->rww;
 
-	guard(mutex)(&nor->lock);
+	mutex_lock(&nor->lock);
 	rww->ongoing_io = false;
 	rww->ongoing_rd = false;
 	rww->ongoing_pe = false;
+	mutex_unlock(&nor->lock);
 }
 
 int spi_nor_prep_and_lock(struct spi_nor *nor)
@@ -1366,26 +1312,30 @@ static bool spi_nor_rww_start_pe(struct spi_nor *nor, loff_t start, size_t len)
 {
 	struct spi_nor_rww *rww = &nor->rww;
 	unsigned int used_banks = 0;
+	bool started = false;
 	u8 first, last;
 	int bank;
 
-	guard(mutex)(&nor->lock);
+	mutex_lock(&nor->lock);
 
 	if (rww->ongoing_io || rww->ongoing_rd || rww->ongoing_pe)
-		return false;
+		goto busy;
 
 	spi_nor_offset_to_banks(nor->params->bank_size, start, len, &first, &last);
 	for (bank = first; bank <= last; bank++) {
 		if (rww->used_banks & BIT(bank))
-			return false;
+			goto busy;
 
 		used_banks |= BIT(bank);
 	}
 
 	rww->used_banks |= used_banks;
 	rww->ongoing_pe = true;
+	started = true;
 
-	return true;
+busy:
+	mutex_unlock(&nor->lock);
+	return started;
 }
 
 static void spi_nor_rww_end_pe(struct spi_nor *nor, loff_t start, size_t len)
@@ -1394,13 +1344,15 @@ static void spi_nor_rww_end_pe(struct spi_nor *nor, loff_t start, size_t len)
 	u8 first, last;
 	int bank;
 
-	guard(mutex)(&nor->lock);
+	mutex_lock(&nor->lock);
 
 	spi_nor_offset_to_banks(nor->params->bank_size, start, len, &first, &last);
 	for (bank = first; bank <= last; bank++)
 		rww->used_banks &= ~BIT(bank);
 
 	rww->ongoing_pe = false;
+
+	mutex_unlock(&nor->lock);
 }
 
 static int spi_nor_prep_and_lock_pe(struct spi_nor *nor, loff_t start, size_t len)
@@ -1437,18 +1389,19 @@ static bool spi_nor_rww_start_rd(struct spi_nor *nor, loff_t start, size_t len)
 {
 	struct spi_nor_rww *rww = &nor->rww;
 	unsigned int used_banks = 0;
+	bool started = false;
 	u8 first, last;
 	int bank;
 
-	guard(mutex)(&nor->lock);
+	mutex_lock(&nor->lock);
 
 	if (rww->ongoing_io || rww->ongoing_rd)
-		return false;
+		goto busy;
 
 	spi_nor_offset_to_banks(nor->params->bank_size, start, len, &first, &last);
 	for (bank = first; bank <= last; bank++) {
 		if (rww->used_banks & BIT(bank))
-			return false;
+			goto busy;
 
 		used_banks |= BIT(bank);
 	}
@@ -1456,8 +1409,11 @@ static bool spi_nor_rww_start_rd(struct spi_nor *nor, loff_t start, size_t len)
 	rww->used_banks |= used_banks;
 	rww->ongoing_io = true;
 	rww->ongoing_rd = true;
+	started = true;
 
-	return true;
+busy:
+	mutex_unlock(&nor->lock);
+	return started;
 }
 
 static void spi_nor_rww_end_rd(struct spi_nor *nor, loff_t start, size_t len)
@@ -1466,7 +1422,7 @@ static void spi_nor_rww_end_rd(struct spi_nor *nor, loff_t start, size_t len)
 	u8 first, last;
 	int bank;
 
-	guard(mutex)(&nor->lock);
+	mutex_lock(&nor->lock);
 
 	spi_nor_offset_to_banks(nor->params->bank_size, start, len, &first, &last);
 	for (bank = first; bank <= last; bank++)
@@ -1474,6 +1430,8 @@ static void spi_nor_rww_end_rd(struct spi_nor *nor, loff_t start, size_t len)
 
 	rww->ongoing_io = false;
 	rww->ongoing_rd = false;
+
+	mutex_unlock(&nor->lock);
 }
 
 static int spi_nor_prep_and_lock_rd(struct spi_nor *nor, loff_t start, size_t len)
@@ -1618,7 +1576,7 @@ spi_nor_init_erase_cmd(const struct spi_nor_erase_region *region,
 {
 	struct spi_nor_erase_command *cmd;
 
-	cmd = kmalloc_obj(*cmd);
+	cmd = kmalloc(sizeof(*cmd), GFP_KERNEL);
 	if (!cmd)
 		return ERR_PTR(-ENOMEM);
 
@@ -2410,15 +2368,15 @@ int spi_nor_hwcaps_pp2cmd(u32 hwcaps)
 }
 
 /**
- * spi_nor_spimem_check_read_pp_op - check if a read or a page program operation is
- *                                   supported by controller
+ * spi_nor_spimem_check_op - check if the operation is supported
+ *                           by controller
  *@nor:        pointer to a 'struct spi_nor'
  *@op:         pointer to op template to be checked
  *
  * Returns 0 if operation is supported, -EOPNOTSUPP otherwise.
  */
-static int spi_nor_spimem_check_read_pp_op(struct spi_nor *nor,
-					   struct spi_mem_op *op)
+static int spi_nor_spimem_check_op(struct spi_nor *nor,
+				   struct spi_mem_op *op)
 {
 	/*
 	 * First test with 4 address bytes. The opcode itself might
@@ -2461,7 +2419,7 @@ static int spi_nor_spimem_check_readop(struct spi_nor *nor,
 	if (spi_nor_protocol_is_dtr(read->proto))
 		op.dummy.nbytes *= 2;
 
-	return spi_nor_spimem_check_read_pp_op(nor, &op);
+	return spi_nor_spimem_check_op(nor, &op);
 }
 
 /**
@@ -2479,7 +2437,7 @@ static int spi_nor_spimem_check_pp(struct spi_nor *nor,
 
 	spi_nor_spimem_setup_op(nor, &op, pp->proto);
 
-	return spi_nor_spimem_check_read_pp_op(nor, &op);
+	return spi_nor_spimem_check_op(nor, &op);
 }
 
 /**
@@ -2523,16 +2481,6 @@ spi_nor_spimem_adjust_hwcaps(struct spi_nor *nor, u32 *hwcaps)
 		if (spi_nor_spimem_check_pp(nor,
 					    &params->page_programs[ppidx]))
 			*hwcaps &= ~BIT(cap);
-	}
-
-	/* Some SPI controllers might not support CR read opcode. */
-	if (!(nor->flags & SNOR_F_NO_READ_CR)) {
-		struct spi_mem_op op = SPI_NOR_RDCR_OP(nor->bouncebuf);
-
-		spi_nor_spimem_setup_op(nor, &op, nor->reg_proto);
-
-		if (!spi_mem_supports_op(nor->spimem, &op))
-			nor->flags |= SNOR_F_NO_READ_CR;
 	}
 }
 
@@ -2974,9 +2922,6 @@ static void spi_nor_init_flags(struct spi_nor *nor)
 			nor->flags |= SNOR_F_HAS_SR_BP3_BIT6;
 	}
 
-	if (flags & SPI_NOR_HAS_CMP)
-		nor->flags |= SNOR_F_HAS_SR2_CMP_BIT6;
-
 	if (flags & SPI_NOR_RWW && nor->params->n_banks > 1 &&
 	    !nor->controller_ops)
 		nor->flags |= SNOR_F_RWW;
@@ -3329,12 +3274,10 @@ static int spi_nor_init(struct spi_nor *nor)
 	 * protection bits are volatile. The latter is indicated by
 	 * SNOR_F_SWP_IS_VOLATILE.
 	 */
-	spi_nor_cache_sr_lock_bits(nor, NULL);
 	if (IS_ENABLED(CONFIG_MTD_SPI_NOR_SWP_DISABLE) ||
 	    (IS_ENABLED(CONFIG_MTD_SPI_NOR_SWP_DISABLE_ON_VOLATILE) &&
-	     nor->flags & SNOR_F_SWP_IS_VOLATILE)) {
+	     nor->flags & SNOR_F_SWP_IS_VOLATILE))
 		spi_nor_try_unlock_all(nor);
-	}
 
 	if (nor->addr_nbytes == 4 &&
 	    nor->read_proto != SNOR_PROTO_8_8_8_DTR &&
@@ -3711,15 +3654,14 @@ EXPORT_SYMBOL_GPL(spi_nor_scan);
 static int spi_nor_create_read_dirmap(struct spi_nor *nor)
 {
 	struct spi_mem_dirmap_info info = {
-		.op_tmpl = &info.primary_op_tmpl,
-		.primary_op_tmpl = SPI_MEM_OP(SPI_MEM_OP_CMD(nor->read_opcode, 0),
-					      SPI_MEM_OP_ADDR(nor->addr_nbytes, 0, 0),
-					      SPI_MEM_OP_DUMMY(nor->read_dummy, 0),
-					      SPI_MEM_OP_DATA_IN(0, NULL, 0)),
+		.op_tmpl = SPI_MEM_OP(SPI_MEM_OP_CMD(nor->read_opcode, 0),
+				      SPI_MEM_OP_ADDR(nor->addr_nbytes, 0, 0),
+				      SPI_MEM_OP_DUMMY(nor->read_dummy, 0),
+				      SPI_MEM_OP_DATA_IN(0, NULL, 0)),
 		.offset = 0,
 		.length = nor->params->size,
 	};
-	struct spi_mem_op *op = info.op_tmpl;
+	struct spi_mem_op *op = &info.op_tmpl;
 
 	spi_nor_spimem_setup_op(nor, op, nor->read_proto);
 
@@ -3743,15 +3685,14 @@ static int spi_nor_create_read_dirmap(struct spi_nor *nor)
 static int spi_nor_create_write_dirmap(struct spi_nor *nor)
 {
 	struct spi_mem_dirmap_info info = {
-		.op_tmpl = &info.primary_op_tmpl,
-		.primary_op_tmpl = SPI_MEM_OP(SPI_MEM_OP_CMD(nor->program_opcode, 0),
-					      SPI_MEM_OP_ADDR(nor->addr_nbytes, 0, 0),
-					      SPI_MEM_OP_NO_DUMMY,
-					      SPI_MEM_OP_DATA_OUT(0, NULL, 0)),
+		.op_tmpl = SPI_MEM_OP(SPI_MEM_OP_CMD(nor->program_opcode, 0),
+				      SPI_MEM_OP_ADDR(nor->addr_nbytes, 0, 0),
+				      SPI_MEM_OP_NO_DUMMY,
+				      SPI_MEM_OP_DATA_OUT(0, NULL, 0)),
 		.offset = 0,
 		.length = nor->params->size,
 	};
-	struct spi_mem_op *op = info.op_tmpl;
+	struct spi_mem_op *op = &info.op_tmpl;
 
 	if (nor->program_opcode == SPINOR_OP_AAI_WP && nor->sst_write_second)
 		op->addr.nbytes = 0;
@@ -3773,8 +3714,7 @@ static int spi_nor_create_write_dirmap(struct spi_nor *nor)
 static int spi_nor_probe(struct spi_mem *spimem)
 {
 	struct spi_device *spi = spimem->spi;
-	struct device *dev = &spi->dev;
-	struct flash_platform_data *data = dev_get_platdata(dev);
+	struct flash_platform_data *data = dev_get_platdata(&spi->dev);
 	struct spi_nor *nor;
 	/*
 	 * Enable all caps by default. The core will mask them after
@@ -3784,17 +3724,13 @@ static int spi_nor_probe(struct spi_mem *spimem)
 	char *flash_name;
 	int ret;
 
-	ret = devm_regulator_get_enable(dev, "vcc");
-	if (ret)
-		return ret;
-
-	nor = devm_kzalloc(dev, sizeof(*nor), GFP_KERNEL);
+	nor = devm_kzalloc(&spi->dev, sizeof(*nor), GFP_KERNEL);
 	if (!nor)
 		return -ENOMEM;
 
 	nor->spimem = spimem;
-	nor->dev = dev;
-	spi_nor_set_flash_node(nor, dev->of_node);
+	nor->dev = &spi->dev;
+	spi_nor_set_flash_node(nor, spi->dev.of_node);
 
 	spi_mem_set_drvdata(spimem, nor);
 
@@ -3830,8 +3766,9 @@ static int spi_nor_probe(struct spi_mem *spimem)
 	 */
 	if (nor->params->page_size > PAGE_SIZE) {
 		nor->bouncebuf_size = nor->params->page_size;
-		devm_kfree(dev, nor->bouncebuf);
-		nor->bouncebuf = devm_kmalloc(dev, nor->bouncebuf_size,
+		devm_kfree(nor->dev, nor->bouncebuf);
+		nor->bouncebuf = devm_kmalloc(nor->dev,
+					      nor->bouncebuf_size,
 					      GFP_KERNEL);
 		if (!nor->bouncebuf)
 			return -ENOMEM;

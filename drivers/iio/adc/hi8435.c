@@ -15,8 +15,11 @@
 #include <linux/iio/triggered_event.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
+#include <linux/mod_devicetable.h>
 #include <linux/spi/spi.h>
 #include <linux/gpio/consumer.h>
+
+#define DRV_NAME "hi8435"
 
 /* Register offsets for HI-8435 */
 #define HI8435_CTRL_REG		0x02
@@ -129,7 +132,7 @@ static int hi8435_read_event_config(struct iio_dev *idev,
 static int hi8435_write_event_config(struct iio_dev *idev,
 				     const struct iio_chan_spec *chan,
 				     enum iio_event_type type,
-				     enum iio_event_direction dir, bool state)
+				     enum iio_event_direction dir, int state)
 {
 	struct hi8435_priv *priv = iio_priv(idev);
 	int ret;
@@ -348,7 +351,7 @@ static const struct iio_enum hi8435_sensing_mode = {
 static const struct iio_chan_spec_ext_info hi8435_ext_info[] = {
 	IIO_ENUM("sensing_mode", IIO_SEPARATE, &hi8435_sensing_mode),
 	IIO_ENUM_AVAILABLE("sensing_mode", IIO_SHARED_BY_TYPE, &hi8435_sensing_mode),
-	{ }
+	{},
 };
 
 #define HI8435_VOLTAGE_CHANNEL(num)			\
@@ -533,7 +536,7 @@ MODULE_DEVICE_TABLE(spi, hi8435_id);
 
 static struct spi_driver hi8435_driver = {
 	.driver	= {
-		.name		= "hi8435",
+		.name		= DRV_NAME,
 		.of_match_table	= hi8435_dt_ids,
 	},
 	.probe		= hi8435_probe,

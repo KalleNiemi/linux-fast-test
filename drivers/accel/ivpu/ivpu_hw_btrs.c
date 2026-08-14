@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2020-2026 Intel Corporation
+ * Copyright (C) 2020-2025 Intel Corporation
  */
 
 #include <linux/units.h>
@@ -11,7 +11,6 @@
 #include "ivpu_hw_btrs_lnl_reg.h"
 #include "ivpu_hw_btrs_mtl_reg.h"
 #include "ivpu_hw_reg_io.h"
-#include "ivpu_jsm_msg.h"
 #include "ivpu_pm.h"
 
 #define BTRS_MTL_IRQ_MASK ((REG_FLD(VPU_HW_BTRS_MTL_INTERRUPT_STAT, ATS_ERR)) | \
@@ -34,7 +33,9 @@
 
 #define PLL_CDYN_DEFAULT               0x80
 #define PLL_EPP_DEFAULT                0x80
-#define PLL_REF_CLK_FREQ_MHZ           50
+#define PLL_CONFIG_DEFAULT             0x0
+#define PLL_REF_CLK_FREQ               50000000ull
+#define PLL_RATIO_TO_FREQ(x)           ((x) * PLL_REF_CLK_FREQ)
 
 #define PLL_TIMEOUT_US		       (1500 * USEC_PER_MSEC)
 #define IDLE_TIMEOUT_US		       (5 * USEC_PER_MSEC)
@@ -58,6 +59,8 @@
 #define DCT_REQ                        0x2
 #define DCT_ENABLE                     0x1
 #define DCT_DISABLE                    0x0
+
+static u32 pll_ratio_to_dpu_freq(struct ivpu_device *vdev, u32 ratio);
 
 int ivpu_hw_btrs_irqs_clear_with_0_mtl(struct ivpu_device *vdev)
 {
@@ -109,8 +112,6 @@ void ivpu_hw_btrs_freq_ratios_init(struct ivpu_device *vdev)
 	hw->pll.min_ratio = clamp_t(u8, ivpu_pll_min_ratio, hw->pll.min_ratio, hw->pll.max_ratio);
 	hw->pll.max_ratio = clamp_t(u8, ivpu_pll_max_ratio, hw->pll.min_ratio, hw->pll.max_ratio);
 	hw->pll.pn_ratio = clamp_t(u8, hw->pll.pn_ratio, hw->pll.min_ratio, hw->pll.max_ratio);
-	hw->pll.cfg_max_ratio = hw->pll.max_ratio;
-	hw->pll.cfg_min_ratio = hw->pll.min_ratio;
 }
 
 static bool tile_disable_check(u32 config)
@@ -140,10 +141,16 @@ static int read_tile_config_fuse(struct ivpu_device *vdev, u32 *tile_fuse_config
 	}
 
 	config = REG_GET_FLD(VPU_HW_BTRS_LNL_TILE_FUSE, CONFIG, fuse);
-	if (!tile_disable_check(config))
-		ivpu_warn(vdev, "More than 1 tile disabled, tile fuse config mask: 0x%x\n", config);
+	if (!tile_disable_check(config)) {
+		ivpu_err(vdev, "Fuse: Invalid tile disable config (0x%x)\n", config);
+		return -EIO;
+	}
 
-	ivpu_dbg(vdev, MISC, "Tile disable config mask: 0x%x\n", config);
+	if (config)
+		ivpu_dbg(vdev, MISC, "Fuse: %d tiles enabled. Tile number %d disabled\n",
+			 BTRS_LNL_TILE_MAX_NUM - 1, ffs(config) - 1);
+	else
+		ivpu_dbg(vdev, MISC, "Fuse: All %d tiles enabled\n", BTRS_LNL_TILE_MAX_NUM);
 
 	*tile_fuse_config = config;
 	return 0;
@@ -302,10 +309,14 @@ static void prepare_wp_request(struct ivpu_device *vdev, struct wp_request *wp, 
 		wp->epp = 0;
 	} else {
 		wp->target = hw->pll.pn_ratio;
-		wp->cfg = 0;
+		wp->cfg = enable ? PLL_CONFIG_DEFAULT : 0;
 		wp->cdyn = enable ? PLL_CDYN_DEFAULT : 0;
 		wp->epp = enable ? PLL_EPP_DEFAULT : 0;
 	}
+
+	/* Simics cannot start without at least one tile */
+	if (enable && ivpu_is_simics(vdev))
+		wp->cfg = 1;
 }
 
 static int wait_for_pll_lock(struct ivpu_device *vdev, bool enable)
@@ -321,14 +332,6 @@ static int wait_for_pll_lock(struct ivpu_device *vdev, bool enable)
 	return REGB_POLL_FLD(VPU_HW_BTRS_MTL_PLL_STATUS, LOCK, exp_val, PLL_TIMEOUT_US);
 }
 
-static int wait_for_cdyn_deassert(struct ivpu_device *vdev)
-{
-	if (ivpu_hw_btrs_gen(vdev) == IVPU_HW_BTRS_MTL)
-		return 0;
-
-	return REGB_POLL_FLD(VPU_HW_BTRS_LNL_CDYN, CDYN, 0, PLL_TIMEOUT_US);
-}
-
 int ivpu_hw_btrs_wp_drive(struct ivpu_device *vdev, bool enable)
 {
 	struct wp_request wp;
@@ -341,8 +344,8 @@ int ivpu_hw_btrs_wp_drive(struct ivpu_device *vdev, bool enable)
 
 	prepare_wp_request(vdev, &wp, enable);
 
-	ivpu_dbg(vdev, PM, "PLL workpoint request: %u MHz, config: 0x%x, epp: 0x%x, cdyn: 0x%x\n",
-		 ivpu_hw_btrs_pll_ratio_to_mhz(vdev, wp.target), wp.cfg, wp.epp, wp.cdyn);
+	ivpu_dbg(vdev, PM, "PLL workpoint request: %lu MHz, config: 0x%x, epp: 0x%x, cdyn: 0x%x\n",
+		 pll_ratio_to_dpu_freq(vdev, wp.target) / HZ_PER_MHZ, wp.cfg, wp.epp, wp.cdyn);
 
 	ret = wp_request_send(vdev, &wp);
 	if (ret) {
@@ -360,14 +363,6 @@ int ivpu_hw_btrs_wp_drive(struct ivpu_device *vdev, bool enable)
 	if (ret) {
 		ivpu_err(vdev, "Timed out waiting for NPU ready status\n");
 		return ret;
-	}
-
-	if (!enable) {
-		ret = wait_for_cdyn_deassert(vdev);
-		if (ret) {
-			ivpu_err(vdev, "Timed out waiting for CDYN deassert\n");
-			return ret;
-		}
 	}
 
 	return 0;
@@ -466,6 +461,9 @@ int ivpu_hw_btrs_d0i3_disable(struct ivpu_device *vdev)
 int ivpu_hw_btrs_wait_for_clock_res_own_ack(struct ivpu_device *vdev)
 {
 	if (ivpu_hw_btrs_gen(vdev) == IVPU_HW_BTRS_MTL)
+		return 0;
+
+	if (ivpu_is_simics(vdev))
 		return 0;
 
 	return REGB_POLL_FLD(VPU_HW_BTRS_LNL_VPU_STATUS, CLOCK_RESOURCE_OWN_ACK, 1, TIMEOUT_US);
@@ -598,101 +596,27 @@ static u32 pll_config_get_lnl(struct ivpu_device *vdev)
 	return REGB_RD32(VPU_HW_BTRS_LNL_PLL_FREQ);
 }
 
-static u32 pll_ratio_to_mhz_mtl(u8 pll_ratio)
+static u32 pll_ratio_to_dpu_freq_mtl(u16 ratio)
 {
-	return (pll_ratio * PLL_REF_CLK_FREQ_MHZ * 2) / 3;
+	return (PLL_RATIO_TO_FREQ(ratio) * 2) / 3;
 }
 
-static u32 pll_ratio_to_mhz_lnl(u8 pll_ratio)
+static u32 pll_ratio_to_dpu_freq_lnl(u16 ratio)
 {
-	return (pll_ratio * PLL_REF_CLK_FREQ_MHZ) / 2;
+	return PLL_RATIO_TO_FREQ(ratio) / 2;
 }
 
-u32 ivpu_hw_btrs_pll_ratio_to_mhz(struct ivpu_device *vdev, u8 pll_ratio)
+static u32 pll_ratio_to_dpu_freq(struct ivpu_device *vdev, u32 ratio)
 {
 	if (ivpu_hw_btrs_gen(vdev) == IVPU_HW_BTRS_MTL)
-		return pll_ratio_to_mhz_mtl(pll_ratio);
+		return pll_ratio_to_dpu_freq_mtl(ratio);
 	else
-		return pll_ratio_to_mhz_lnl(pll_ratio);
+		return pll_ratio_to_dpu_freq_lnl(ratio);
 }
 
-u32 ivpu_hw_btrs_pll_ratio_to_hz(struct ivpu_device *vdev, u8 pll_ratio)
+u32 ivpu_hw_btrs_dpu_max_freq_get(struct ivpu_device *vdev)
 {
-	return ivpu_hw_btrs_pll_ratio_to_mhz(vdev, pll_ratio) * HZ_PER_MHZ;
-}
-
-u32 ivpu_hw_btrs_current_freq_get(struct ivpu_device *vdev)
-{
-	if (ivpu_hw_btrs_gen(vdev) == IVPU_HW_BTRS_MTL)
-		return pll_ratio_to_mhz_mtl(pll_config_get_mtl(vdev));
-	else
-		return pll_ratio_to_mhz_lnl(pll_config_get_lnl(vdev));
-}
-
-static int ivpu_hw_btrs_cfg_freq_set(struct ivpu_device *vdev, u8 cfg_min_ratio, u8 cfg_max_ratio)
-{
-	u8 min_ratio = clamp_t(u8, cfg_min_ratio, vdev->hw->pll.min_ratio, cfg_max_ratio);
-	u8 pn_ratio = clamp_t(u8, vdev->hw->pll.pn_ratio, min_ratio, cfg_max_ratio);
-	int ret;
-
-	ivpu_dbg(vdev, PM, "Set frequency range to min: %u, pn: %u, max: %u MHz\n",
-		 ivpu_hw_btrs_pll_ratio_to_mhz(vdev, min_ratio),
-		 ivpu_hw_btrs_pll_ratio_to_mhz(vdev, pn_ratio),
-		 ivpu_hw_btrs_pll_ratio_to_mhz(vdev, cfg_max_ratio));
-
-	ret = ivpu_rpm_get(vdev);
-	if (ret < 0)
-		return ret;
-
-	ret = ivpu_jsm_msg_freq_config(vdev, min_ratio, pn_ratio, cfg_max_ratio);
-	ivpu_rpm_put(vdev);
-
-	if (ret) {
-		ivpu_warn(vdev,
-			  "Failed to set frequency to min: %u, pn: %u, max: %u MHz, ret %d\n",
-			  ivpu_hw_btrs_pll_ratio_to_mhz(vdev, min_ratio),
-			  ivpu_hw_btrs_pll_ratio_to_mhz(vdev, pn_ratio),
-			  ivpu_hw_btrs_pll_ratio_to_mhz(vdev, cfg_max_ratio),
-			  ret);
-		return ret;
-	}
-
-	vdev->hw->pll.cfg_min_ratio = cfg_min_ratio;
-	vdev->hw->pll.cfg_max_ratio = cfg_max_ratio;
-
-	return 0;
-}
-
-static u8 dpu_mhz_to_pll_ratio_lnl(u32 freq_mhz)
-{
-	return clamp_t(u32, freq_mhz / (PLL_REF_CLK_FREQ_MHZ / 2), 0, U8_MAX);
-}
-
-int ivpu_hw_btrs_cfg_max_freq_set(struct ivpu_device *vdev, u32 max_freq_mhz)
-{
-	u8 ratio = dpu_mhz_to_pll_ratio_lnl(max_freq_mhz);
-	u8 cfg_max_ratio = clamp_t(u8, ratio, vdev->hw->pll.min_ratio, vdev->hw->pll.max_ratio);
-
-	return ivpu_hw_btrs_cfg_freq_set(vdev, vdev->hw->pll.cfg_min_ratio, cfg_max_ratio);
-}
-
-int ivpu_hw_btrs_cfg_min_freq_set(struct ivpu_device *vdev, u32 min_freq_mhz)
-{
-	u8 ratio = dpu_mhz_to_pll_ratio_lnl(min_freq_mhz);
-	u8 cfg_min_ratio = clamp_t(u8, ratio, vdev->hw->pll.min_ratio, vdev->hw->pll.max_ratio);
-
-	return ivpu_hw_btrs_cfg_freq_set(vdev, cfg_min_ratio, vdev->hw->pll.cfg_max_ratio);
-}
-
-int ivpu_hw_btrs_cfg_freq_init(struct ivpu_device *vdev)
-{
-	if (vdev->hw->pll.min_ratio == vdev->hw->pll.cfg_min_ratio &&
-	    vdev->hw->pll.max_ratio == vdev->hw->pll.cfg_max_ratio)
-		return 0;
-
-	return ivpu_hw_btrs_cfg_freq_set(vdev,
-					 vdev->hw->pll.cfg_min_ratio,
-					 vdev->hw->pll.cfg_max_ratio);
+	return pll_ratio_to_dpu_freq(vdev, vdev->hw->pll.max_ratio);
 }
 
 /* Handler for IRQs from Buttress core (irqB) */
@@ -707,8 +631,8 @@ bool ivpu_hw_btrs_irq_handler_mtl(struct ivpu_device *vdev, int irq)
 	if (REG_TEST_FLD(VPU_HW_BTRS_MTL_INTERRUPT_STAT, FREQ_CHANGE, status)) {
 		u32 pll = pll_config_get_mtl(vdev);
 
-		ivpu_dbg(vdev, IRQ, "FREQ_CHANGE irq, wp %08x, %u MHz",
-			 pll, pll_ratio_to_mhz_mtl(pll));
+		ivpu_dbg(vdev, IRQ, "FREQ_CHANGE irq, wp %08x, %lu MHz",
+			 pll, pll_ratio_to_dpu_freq_mtl(pll) / HZ_PER_MHZ);
 	}
 
 	if (REG_TEST_FLD(VPU_HW_BTRS_MTL_INTERRUPT_STAT, ATS_ERR, status)) {
@@ -755,14 +679,15 @@ bool ivpu_hw_btrs_irq_handler_lnl(struct ivpu_device *vdev, int irq)
 
 	if (REG_TEST_FLD(VPU_HW_BTRS_LNL_INTERRUPT_STAT, SURV_ERR, status)) {
 		ivpu_dbg(vdev, IRQ, "Survivability IRQ\n");
-		queue_work(system_percpu_wq, &vdev->irq_dct_work);
+		if (!kfifo_put(&vdev->hw->irq.fifo, IVPU_HW_IRQ_SRC_DCT))
+			ivpu_err_ratelimited(vdev, "IRQ FIFO full\n");
 	}
 
 	if (REG_TEST_FLD(VPU_HW_BTRS_LNL_INTERRUPT_STAT, FREQ_CHANGE, status)) {
 		u32 pll = pll_config_get_lnl(vdev);
 
-		ivpu_dbg(vdev, IRQ, "FREQ_CHANGE irq, wp %08x, %u MHz",
-			 pll, pll_ratio_to_mhz_lnl(pll));
+		ivpu_dbg(vdev, IRQ, "FREQ_CHANGE irq, wp %08x, %lu MHz",
+			 pll, pll_ratio_to_dpu_freq_lnl(pll) / HZ_PER_MHZ);
 	}
 
 	if (REG_TEST_FLD(VPU_HW_BTRS_LNL_INTERRUPT_STAT, ATS_ERR, status)) {
@@ -961,11 +886,4 @@ void ivpu_hw_btrs_diagnose_failure(struct ivpu_device *vdev)
 		return diagnose_failure_mtl(vdev);
 	else
 		return diagnose_failure_lnl(vdev);
-}
-
-int ivpu_hw_btrs_platform_read(struct ivpu_device *vdev)
-{
-	u32 reg = REGB_RD32(VPU_HW_BTRS_LNL_VPU_STATUS);
-
-	return REG_GET_FLD(VPU_HW_BTRS_LNL_VPU_STATUS, PLATFORM, reg);
 }

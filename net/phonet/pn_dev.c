@@ -22,7 +22,7 @@
 #include <net/phonet/pn_dev.h>
 
 struct phonet_routes {
-	spinlock_t		lock;
+	struct mutex		lock;
 	struct net_device __rcu	*table[64];
 };
 
@@ -48,13 +48,13 @@ struct phonet_device_list *phonet_device_list(struct net *net)
 static struct phonet_device *__phonet_device_alloc(struct net_device *dev)
 {
 	struct phonet_device_list *pndevs = phonet_device_list(dev_net(dev));
-	struct phonet_device *pnd = kmalloc_obj(*pnd, GFP_ATOMIC);
+	struct phonet_device *pnd = kmalloc(sizeof(*pnd), GFP_ATOMIC);
 	if (pnd == NULL)
 		return NULL;
 	pnd->netdev = dev;
 	bitmap_zero(pnd->addrs, 64);
 
-	lockdep_assert_held(&pndevs->lock);
+	BUG_ON(!mutex_is_locked(&pndevs->lock));
 	list_add_rcu(&pnd->list, &pndevs->list);
 	return pnd;
 }
@@ -64,8 +64,7 @@ static struct phonet_device *__phonet_get(struct net_device *dev)
 	struct phonet_device_list *pndevs = phonet_device_list(dev_net(dev));
 	struct phonet_device *pnd;
 
-	lockdep_assert_held(&pndevs->lock);
-
+	BUG_ON(!mutex_is_locked(&pndevs->lock));
 	list_for_each_entry(pnd, &pndevs->list, list) {
 		if (pnd->netdev == dev)
 			return pnd;
@@ -92,13 +91,11 @@ static void phonet_device_destroy(struct net_device *dev)
 
 	ASSERT_RTNL();
 
-	spin_lock(&pndevs->lock);
-
+	mutex_lock(&pndevs->lock);
 	pnd = __phonet_get(dev);
 	if (pnd)
 		list_del_rcu(&pnd->list);
-
-	spin_unlock(&pndevs->lock);
+	mutex_unlock(&pndevs->lock);
 
 	if (pnd) {
 		struct net *net = dev_net(dev);
@@ -139,8 +136,7 @@ int phonet_address_add(struct net_device *dev, u8 addr)
 	struct phonet_device *pnd;
 	int err = 0;
 
-	spin_lock(&pndevs->lock);
-
+	mutex_lock(&pndevs->lock);
 	/* Find or create Phonet-specific device data */
 	pnd = __phonet_get(dev);
 	if (pnd == NULL)
@@ -149,9 +145,7 @@ int phonet_address_add(struct net_device *dev, u8 addr)
 		err = -ENOMEM;
 	else if (test_and_set_bit(addr >> 2, pnd->addrs))
 		err = -EEXIST;
-
-	spin_unlock(&pndevs->lock);
-
+	mutex_unlock(&pndevs->lock);
 	return err;
 }
 
@@ -161,8 +155,7 @@ int phonet_address_del(struct net_device *dev, u8 addr)
 	struct phonet_device *pnd;
 	int err = 0;
 
-	spin_lock(&pndevs->lock);
-
+	mutex_lock(&pndevs->lock);
 	pnd = __phonet_get(dev);
 	if (!pnd || !test_and_clear_bit(addr >> 2, pnd->addrs)) {
 		err = -EADDRNOTAVAIL;
@@ -171,8 +164,7 @@ int phonet_address_del(struct net_device *dev, u8 addr)
 		list_del_rcu(&pnd->list);
 	else
 		pnd = NULL;
-
-	spin_unlock(&pndevs->lock);
+	mutex_unlock(&pndevs->lock);
 
 	if (pnd)
 		kfree_rcu(pnd, rcu);
@@ -263,31 +255,25 @@ static int phonet_device_autoconf(struct net_device *dev)
 
 static void phonet_route_autodel(struct net_device *dev)
 {
-	struct net *net = dev_net(dev);
-	DECLARE_BITMAP(deleted, 64);
-	u32 ifindex = dev->ifindex;
-	struct phonet_net *pnn;
+	struct phonet_net *pnn = phonet_pernet(dev_net(dev));
 	unsigned int i;
-
-	pnn = phonet_pernet(net);
+	DECLARE_BITMAP(deleted, 64);
 
 	/* Remove left-over Phonet routes */
 	bitmap_zero(deleted, 64);
-
-	spin_lock(&pnn->routes.lock);
-	for (i = 0; i < 64; i++) {
+	mutex_lock(&pnn->routes.lock);
+	for (i = 0; i < 64; i++)
 		if (rcu_access_pointer(pnn->routes.table[i]) == dev) {
 			RCU_INIT_POINTER(pnn->routes.table[i], NULL);
 			set_bit(i, deleted);
 		}
-	}
-	spin_unlock(&pnn->routes.lock);
+	mutex_unlock(&pnn->routes.lock);
 
 	if (bitmap_empty(deleted, 64))
 		return; /* short-circuit RCU */
 	synchronize_rcu();
 	for_each_set_bit(i, deleted, 64) {
-		rtm_phonet_notify(net, RTM_DELROUTE, ifindex, i);
+		rtm_phonet_notify(RTM_DELROUTE, dev, i);
 		dev_put(dev);
 	}
 }
@@ -327,8 +313,8 @@ static int __net_init phonet_init_net(struct net *net)
 		return -ENOMEM;
 
 	INIT_LIST_HEAD(&pnn->pndevs.list);
-	spin_lock_init(&pnn->pndevs.lock);
-	spin_lock_init(&pnn->routes.lock);
+	mutex_init(&pnn->pndevs.lock);
+	mutex_init(&pnn->routes.lock);
 	return 0;
 }
 
@@ -350,34 +336,16 @@ static struct pernet_operations phonet_net_ops = {
 /* Initialize Phonet devices list */
 int __init phonet_device_init(void)
 {
-	int err;
-
-	err = register_pernet_subsys(&phonet_net_ops);
+	int err = register_pernet_subsys(&phonet_net_ops);
 	if (err)
 		return err;
 
-	if (!proc_create_net("pnresource", 0, init_net.proc_net,
-			     &pn_res_seq_ops, sizeof(struct seq_net_private))) {
-		err = -ENOMEM;
-		goto err_pernet;
-	}
-
-	err = register_netdevice_notifier(&phonet_device_notifier);
-	if (err)
-		goto err_proc;
-
+	proc_create_net("pnresource", 0, init_net.proc_net, &pn_res_seq_ops,
+			sizeof(struct seq_net_private));
+	register_netdevice_notifier(&phonet_device_notifier);
 	err = phonet_netlink_register();
 	if (err)
-		goto err_notifier;
-
-	return 0;
-
-err_notifier:
-	unregister_netdevice_notifier(&phonet_device_notifier);
-err_proc:
-	remove_proc_entry("pnresource", init_net.proc_net);
-err_pernet:
-	unregister_pernet_subsys(&phonet_net_ops);
+		phonet_device_exit();
 	return err;
 }
 
@@ -385,8 +353,8 @@ void phonet_device_exit(void)
 {
 	rtnl_unregister_all(PF_PHONET);
 	unregister_netdevice_notifier(&phonet_device_notifier);
-	remove_proc_entry("pnresource", init_net.proc_net);
 	unregister_pernet_subsys(&phonet_net_ops);
+	remove_proc_entry("pnresource", init_net.proc_net);
 }
 
 int phonet_route_add(struct net_device *dev, u8 daddr)
@@ -396,15 +364,13 @@ int phonet_route_add(struct net_device *dev, u8 daddr)
 	int err = -EEXIST;
 
 	daddr = daddr >> 2;
-
-	spin_lock(&routes->lock);
+	mutex_lock(&routes->lock);
 	if (routes->table[daddr] == NULL) {
 		rcu_assign_pointer(routes->table[daddr], dev);
 		dev_hold(dev);
 		err = 0;
 	}
-	spin_unlock(&routes->lock);
-
+	mutex_unlock(&routes->lock);
 	return err;
 }
 
@@ -414,19 +380,17 @@ int phonet_route_del(struct net_device *dev, u8 daddr)
 	struct phonet_routes *routes = &pnn->routes;
 
 	daddr = daddr >> 2;
-
-	spin_lock(&routes->lock);
+	mutex_lock(&routes->lock);
 	if (rcu_access_pointer(routes->table[daddr]) == dev)
 		RCU_INIT_POINTER(routes->table[daddr], NULL);
 	else
 		dev = NULL;
-	spin_unlock(&routes->lock);
+	mutex_unlock(&routes->lock);
 
 	if (!dev)
 		return -ENOENT;
-
-	/* Note : our caller must call synchronize_rcu() and dev_put(dev) */
-
+	synchronize_rcu();
+	dev_put(dev);
 	return 0;
 }
 

@@ -53,10 +53,11 @@ static void dw_mci_starfive_set_sample_phase(struct dw_mci *host, u32 smpl_phase
 	mdelay(1);
 }
 
-static int dw_mci_starfive_execute_tuning(struct dw_mci *host,
+static int dw_mci_starfive_execute_tuning(struct dw_mci_slot *slot,
 					     u32 opcode)
 {
 	static const int grade  = MAX_DELAY_CHAIN;
+	struct dw_mci *host = slot->host;
 	int smpl_phase, smpl_raise = -1, smpl_fall = -1;
 	int ret;
 
@@ -64,7 +65,7 @@ static int dw_mci_starfive_execute_tuning(struct dw_mci *host,
 		dw_mci_starfive_set_sample_phase(host, smpl_phase);
 		mci_writel(host, RINTSTS, ALL_INT_CLR);
 
-		ret = mmc_send_tuning(host->mmc, opcode, NULL);
+		ret = mmc_send_tuning(slot->mmc, opcode, NULL);
 
 		if (!ret && smpl_raise < 0) {
 			smpl_raise = smpl_phase;
@@ -114,7 +115,7 @@ static int dw_mci_starfive_probe(struct platform_device *pdev)
 
 static struct platform_driver dw_mci_starfive_driver = {
 	.probe = dw_mci_starfive_probe,
-	.remove = dw_mci_pltfm_remove,
+	.remove_new = dw_mci_pltfm_remove,
 	.driver = {
 		.name = "dwmmc_starfive",
 		.probe_type = PROBE_PREFER_ASYNCHRONOUS,

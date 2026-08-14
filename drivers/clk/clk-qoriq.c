@@ -9,7 +9,6 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <dt-bindings/clock/fsl,qoriq-clockgen.h>
-#include <linux/cleanup.h>
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
 #include <linux/clkdev.h>
@@ -977,7 +976,7 @@ static struct clk * __init create_one_cmux(struct clockgen *cg, int idx)
 	u64 max_rate, pct80_rate;
 	u32 clksel;
 
-	hwc = kzalloc_obj(*hwc);
+	hwc = kzalloc(sizeof(*hwc), GFP_KERNEL);
 	if (!hwc)
 		return NULL;
 
@@ -1021,7 +1020,7 @@ static struct clk * __init create_one_hwaccel(struct clockgen *cg, int idx)
 {
 	struct mux_hwclock *hwc;
 
-	hwc = kzalloc_obj(*hwc);
+	hwc = kzalloc(sizeof(*hwc), GFP_KERNEL);
 	if (!hwc)
 		return NULL;
 
@@ -1067,8 +1066,11 @@ static void __init _clockgen_init(struct device_node *np, bool legacy);
 static void __init legacy_init_clockgen(struct device_node *np)
 {
 	if (!clockgen.node) {
-		struct device_node *parent_np __free(device_node) = of_get_parent(np);
+		struct device_node *parent_np;
+
+		parent_np = of_get_parent(np);
 		_clockgen_init(parent_np, true);
+		of_node_put(parent_np);
 	}
 }
 
@@ -1320,11 +1322,11 @@ static void __init legacy_pll_init(struct device_node *np, int idx)
 	count = of_property_count_strings(np, "clock-output-names");
 
 	BUILD_BUG_ON(ARRAY_SIZE(pll->div) < 4);
-	subclks = kzalloc_objs(struct clk *, 4);
+	subclks = kcalloc(4, sizeof(struct clk *), GFP_KERNEL);
 	if (!subclks)
 		return;
 
-	onecell_data = kmalloc_obj(*onecell_data);
+	onecell_data = kmalloc(sizeof(*onecell_data), GFP_KERNEL);
 	if (!onecell_data)
 		goto err_clks;
 

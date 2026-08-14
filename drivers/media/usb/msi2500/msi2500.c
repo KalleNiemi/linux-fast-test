@@ -576,7 +576,6 @@ static void msi2500_disconnect(struct usb_interface *intf)
 	v4l2_device_disconnect(&dev->v4l2_dev);
 	video_unregister_device(&dev->vdev);
 	spi_unregister_controller(dev->ctlr);
-	spi_controller_put(dev->ctlr);
 	mutex_unlock(&dev->v4l2_lock);
 	mutex_unlock(&dev->vb_queue_lock);
 
@@ -900,6 +899,8 @@ static const struct vb2_ops msi2500_vb2_ops = {
 	.buf_queue              = msi2500_buf_queue,
 	.start_streaming        = msi2500_start_streaming,
 	.stop_streaming         = msi2500_stop_streaming,
+	.wait_prepare           = vb2_ops_wait_prepare,
+	.wait_finish            = vb2_ops_wait_finish,
 };
 
 static int msi2500_enum_fmt_sdr_cap(struct file *file, void *priv,
@@ -1187,7 +1188,7 @@ static int msi2500_probe(struct usb_interface *intf,
 		.max_speed_hz		= 12000000,
 	};
 
-	dev = kzalloc_obj(*dev);
+	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
 	if (!dev) {
 		ret = -ENOMEM;
 		goto err;
@@ -1214,7 +1215,6 @@ static int msi2500_probe(struct usb_interface *intf,
 	dev->vb_queue.ops = &msi2500_vb2_ops;
 	dev->vb_queue.mem_ops = &vb2_vmalloc_memops;
 	dev->vb_queue.timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
-	dev->vb_queue.lock = &dev->vb_queue_lock;
 	ret = vb2_queue_init(&dev->vb_queue);
 	if (ret) {
 		dev_err(dev->dev, "Could not initialize vb2 queue\n");
@@ -1224,6 +1224,7 @@ static int msi2500_probe(struct usb_interface *intf,
 	/* Init video_device structure */
 	dev->vdev = msi2500_template;
 	dev->vdev.queue = &dev->vb_queue;
+	dev->vdev.queue->lock = &dev->vb_queue_lock;
 	video_set_drvdata(&dev->vdev, dev);
 
 	/* Register the v4l2_device structure */
@@ -1234,8 +1235,8 @@ static int msi2500_probe(struct usb_interface *intf,
 		goto err_free_mem;
 	}
 
-	/* SPI host adapter */
-	ctlr = spi_alloc_host(dev->dev, 0);
+	/* SPI master adapter */
+	ctlr = spi_alloc_master(dev->dev, 0);
 	if (ctlr == NULL) {
 		ret = -ENOMEM;
 		goto err_unregister_v4l2_dev;
@@ -1247,8 +1248,10 @@ static int msi2500_probe(struct usb_interface *intf,
 	ctlr->transfer_one_message = msi2500_transfer_one_message;
 	spi_controller_set_devdata(ctlr, dev);
 	ret = spi_register_controller(ctlr);
-	if (ret)
-		goto err_put_controller;
+	if (ret) {
+		spi_controller_put(ctlr);
+		goto err_unregister_v4l2_dev;
+	}
 
 	/* load v4l2 subdevice */
 	sd = v4l2_spi_new_subdev(&dev->v4l2_dev, ctlr, &board_info);
@@ -1291,8 +1294,6 @@ err_free_controls:
 	v4l2_ctrl_handler_free(&dev->hdl);
 err_unregister_controller:
 	spi_unregister_controller(dev->ctlr);
-err_put_controller:
-	spi_controller_put(dev->ctlr);
 err_unregister_v4l2_dev:
 	v4l2_device_unregister(&dev->v4l2_dev);
 err_free_mem:

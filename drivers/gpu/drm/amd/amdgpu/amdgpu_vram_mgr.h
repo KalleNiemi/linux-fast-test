@@ -35,26 +35,12 @@ struct amdgpu_vram_mgr {
 	struct list_head reserved_pages;
 	atomic64_t vis_usage;
 	u64 default_page_size;
-	struct list_head allocated_vres_list;
-};
-
-struct amdgpu_vres_task {
-	pid_t pid;
-	char  comm[TASK_COMM_LEN];
-};
-
-struct amdgpu_vram_block_info {
-	u64 start;
-	u64 size;
-	struct amdgpu_vres_task task;
 };
 
 struct amdgpu_vram_mgr_resource {
 	struct ttm_resource base;
 	struct list_head blocks;
 	unsigned long flags;
-	struct list_head vres_node;
-	struct amdgpu_vres_task task;
 };
 
 static inline u64 amdgpu_vram_mgr_block_start(struct gpu_buddy_block *block)
@@ -80,13 +66,7 @@ to_amdgpu_vram_mgr_resource(struct ttm_resource *res)
 
 static inline void amdgpu_vram_mgr_set_cleared(struct ttm_resource *res)
 {
-	struct amdgpu_vram_mgr_resource *ares = to_amdgpu_vram_mgr_resource(res);
-
-	WARN_ON(ares->flags & GPU_BUDDY_CLEARED);
-	ares->flags |= GPU_BUDDY_CLEARED;
+	to_amdgpu_vram_mgr_resource(res)->flags |= GPU_BUDDY_CLEARED;
 }
-
-int amdgpu_vram_mgr_query_address_block_info(struct amdgpu_vram_mgr *mgr,
-		uint64_t address, struct amdgpu_vram_block_info *info);
 
 #endif

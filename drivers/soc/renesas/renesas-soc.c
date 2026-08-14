@@ -5,7 +5,6 @@
  * Copyright (C) 2014-2016 Glider bvba
  */
 
-#include <linux/bitfield.h>
 #include <linux/io.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
@@ -35,10 +34,6 @@ static const struct renesas_family fam_rcar_gen3 __initconst __maybe_unused = {
 
 static const struct renesas_family fam_rcar_gen4 __initconst __maybe_unused = {
 	.name	= "R-Car Gen4",
-};
-
-static const struct renesas_family fam_rcar_gen5 __initconst __maybe_unused = {
-	.name   = "R-Car Gen5",
 };
 
 static const struct renesas_family fam_rmobile __initconst __maybe_unused = {
@@ -74,6 +69,14 @@ static const struct renesas_family fam_rzg2l __initconst __maybe_unused = {
 
 static const struct renesas_family fam_rzg2ul __initconst __maybe_unused = {
 	.name	= "RZ/G2UL",
+};
+
+static const struct renesas_family fam_rzg3s __initconst __maybe_unused = {
+	.name	= "RZ/G3S",
+};
+
+static const struct renesas_family fam_rzv2h __initconst __maybe_unused = {
+	.name	= "RZ/V2H",
 };
 
 static const struct renesas_family fam_rzv2l __initconst __maybe_unused = {
@@ -171,6 +174,16 @@ static const struct renesas_soc soc_rz_g2l __initconst __maybe_unused = {
 static const struct renesas_soc soc_rz_g2ul __initconst __maybe_unused = {
 	.family = &fam_rzg2ul,
 	.id     = 0x8450447,
+};
+
+static const struct renesas_soc soc_rz_g3s __initconst __maybe_unused = {
+	.family = &fam_rzg3s,
+	.id	= 0x85e0447,
+};
+
+static const struct renesas_soc soc_rz_v2h __initconst __maybe_unused = {
+	.family = &fam_rzv2h,
+	.id     = 0x847a447,
 };
 
 static const struct renesas_soc soc_rz_v2l __initconst __maybe_unused = {
@@ -271,15 +284,11 @@ static const struct renesas_soc soc_rcar_v4m __initconst __maybe_unused = {
 	.id     = 0x5d,
 };
 
-static const struct renesas_soc soc_rcar_x5h __initconst __maybe_unused = {
-	.family = &fam_rcar_gen5,
-	.id     = 0x60,
-};
-
 static const struct renesas_soc soc_shmobile_ag5 __initconst __maybe_unused = {
 	.family	= &fam_shmobile,
 	.id	= 0x37,
 };
+
 
 static const struct of_device_id renesas_socs[] __initconst __maybe_unused = {
 #ifdef CONFIG_ARCH_R7S72100
@@ -361,7 +370,6 @@ static const struct of_device_id renesas_socs[] __initconst __maybe_unused = {
 	{ .compatible = "renesas,r8a77965",	.data = &soc_rcar_m3_n },
 	{ .compatible = "renesas,r8a779m4",	.data = &soc_rcar_m3_n },
 	{ .compatible = "renesas,r8a779m5",	.data = &soc_rcar_m3_n },
-	{ .compatible = "renesas,r8a779md",	.data = &soc_rcar_m3_n },
 #endif
 #ifdef CONFIG_ARCH_R8A77970
 	{ .compatible = "renesas,r8a77970",	.data = &soc_rcar_v3m },
@@ -389,9 +397,6 @@ static const struct of_device_id renesas_socs[] __initconst __maybe_unused = {
 #ifdef CONFIG_ARCH_R8A779H0
 	{ .compatible = "renesas,r8a779h0",	.data = &soc_rcar_v4m },
 #endif
-#ifdef CONFIG_ARCH_R8A78000
-	{ .compatible = "renesas,r8a78000",	.data = &soc_rcar_x5h },
-#endif
 #ifdef CONFIG_ARCH_R9A07G043
 #ifdef CONFIG_RISCV
 	{ .compatible = "renesas,r9a07g043",	.data = &soc_rz_five },
@@ -405,8 +410,14 @@ static const struct of_device_id renesas_socs[] __initconst __maybe_unused = {
 #ifdef CONFIG_ARCH_R9A07G054
 	{ .compatible = "renesas,r9a07g054",	.data = &soc_rz_v2l },
 #endif
+#ifdef CONFIG_ARCH_R9A08G045
+	{ .compatible = "renesas,r9a08g045",	.data = &soc_rz_g3s },
+#endif
 #ifdef CONFIG_ARCH_R9A09G011
 	{ .compatible = "renesas,r9a09g011",	.data = &soc_rz_v2m },
+#endif
+#ifdef CONFIG_ARCH_R9A09G057
+	{ .compatible = "renesas,r9a09g057",	.data = &soc_rz_v2h },
 #endif
 #ifdef CONFIG_ARCH_SH73A0
 	{ .compatible = "renesas,sh73a0",	.data = &soc_shmobile_ag5 },
@@ -433,6 +444,11 @@ static const struct renesas_id id_rzg2l __initconst = {
 	.mask = 0xfffffff,
 };
 
+static const struct renesas_id id_rzv2h __initconst = {
+	.offset = 0x304,
+	.mask = 0xfffffff,
+};
+
 static const struct renesas_id id_rzv2m __initconst = {
 	.offset = 0x104,
 	.mask = 0xff,
@@ -443,19 +459,14 @@ static const struct renesas_id id_prr __initconst = {
 	.mask = 0xff00,
 };
 
-static const struct renesas_id id_mfis __initconst = {
-	.offset = 0x44,
-	.mask = 0xff00,
-};
-
 static const struct of_device_id renesas_ids[] __initconst = {
 	{ .compatible = "renesas,bsid",			.data = &id_bsid },
-	{ .compatible = "renesas,r8a78000-mfis",	.data = &id_mfis },
 	{ .compatible = "renesas,r9a07g043-sysc",	.data = &id_rzg2l },
 	{ .compatible = "renesas,r9a07g044-sysc",	.data = &id_rzg2l },
 	{ .compatible = "renesas,r9a07g054-sysc",	.data = &id_rzg2l },
 	{ .compatible = "renesas,r9a08g045-sysc",	.data = &id_rzg2l },
 	{ .compatible = "renesas,r9a09g011-sys",	.data = &id_rzv2m },
+	{ .compatible = "renesas,r9a09g057-sys",	.data = &id_rzv2h },
 	{ .compatible = "renesas,prr",			.data = &id_prr },
 	{ /* sentinel */ }
 };
@@ -475,7 +486,7 @@ static int __init renesas_soc_init(void)
 	const char *soc_id;
 	int ret;
 
-	match = of_machine_get_match(renesas_socs);
+	match = of_match_node(renesas_socs, of_root);
 	if (!match)
 		return -ENODEV;
 
@@ -494,7 +505,7 @@ static int __init renesas_soc_init(void)
 		chipid = ioremap(family->reg, 4);
 	}
 
-	soc_dev_attr = kzalloc_obj(*soc_dev_attr);
+	soc_dev_attr = kzalloc(sizeof(*soc_dev_attr), GFP_KERNEL);
 	if (!soc_dev_attr) {
 		if (chipid)
 			iounmap(chipid);
@@ -508,7 +519,7 @@ static int __init renesas_soc_init(void)
 		product = readl(chipid + id->offset);
 		iounmap(chipid);
 
-		if (id == &id_prr || id == &id_mfis) {
+		if (id == &id_prr) {
 			/* R-Car M3-W ES1.1 incorrectly identifies as ES2.0 */
 			if ((product & 0x7fff) == 0x5210)
 				product ^= 0x11;
@@ -520,7 +531,7 @@ static int __init renesas_soc_init(void)
 			eslo = product & 0xf;
 			soc_dev_attr->revision = kasprintf(GFP_KERNEL, "ES%u.%u",
 							   eshi, eslo);
-		}  else if (id == &id_rzg2l) {
+		}  else if (id == &id_rzg2l || id == &id_rzv2h) {
 			eshi =  ((product >> 28) & 0x0f);
 			soc_dev_attr->revision = kasprintf(GFP_KERNEL, "%u",
 							   eshi);
@@ -532,7 +543,8 @@ static int __init renesas_soc_init(void)
 							   eshi, eslo);
 		}
 
-		if (soc->id && field_get(id->mask, product) != soc->id) {
+		if (soc->id &&
+		    ((product & id->mask) >> __ffs(id->mask)) != soc->id) {
 			pr_warn("SoC mismatch (product = 0x%x)\n", product);
 			ret = -ENODEV;
 			goto free_soc_dev_attr;

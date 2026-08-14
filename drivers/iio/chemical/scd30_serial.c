@@ -9,6 +9,7 @@
 #include <linux/errno.h>
 #include <linux/iio/iio.h>
 #include <linux/jiffies.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/property.h>
 #include <linux/serdev.h>
@@ -260,4 +261,4 @@ module_serdev_device_driver(scd30_serdev_driver);
 MODULE_AUTHOR("Tomasz Duszynski <tomasz.duszynski@octakon.com>");
 MODULE_DESCRIPTION("Sensirion SCD30 carbon dioxide sensor serial driver");
 MODULE_LICENSE("GPL v2");
-MODULE_IMPORT_NS("IIO_SCD30");
+MODULE_IMPORT_NS(IIO_SCD30);

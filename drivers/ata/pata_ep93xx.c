@@ -44,6 +44,7 @@
 #include <linux/delay.h>
 #include <linux/dmaengine.h>
 #include <linux/ktime.h>
+#include <linux/mod_devicetable.h>
 
 #include <linux/soc/cirrus/ep93xx.h>
 
@@ -203,7 +204,6 @@ static void ep93xx_pata_enable_pio(void __iomem *base, int pio_mode)
  */
 static void ep93xx_pata_delay(unsigned long count)
 {
-#ifdef CONFIG_ARM
 	__asm__ volatile (
 		"0:\n"
 		"mov r0, r0\n"
@@ -212,10 +212,6 @@ static void ep93xx_pata_delay(unsigned long count)
 		: "=r" (count)
 		: "0" (count)
 	);
-#else
-	while (count--)
-		cpu_relax();
-#endif
 }
 
 static unsigned long ep93xx_pata_wait_for_iordy(void __iomem *base,
@@ -883,8 +879,8 @@ static const struct scsi_host_template ep93xx_pata_sht = {
 static struct ata_port_operations ep93xx_pata_port_ops = {
 	.inherits		= &ata_bmdma_port_ops,
 
-	.reset.softreset	= ep93xx_pata_softreset,
-	.reset.hardreset	= ATA_OP_NULL,
+	.softreset		= ep93xx_pata_softreset,
+	.hardreset		= ATA_OP_NULL,
 
 	.sff_dev_select		= ep93xx_pata_dev_select,
 	.sff_set_devctl		= ep93xx_pata_set_devctl,
@@ -976,7 +972,7 @@ static int ep93xx_pata_probe(struct platform_device *pdev)
 
 		match = soc_device_match(ep93xx_soc_table);
 		if (match)
-			ap->udma_mask = (unsigned long) match->data;
+			ap->udma_mask = (unsigned int) match->data;
 		else
 			ap->udma_mask = ATA_UDMA2;
 	}
@@ -1019,7 +1015,7 @@ static struct platform_driver ep93xx_pata_platform_driver = {
 		.of_match_table = ep93xx_pata_of_ids,
 	},
 	.probe = ep93xx_pata_probe,
-	.remove = ep93xx_pata_remove,
+	.remove_new = ep93xx_pata_remove,
 };
 
 module_platform_driver(ep93xx_pata_platform_driver);

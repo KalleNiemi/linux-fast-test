@@ -95,11 +95,13 @@ static int thermal_of_populate_trip(struct device_node *np,
 
 static struct thermal_trip *thermal_of_trips_init(struct device_node *np, int *ntrips)
 {
+	struct thermal_trip *tt;
+	struct device_node *trips;
 	int ret, count;
 
 	*ntrips = 0;
-
-	struct device_node *trips __free(device_node) = of_get_child_by_name(np, "trips");
+	
+	trips = of_get_child_by_name(np, "trips");
 	if (!trips)
 		return NULL;
 
@@ -107,27 +109,39 @@ static struct thermal_trip *thermal_of_trips_init(struct device_node *np, int *n
 	if (!count)
 		return NULL;
 
-	struct thermal_trip *tt __free(kfree) = kzalloc_objs(*tt, count);
-	if (!tt)
-		return ERR_PTR(-ENOMEM);
+	tt = kzalloc(sizeof(*tt) * count, GFP_KERNEL);
+	if (!tt) {
+		ret = -ENOMEM;
+		goto out_of_node_put;
+	}
+
+	*ntrips = count;
 
 	count = 0;
 	for_each_child_of_node_scoped(trips, trip) {
 		ret = thermal_of_populate_trip(trip, &tt[count++]);
 		if (ret)
-			return ERR_PTR(ret);
+			goto out_kfree;
 	}
 
-	*ntrips = count;
+	of_node_put(trips);
 
-	return no_free_ptr(tt);
+	return tt;
+
+out_kfree:
+	kfree(tt);
+out_of_node_put:
+	of_node_put(trips);
+
+	return ERR_PTR(ret);
 }
 
 static struct device_node *of_thermal_zone_find(struct device_node *sensor, int id)
 {
+	struct device_node *np, *tz;
 	struct of_phandle_args sensor_specs;
 
-	struct device_node *np __free(device_node) = of_find_node_by_name(NULL, "thermal-zones");
+	np = of_find_node_by_name(NULL, "thermal-zones");
 	if (!np) {
 		pr_debug("No thermal zones description\n");
 		return ERR_PTR(-ENODEV);
@@ -144,8 +158,9 @@ static struct device_node *of_thermal_zone_find(struct device_node *sensor, int 
 		count = of_count_phandle_with_args(child, "thermal-sensors",
 						   "#thermal-sensor-cells");
 		if (count <= 0) {
-			pr_err("%pOFP: missing thermal sensor\n", child);
-			return ERR_PTR(-EINVAL);
+			pr_err("%pOFn: missing thermal sensor\n", child);
+			tz = ERR_PTR(-EINVAL);
+			goto out;
 		}
 
 		for (i = 0; i < count; i++) {
@@ -156,20 +171,24 @@ static struct device_node *of_thermal_zone_find(struct device_node *sensor, int 
 							 "#thermal-sensor-cells",
 							 i, &sensor_specs);
 			if (ret < 0) {
-				pr_err("%pOFP: Failed to read thermal-sensors cells: %d\n", child, ret);
-				return ERR_PTR(ret);
+				pr_err("%pOFn: Failed to read thermal-sensors cells: %d\n", child, ret);
+				tz = ERR_PTR(ret);
+				goto out;
 			}
 
 			of_node_put(sensor_specs.np);
 			if ((sensor == sensor_specs.np) && id == (sensor_specs.args_count ?
 								  sensor_specs.args[0] : 0)) {
-				pr_debug("sensor %pOFP id=%d belongs to %pOFP\n", sensor, id, child);
-				return no_free_ptr(child);
+				pr_debug("sensor %pOFn id=%d belongs to %pOFn\n", sensor, id, child);
+				tz = no_free_ptr(child);
+				goto out;
 			}
 		}
 	}
-
-	return ERR_PTR(-ENODEV);
+	tz = ERR_PTR(-ENODEV);
+out:
+	of_node_put(np);
+	return tz;
 }
 
 static int thermal_of_monitor_init(struct device_node *np, int *delay, int *pdelay)
@@ -180,7 +199,7 @@ static int thermal_of_monitor_init(struct device_node *np, int *delay, int *pdel
 	if (ret == -EINVAL) {
 		*pdelay = 0;
 	} else if (ret < 0) {
-		pr_err("%pOFP: Couldn't get polling-delay-passive: %d\n", np, ret);
+		pr_err("%pOFn: Couldn't get polling-delay-passive: %d\n", np, ret);
 		return ret;
 	}
 
@@ -188,7 +207,7 @@ static int thermal_of_monitor_init(struct device_node *np, int *delay, int *pdel
 	if (ret == -EINVAL) {
 		*delay = 0;
 	} else if (ret < 0) {
-		pr_err("%pOFP: Couldn't get polling-delay: %d\n", np, ret);
+		pr_err("%pOFn: Couldn't get polling-delay: %d\n", np, ret);
 		return ret;
 	}
 
@@ -259,34 +278,16 @@ static bool thermal_of_get_cooling_spec(struct device_node *map_np, int index,
 
 	of_node_put(cooling_spec.np);
 
-	/*
-	 * There are two formats:
-	 * - Legacy format :	<&cdev lower upper>
-	 * - New format    :	<&cdev cdev_id lower upper>
-	 *
-	 * With the new format, along with the device node pointer,
-	 * the cdev_id must match with the cooling device cdev_id in
-	 * order to bind
-	 */
-	if (cooling_spec.args_count < 2 || cooling_spec.args_count > 3) {
-		pr_err("Invalid number of cooling device parameters\n");
+	if (cooling_spec.args_count < 2) {
+		pr_err("wrong reference to cooling device, missing limits\n");
 		return false;
 	}
 
 	if (cooling_spec.np != cdev->np)
 		return false;
 
-	if (cooling_spec.args_count == 3 &&
-	    cooling_spec.args[0] != cdev->cdev_id)
-		return false;
-
-	if (cooling_spec.args_count != 3) {
-		c->lower = cooling_spec.args[0];
-		c->upper = cooling_spec.args[1];
-	} else {
-		c->lower = cooling_spec.args[1];
-		c->upper = cooling_spec.args[2];
-	}
+	c->lower = cooling_spec.args[0];
+	c->upper = cooling_spec.args[1];
 	c->weight = weight;
 
 	return true;
@@ -398,23 +399,23 @@ static struct thermal_zone_device *thermal_of_zone_register(struct device_node *
 	np = of_thermal_zone_find(sensor, id);
 	if (IS_ERR(np)) {
 		if (PTR_ERR(np) != -ENODEV)
-			pr_err("Failed to find thermal zone for %pOFP id=%d\n", sensor, id);
+			pr_err("Failed to find thermal zone for %pOFn id=%d\n", sensor, id);
 		return ERR_CAST(np);
 	}
 
 	trips = thermal_of_trips_init(np, &ntrips);
 	if (IS_ERR(trips)) {
-		pr_err("Failed to parse trip points for %pOFP id=%d\n", sensor, id);
+		pr_err("Failed to parse trip points for %pOFn id=%d\n", sensor, id);
 		ret = PTR_ERR(trips);
 		goto out_of_node_put;
 	}
 
 	if (!trips)
-		pr_info("No trip points found for %pOFP id=%d\n", sensor, id);
+		pr_info("No trip points found for %pOFn id=%d\n", sensor, id);
 
 	ret = thermal_of_monitor_init(np, &delay, &pdelay);
 	if (ret) {
-		pr_err("Failed to initialize monitoring delays from %pOFP\n", np);
+		pr_err("Failed to initialize monitoring delays from %pOFn\n", np);
 		goto out_kfree_trips;
 	}
 
@@ -423,19 +424,16 @@ static struct thermal_zone_device *thermal_of_zone_register(struct device_node *
 	of_ops.should_bind = thermal_of_should_bind;
 
 	ret = of_property_read_string(np, "critical-action", &action);
-	if (!ret && !of_ops.critical) {
-		if (!strcasecmp(action, "reboot"))
+	if (!ret)
+		if (!of_ops.critical && !strcasecmp(action, "reboot"))
 			of_ops.critical = thermal_zone_device_critical_reboot;
-		else if (!strcasecmp(action, "shutdown"))
-			of_ops.critical = thermal_zone_device_critical_shutdown;
-	}
 
 	tz = thermal_zone_device_register_with_trips(np->name, trips, ntrips,
 						     data, &of_ops, &tzp,
 						     pdelay, delay);
 	if (IS_ERR(tz)) {
 		ret = PTR_ERR(tz);
-		pr_err("Failed to register thermal zone %pOFP: %d\n", np, ret);
+		pr_err("Failed to register thermal zone %pOFn: %d\n", np, ret);
 		goto out_kfree_trips;
 	}
 
@@ -512,7 +510,7 @@ EXPORT_SYMBOL_GPL(devm_thermal_of_zone_register);
 /**
  * devm_thermal_of_zone_unregister - Resource managed version of
  *				thermal_of_zone_unregister().
- * @dev: Device for which resource was allocated.
+ * @dev: Device for which which resource was allocated.
  * @tz: a pointer to struct thermal_zone where the sensor is registered.
  *
  * This function removes the sensor callbacks and private data from the
@@ -528,125 +526,3 @@ void devm_thermal_of_zone_unregister(struct device *dev, struct thermal_zone_dev
 			       devm_thermal_of_zone_match, tz));
 }
 EXPORT_SYMBOL_GPL(devm_thermal_of_zone_unregister);
-
-/**
- * thermal_of_cooling_device_register() - register an OF thermal cooling device
- * @np:		a pointer to a device tree node.
- * @cdev_id:	a cooling device id in the cooling controller
- * @type:	the thermal cooling device type.
- * @devdata:	device private data.
- * @ops:	standard thermal cooling devices callbacks.
- *
- * This interface function adds a new thermal cooling device (fan/processor/...)
- * to /sys/class/thermal/ folder as cooling_device[0-*]. It tries to bind itself
- * to all the thermal zone devices registered at the same time.
- * It also gives the opportunity to link the cooling device to a device tree
- * node, so that it can be bound to a thermal zone created out of device tree.
- *
- * Return: a pointer to the created struct thermal_cooling_device or an
- * ERR_PTR. Caller must check return value with IS_ERR*() helpers.
- */
-struct thermal_cooling_device *
-thermal_of_cooling_device_register(struct device_node *np, u32 cdev_id,
-				   const char *type, void *devdata,
-				   const struct thermal_cooling_device_ops *ops)
-{
-	struct thermal_cooling_device *cdev;
-	int ret;
-
-	cdev = thermal_cooling_device_alloc(type, ops);
-	if (IS_ERR(cdev))
-		return cdev;
-
-	cdev->np = np;
-	cdev->cdev_id = cdev_id;
-
-	ret = thermal_cooling_device_add(cdev, devdata);
-	if (ret)
-		return ERR_PTR(ret);
-
-	return cdev;
-}
-EXPORT_SYMBOL_GPL(thermal_of_cooling_device_register);
-
-static void thermal_of_cooling_device_release(void *data)
-{
-	struct thermal_cooling_device *cdev = data;
-
-	thermal_cooling_device_unregister(cdev);
-}
-
-static struct thermal_cooling_device *
-__devm_thermal_of_cooling_device_register(struct device *dev, struct device_node *np,
-					  u32 cdev_id, const char *type, void *devdata,
-					  const struct thermal_cooling_device_ops *ops)
-{
-	struct thermal_cooling_device *cdev;
-	int ret;
-
-	cdev = thermal_of_cooling_device_register(np, cdev_id, type, devdata, ops);
-	if (IS_ERR(cdev))
-		return cdev;
-
-	ret = devm_add_action_or_reset(dev, thermal_of_cooling_device_release, cdev);
-	if (ret)
-		return ERR_PTR(ret);
-
-	return cdev;
-}
-
-/**
- * devm_thermal_of_cooling_device_register() - register an OF thermal cooling device
- * @dev:	a valid struct device pointer of a sensor device.
- * @cdev_id:	a cooling device index in the cooling controller
- * @type:	the thermal cooling device type.
- * @devdata:	device private data.
- * @ops:	standard thermal cooling devices callbacks.
- *
- * This function will register a cooling device with device tree node reference.
- * This interface function adds a new thermal cooling device (fan/processor/...)
- * to /sys/class/thermal/ folder as cooling_device[0-*]. It tries to bind itself
- * to all the thermal zone devices registered at the same time.
- *
- * Return: a pointer to the created struct thermal_cooling_device or an
- * ERR_PTR. Caller must check return value with IS_ERR*() helpers.
- */
-struct thermal_cooling_device *
-devm_thermal_of_cooling_device_register(struct device *dev, u32 cdev_id,
-					const char *type, void *devdata,
-					const struct thermal_cooling_device_ops *ops)
-{
-	return __devm_thermal_of_cooling_device_register(dev, dev->of_node, cdev_id,
-							 type, devdata, ops);
-}
-EXPORT_SYMBOL_GPL(devm_thermal_of_cooling_device_register);
-
-/**
- * devm_thermal_of_child_cooling_device_register() - register an OF thermal cooling
- *                                             device
- * @dev:        a valid struct device pointer of a sensor device.
- * @np:         a pointer to a device tree node.
- * @type:       the thermal cooling device type.
- * @devdata:    device private data.
- * @ops:        standard thermal cooling devices callbacks.
- *
- * This function will register a cooling device with device tree node reference.
- * This interface function adds a new thermal cooling device (fan/processor/...)
- * to /sys/class/thermal/ folder as cooling_device[0-*]. It tries to bind itself
- * to all the thermal zone devices registered at the same time.
- *
- * This function should be used when a cooling controller has child
- * nodes which are referenced in the thermal zone cooling map.
- *
- * Return: a pointer to the created struct thermal_cooling_device or an
- * ERR_PTR. Caller must check return value with IS_ERR*() helpers.
- */
-struct thermal_cooling_device *
-devm_thermal_of_child_cooling_device_register(struct device *dev,
-					      struct device_node *np,
-					      const char *type, void *devdata,
-					      const struct thermal_cooling_device_ops *ops)
-{
-	return __devm_thermal_of_cooling_device_register(dev, np, 0, type, devdata, ops);
-}
-EXPORT_SYMBOL_GPL(devm_thermal_of_child_cooling_device_register);

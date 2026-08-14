@@ -15,7 +15,8 @@
 #include <linux/clk.h>
 #include <linux/rtc.h>
 #include <linux/bcd.h>
-#include <linux/platform_data/pic32.h>
+
+#include <asm/mach-pic32/pic32.h>
 
 #define PIC32_RTCCON		0x00
 #define PIC32_RTCCON_ON		BIT(15)
@@ -329,7 +330,7 @@ static int pic32_rtc_probe(struct platform_device *pdev)
 
 	pic32_rtc_enable(pdata, 1);
 
-	device_init_wakeup(&pdev->dev, true);
+	device_init_wakeup(&pdev->dev, 1);
 
 	pdata->rtc->ops = &pic32_rtcops;
 	pdata->rtc->range_min = RTC_TIMESTAMP_BEGIN_2000;
@@ -338,6 +339,8 @@ static int pic32_rtc_probe(struct platform_device *pdev)
 	ret = devm_rtc_register_device(pdata->rtc);
 	if (ret)
 		goto err_nortc;
+
+	pdata->rtc->max_user_freq = 128;
 
 	pic32_rtc_setfreq(&pdev->dev, 1);
 	ret = devm_request_irq(&pdev->dev, pdata->alarm_irq,
@@ -368,7 +371,7 @@ MODULE_DEVICE_TABLE(of, pic32_rtc_dt_ids);
 
 static struct platform_driver pic32_rtc_driver = {
 	.probe		= pic32_rtc_probe,
-	.remove		= pic32_rtc_remove,
+	.remove_new	= pic32_rtc_remove,
 	.driver		= {
 		.name	= "pic32-rtc",
 		.of_match_table	= of_match_ptr(pic32_rtc_dt_ids),

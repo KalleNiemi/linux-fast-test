@@ -95,8 +95,10 @@ static int dmard09_probe(struct i2c_client *client)
 	struct dmard09_data *data;
 
 	indio_dev = devm_iio_device_alloc(&client->dev, sizeof(*data));
-	if (!indio_dev)
+	if (!indio_dev) {
+		dev_err(&client->dev, "iio allocation failed\n");
 		return -ENOMEM;
+	}
 
 	data = iio_priv(indio_dev);
 	data->client = client;
@@ -123,7 +125,7 @@ static int dmard09_probe(struct i2c_client *client)
 }
 
 static const struct i2c_device_id dmard09_id[] = {
-	{ .name = "dmard09" },
+	{ "dmard09" },
 	{ }
 };
 

@@ -22,7 +22,6 @@
 #include <linux/platform_device.h>
 #include <linux/power/charger-manager.h>
 #include <linux/regulator/consumer.h>
-#include <linux/string_choices.h>
 #include <linux/sysfs.h>
 #include <linux/of.h>
 #include <linux/thermal.h>
@@ -222,7 +221,7 @@ static bool is_charging(struct charger_manager *cm)
 
 	/* If at least one of the charger is charging, return yes */
 	for (i = 0; cm->desc->psy_charger_stat[i]; i++) {
-		/* 1. The charger should not be DISABLED */
+		/* 1. The charger sholuld not be DISABLED */
 		if (cm->emergency_stop)
 			continue;
 		if (!cm->charger_enabled)
@@ -883,22 +882,26 @@ static bool cm_setup_timer(void)
 	mutex_unlock(&cm_list_mtx);
 
 	if (timer_req && cm_timer) {
+		ktime_t now, add;
+
 		/*
 		 * Set alarm with the polling interval (wakeup_ms)
 		 * The alarm time should be NOW + CM_RTC_SMALL or later.
 		 */
-		if (wakeup_ms == UINT_MAX || wakeup_ms < CM_RTC_SMALL * MSEC_PER_SEC)
+		if (wakeup_ms == UINT_MAX ||
+			wakeup_ms < CM_RTC_SMALL * MSEC_PER_SEC)
 			wakeup_ms = 2 * CM_RTC_SMALL * MSEC_PER_SEC;
 
 		pr_info("Charger Manager wakeup timer: %u ms\n", wakeup_ms);
 
+		now = ktime_get_boottime();
+		add = ktime_set(wakeup_ms / MSEC_PER_SEC,
+				(wakeup_ms % MSEC_PER_SEC) * NSEC_PER_MSEC);
+		alarm_start(cm_timer, ktime_add(now, add));
+
 		cm_suspend_duration_ms = wakeup_ms;
 
-		/*
-		 * The timer should always be queued as the timeout is at least
-		 * two seconds out. Handle it correctly nevertheless.
-		 */
-		return alarm_start_timer(cm_timer, ktime_add_ms(0, wakeup_ms), true);
+		return true;
 	}
 	return false;
 }
@@ -1087,7 +1090,7 @@ static ssize_t charger_state_show(struct device *dev,
 	if (!charger->externally_control)
 		state = regulator_is_enabled(charger->consumer);
 
-	return sysfs_emit(buf, "%s\n", str_enabled_disabled(state));
+	return sysfs_emit(buf, "%s\n", state ? "enabled" : "disabled");
 }
 
 static ssize_t charger_externally_control_show(struct device *dev,
@@ -1411,9 +1414,10 @@ static inline struct charger_desc *cm_get_drv_data(struct platform_device *pdev)
 	return dev_get_platdata(&pdev->dev);
 }
 
-static void cm_timer_func(struct alarm *alarm, ktime_t now)
+static enum alarmtimer_restart cm_timer_func(struct alarm *alarm, ktime_t now)
 {
 	cm_timer_set = false;
+	return ALARMTIMER_NORESTART;
 }
 
 static int charger_manager_probe(struct platform_device *pdev)
@@ -1651,8 +1655,8 @@ static void charger_manager_remove(struct platform_device *pdev)
 }
 
 static const struct platform_device_id charger_manager_id[] = {
-	{ .name = "charger-manager" },
-	{ }
+	{ "charger-manager", 0 },
+	{ },
 };
 MODULE_DEVICE_TABLE(platform, charger_manager_id);
 
@@ -1738,7 +1742,7 @@ static struct platform_driver charger_manager_driver = {
 		.of_match_table = charger_manager_match,
 	},
 	.probe = charger_manager_probe,
-	.remove = charger_manager_remove,
+	.remove_new = charger_manager_remove,
 	.id_table = charger_manager_id,
 };
 

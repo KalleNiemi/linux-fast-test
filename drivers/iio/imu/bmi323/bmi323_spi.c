@@ -5,6 +5,7 @@
  * Copyright (C) 2023, Jagath Jog J <jagathjog1996@gmail.com>
  */
 
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/regmap.h>
 #include <linux/spi/spi.h>
@@ -89,4 +90,4 @@ module_spi_driver(bmi323_spi_driver);
 MODULE_DESCRIPTION("Bosch BMI323 IMU driver");
 MODULE_AUTHOR("Jagath Jog J <jagathjog1996@gmail.com>");
 MODULE_LICENSE("GPL");
-MODULE_IMPORT_NS("IIO_BMI323");
+MODULE_IMPORT_NS(IIO_BMI323);

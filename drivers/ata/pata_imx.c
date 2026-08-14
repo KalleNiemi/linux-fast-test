@@ -17,6 +17,7 @@
 #include <linux/clk.h>
 #include <linux/libata.h>
 #include <linux/module.h>
+#include <linux/mod_devicetable.h>
 #include <linux/platform_device.h>
 
 #define DRV_NAME "pata_imx"
@@ -248,7 +249,7 @@ MODULE_DEVICE_TABLE(of, imx_pata_dt_ids);
 
 static struct platform_driver pata_imx_driver = {
 	.probe		= pata_imx_probe,
-	.remove		= pata_imx_remove,
+	.remove_new	= pata_imx_remove,
 	.driver = {
 		.name		= DRV_NAME,
 		.of_match_table	= imx_pata_dt_ids,

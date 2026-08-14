@@ -11,6 +11,7 @@
 #include <linux/firewire.h>
 #include <linux/firewire-constants.h>
 #include <linux/module.h>
+#include <linux/mod_devicetable.h>
 #include <linux/mutex.h>
 #include <linux/string.h>
 #include <sound/control.h>
@@ -327,8 +328,9 @@ static int isight_hw_free(struct snd_pcm_substream *substream)
 
 	WRITE_ONCE(isight->pcm_active, false);
 
-	guard(mutex)(&isight->mutex);
+	mutex_lock(&isight->mutex);
 	isight_stop_streaming(isight);
+	mutex_unlock(&isight->mutex);
 
 	return 0;
 }
@@ -399,12 +401,16 @@ error:
 static int isight_prepare(struct snd_pcm_substream *substream)
 {
 	struct isight *isight = substream->private_data;
+	int err;
 
 	isight->buffer_pointer = 0;
 	isight->period_counter = 0;
 
-	guard(mutex)(&isight->mutex);
-	return isight_start_streaming(isight);
+	mutex_lock(&isight->mutex);
+	err = isight_start_streaming(isight);
+	mutex_unlock(&isight->mutex);
+
+	return err;
 }
 
 static int isight_trigger(struct snd_pcm_substream *substream, int cmd)
@@ -450,7 +456,7 @@ static int isight_create_pcm(struct isight *isight)
 		return err;
 	pcm->private_data = isight;
 	pcm->nonatomic = true;
-	strscpy(pcm->name, "iSight");
+	strcpy(pcm->name, "iSight");
 	isight->pcm = pcm->streams[SNDRV_PCM_STREAM_CAPTURE].substream;
 	isight->pcm->ops = &ops;
 	snd_pcm_set_managed_buffer_all(pcm, SNDRV_DMA_TYPE_VMALLOC, NULL, 0, 0);
@@ -633,13 +639,13 @@ static int isight_probe(struct fw_unit *unit,
 
 	card->private_free = isight_card_free;
 
-	strscpy(card->driver, "iSight");
-	strscpy(card->shortname, "Apple iSight");
+	strcpy(card->driver, "iSight");
+	strcpy(card->shortname, "Apple iSight");
 	snprintf(card->longname, sizeof(card->longname),
 		 "Apple iSight (GUID %08x%08x) at %s, S%d",
 		 fw_dev->config_rom[3], fw_dev->config_rom[4],
 		 dev_name(&unit->device), 100 << fw_dev->max_speed);
-	strscpy(card->mixername, "iSight");
+	strcpy(card->mixername, "iSight");
 
 	err = isight_create_pcm(isight);
 	if (err < 0)
@@ -672,8 +678,9 @@ static void isight_bus_reset(struct fw_unit *unit)
 	if (fw_iso_resources_update(&isight->resources) < 0) {
 		isight_pcm_abort(isight);
 
-		guard(mutex)(&isight->mutex);
+		mutex_lock(&isight->mutex);
 		isight_stop_streaming(isight);
+		mutex_unlock(&isight->mutex);
 	}
 }
 
@@ -685,9 +692,9 @@ static void isight_remove(struct fw_unit *unit)
 
 	snd_card_disconnect(isight->card);
 
-	scoped_guard(mutex, &isight->mutex) {
-		isight_stop_streaming(isight);
-	}
+	mutex_lock(&isight->mutex);
+	isight_stop_streaming(isight);
+	mutex_unlock(&isight->mutex);
 
 	// Block till all of ALSA character devices are released.
 	snd_card_free(isight->card);

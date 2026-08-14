@@ -12,6 +12,7 @@
 #include <linux/kernel.h>
 #include <linux/mfd/intel_soc_pmic.h>
 #include <linux/module.h>
+#include <linux/mod_devicetable.h>
 #include <linux/platform_device.h>
 #include <linux/power_supply.h>
 #include <linux/property.h>
@@ -626,7 +627,7 @@ MODULE_DEVICE_TABLE(platform, cht_wc_extcon_table);
 
 static struct platform_driver cht_wc_extcon_driver = {
 	.probe = cht_wc_extcon_probe,
-	.remove = cht_wc_extcon_remove,
+	.remove_new = cht_wc_extcon_remove,
 	.id_table = cht_wc_extcon_table,
 	.driver = {
 		.name = "cht_wcove_pwrsrc",

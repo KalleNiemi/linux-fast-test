@@ -13,6 +13,7 @@
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
 #include <linux/init.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/pm_runtime.h>
 #include <linux/regulator/consumer.h>
@@ -376,7 +377,7 @@ struct reg_value {
 struct ov5640_timings {
 	/* Analog crop rectangle. */
 	struct v4l2_rect analog_crop;
-	/* Visible crop: from analog crop top-left corner. */
+	/* Visibile crop: from analog crop top-left corner. */
 	struct v4l2_rect crop;
 	/* Total pixels per line: width + fixed hblank. */
 	u32 htot;
@@ -3340,6 +3341,7 @@ static int ov5640_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	}
 
+	pm_runtime_mark_last_busy(&sensor->i2c_client->dev);
 	pm_runtime_put_autosuspend(&sensor->i2c_client->dev);
 
 	return 0;
@@ -3415,6 +3417,7 @@ static int ov5640_s_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	}
 
+	pm_runtime_mark_last_busy(&sensor->i2c_client->dev);
 	pm_runtime_put_autosuspend(&sensor->i2c_client->dev);
 
 	return ret;
@@ -3751,6 +3754,7 @@ out:
 	mutex_unlock(&sensor->lock);
 
 	if (!enable || ret) {
+		pm_runtime_mark_last_busy(&sensor->i2c_client->dev);
 		pm_runtime_put_autosuspend(&sensor->i2c_client->dev);
 	}
 
@@ -3894,10 +3898,11 @@ static int ov5640_probe(struct i2c_client *client)
 					       ov5640_dvp_default_fmt;
 
 	/* get system clock (xclk) */
-	sensor->xclk = devm_v4l2_sensor_clk_get(dev, "xclk");
-	if (IS_ERR(sensor->xclk))
-		return dev_err_probe(dev, PTR_ERR(sensor->xclk),
-				     "failed to get xclk\n");
+	sensor->xclk = devm_clk_get(dev, "xclk");
+	if (IS_ERR(sensor->xclk)) {
+		dev_err(dev, "failed to get xclk\n");
+		return PTR_ERR(sensor->xclk);
+	}
 
 	sensor->xclk_freq = clk_get_rate(sensor->xclk);
 	if (sensor->xclk_freq < OV5640_XCLK_MIN ||
@@ -3960,6 +3965,7 @@ static int ov5640_probe(struct i2c_client *client)
 
 	pm_runtime_set_autosuspend_delay(dev, 1000);
 	pm_runtime_use_autosuspend(dev);
+	pm_runtime_mark_last_busy(dev);
 	pm_runtime_put_autosuspend(dev);
 
 	return 0;
@@ -3998,8 +4004,8 @@ static const struct dev_pm_ops ov5640_pm_ops = {
 };
 
 static const struct i2c_device_id ov5640_id[] = {
-	{ .name = "ov5640" },
-	{ }
+	{ "ov5640" },
+	{}
 };
 MODULE_DEVICE_TABLE(i2c, ov5640_id);
 

@@ -15,9 +15,11 @@
 #include <linux/errno.h>
 #include <linux/slab.h>
 #include <linux/tty.h>
+#include <linux/tty_driver.h>
 #include <linux/tty_flip.h>
 #include <linux/module.h>
 #include <linux/spinlock.h>
+#include <linux/uaccess.h>
 #include <linux/usb.h>
 #include <linux/wait.h>
 #include <linux/sched/signal.h>
@@ -1230,7 +1232,7 @@ static int digi_port_init(struct usb_serial_port *port, unsigned port_num)
 {
 	struct digi_port *priv;
 
-	priv = kzalloc_obj(*priv);
+	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
 
@@ -1271,7 +1273,7 @@ static int digi_startup(struct usb_serial *serial)
 	if (serial->port[oob_port_num]->bulk_out_size < 8)
 		return -EINVAL;
 
-	serial_priv = kzalloc_obj(*serial_priv);
+	serial_priv = kzalloc(sizeof(*serial_priv), GFP_KERNEL);
 	if (!serial_priv)
 		return -ENOMEM;
 

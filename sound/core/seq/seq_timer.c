@@ -43,7 +43,7 @@ struct snd_seq_timer *snd_seq_timer_new(void)
 {
 	struct snd_seq_timer *tmr;
 	
-	tmr = kzalloc_obj(*tmr);
+	tmr = kzalloc(sizeof(*tmr), GFP_KERNEL);
 	if (!tmr)
 		return NULL;
 	spin_lock_init(&tmr->lock);
@@ -344,10 +344,10 @@ int snd_seq_timer_stop(struct snd_seq_timer *tmr)
 
 static int initialize_timer(struct snd_seq_timer *tmr)
 {
+	struct snd_timer *t;
 	unsigned long freq;
 
-	struct snd_timer *t __free(snd_timeri_timer) =
-		snd_timeri_timer_get(tmr->timeri);
+	t = tmr->timeri->timer;
 	if (!t)
 		return -EINVAL;
 
@@ -362,10 +362,11 @@ static int initialize_timer(struct snd_seq_timer *tmr)
 	tmr->ticks = 1;
 	if (!(t->hw.flags & SNDRV_TIMER_HW_SLAVE)) {
 		unsigned long r = snd_timer_resolution(tmr->timeri);
-		unsigned long den;
-
-		if (r && !check_mul_overflow(r, freq, &den))
-			tmr->ticks = max(1U, (unsigned int)(1000000000uL / den));
+		if (r) {
+			tmr->ticks = (unsigned int)(1000000000uL / (r * freq));
+			if (! tmr->ticks)
+				tmr->ticks = 1;
+		}
 	}
 	tmr->initialized = 1;
 	return 0;
@@ -450,13 +451,13 @@ void snd_seq_info_timer_read(struct snd_info_entry *entry,
 			     struct snd_info_buffer *buffer)
 {
 	int idx;
+	struct snd_seq_queue *q;
 	struct snd_seq_timer *tmr;
 	struct snd_timer_instance *ti;
 	unsigned long resolution;
 	
 	for (idx = 0; idx < SNDRV_SEQ_MAX_QUEUES; idx++) {
-		struct snd_seq_queue *q __free(snd_seq_queue) = queueptr(idx);
-
+		q = queueptr(idx);
 		if (q == NULL)
 			continue;
 		scoped_guard(mutex, &q->timer_mutex) {
@@ -466,16 +467,12 @@ void snd_seq_info_timer_read(struct snd_info_entry *entry,
 			ti = tmr->timeri;
 			if (!ti)
 				break;
-
-			struct snd_timer *t __free(snd_timeri_timer) =
-				snd_timeri_timer_get(ti);
-			snd_iprintf(buffer, "Timer for queue %i : %s\n",
-				    q->queue,
-				    t ? t->name : "DEAD");
+			snd_iprintf(buffer, "Timer for queue %i : %s\n", q->queue, ti->timer->name);
 			resolution = snd_timer_resolution(ti) * tmr->ticks;
 			snd_iprintf(buffer, "  Period time : %lu.%09lu\n", resolution / 1000000000, resolution % 1000000000);
 			snd_iprintf(buffer, "  Skew : %u / %u\n", tmr->skew, tmr->skew_base);
 		}
+		queuefree(q);
  	}
 }
 #endif /* CONFIG_SND_PROC_FS */

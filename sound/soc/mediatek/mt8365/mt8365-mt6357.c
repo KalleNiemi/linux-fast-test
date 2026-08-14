@@ -6,18 +6,12 @@
  * Authors: Nicolas Belin <nbelin@baylibre.com>
  */
 
-#include <linux/array_size.h>
-#include <linux/dev_printk.h>
-#include <linux/err.h>
 #include <linux/module.h>
-#include <linux/pinctrl/consumer.h>
-#include <linux/platform_device.h>
-#include <linux/types.h>
-
+#include <linux/of_gpio.h>
 #include <sound/soc.h>
 #include <sound/pcm_params.h>
-
 #include "mt8365-afe-common.h"
+#include <linux/pinctrl/consumer.h>
 #include "../common/mtk-soc-card.h"
 #include "../common/mtk-soundcard-driver.h"
 
@@ -174,7 +168,7 @@ static struct snd_soc_dai_link mt8365_mt6357_dais[] = {
 			SND_SOC_DPCM_TRIGGER_POST
 		},
 		.dynamic = 1,
-		.playback_only = 1,
+		.dpcm_playback = 1,
 		.dpcm_merged_rate = 1,
 		SND_SOC_DAILINK_REG(playback1),
 	},
@@ -187,7 +181,7 @@ static struct snd_soc_dai_link mt8365_mt6357_dais[] = {
 			SND_SOC_DPCM_TRIGGER_POST
 		},
 		.dynamic = 1,
-		.playback_only = 1,
+		.dpcm_playback = 1,
 		.dpcm_merged_rate = 1,
 		SND_SOC_DAILINK_REG(playback2),
 	},
@@ -200,7 +194,7 @@ static struct snd_soc_dai_link mt8365_mt6357_dais[] = {
 			SND_SOC_DPCM_TRIGGER_POST
 		},
 		.dynamic = 1,
-		.capture_only = 1,
+		.dpcm_capture = 1,
 		.dpcm_merged_rate = 1,
 		SND_SOC_DAILINK_REG(awb_capture),
 	},
@@ -213,7 +207,7 @@ static struct snd_soc_dai_link mt8365_mt6357_dais[] = {
 			SND_SOC_DPCM_TRIGGER_POST
 		},
 		.dynamic = 1,
-		.capture_only = 1,
+		.dpcm_capture = 1,
 		.dpcm_merged_rate = 1,
 		SND_SOC_DAILINK_REG(vul),
 	},
@@ -224,20 +218,24 @@ static struct snd_soc_dai_link mt8365_mt6357_dais[] = {
 		.id = DAI_LINK_2ND_I2S_INTF,
 		.dai_fmt = SND_SOC_DAIFMT_I2S |
 				SND_SOC_DAIFMT_NB_NF |
-				SND_SOC_DAIFMT_CBC_CFC,
+				SND_SOC_DAIFMT_CBS_CFS,
+		.dpcm_playback = 1,
+		.dpcm_capture = 1,
 		SND_SOC_DAILINK_REG(i2s3),
 	},
 	[DAI_LINK_DMIC] = {
 		.name = "DMIC_BE",
 		.no_pcm = 1,
 		.id = DAI_LINK_DMIC,
-		.capture_only = 1,
+		.dpcm_capture = 1,
 		SND_SOC_DAILINK_REG(dmic),
 	},
 	[DAI_LINK_INT_ADDA] = {
 		.name = "MTK_Codec",
 		.no_pcm = 1,
 		.id = DAI_LINK_INT_ADDA,
+		.dpcm_playback = 1,
+		.dpcm_capture = 1,
 		.ops = &mt8365_mt6357_int_adda_ops,
 		SND_SOC_DAILINK_REG(primary_codec),
 	},
@@ -246,26 +244,26 @@ static struct snd_soc_dai_link mt8365_mt6357_dais[] = {
 static int mt8365_mt6357_gpio_probe(struct snd_soc_card *card)
 {
 	struct mt8365_mt6357_priv *priv = snd_soc_card_get_drvdata(card);
-	struct device *dev = card->dev;
 	int ret, i;
 
-	priv->pinctrl = devm_pinctrl_get(dev);
+	priv->pinctrl = devm_pinctrl_get(card->dev);
 	if (IS_ERR(priv->pinctrl)) {
 		ret = PTR_ERR(priv->pinctrl);
-		return dev_err_probe(dev, ret, "Failed to get pinctrl\n");
+		return dev_err_probe(card->dev, ret,
+				     "Failed to get pinctrl\n");
 	}
 
 	for (i = PIN_STATE_DEFAULT ; i < PIN_STATE_MAX ; i++) {
 		priv->pin_states[i] = pinctrl_lookup_state(priv->pinctrl,
 							   mt8365_mt6357_pin_str[i]);
 		if (IS_ERR(priv->pin_states[i])) {
-			dev_info(dev, "No pin state for %s\n",
+			dev_info(card->dev, "No pin state for %s\n",
 				 mt8365_mt6357_pin_str[i]);
 		} else {
 			ret = pinctrl_select_state(priv->pinctrl,
 						   priv->pin_states[i]);
 			if (ret) {
-				dev_err_probe(dev, ret,
+				dev_err_probe(card->dev, ret,
 					      "Failed to select pin state %s\n",
 					      mt8365_mt6357_pin_str[i]);
 				return ret;

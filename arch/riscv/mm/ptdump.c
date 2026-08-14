@@ -7,7 +7,6 @@
 #include <linux/init.h>
 #include <linux/debugfs.h>
 #include <linux/seq_file.h>
-#include <linux/string.h>
 #include <linux/ptdump.h>
 
 #include <linux/pgtable.h>
@@ -214,21 +213,21 @@ static void dump_prot(struct pg_state *st)
 		val = st->current_prot & pte_bits[i].mask;
 		if (val) {
 			if (pte_bits[i].mask == _PAGE_SOFT)
-				snprintf(s, sizeof(s), pte_bits[i].set, val >> 8);
+				sprintf(s, pte_bits[i].set, val >> 8);
 #ifdef CONFIG_64BIT
 			else if (pte_bits[i].mask == _PAGE_MTMASK_SVPBMT) {
 				if (val == _PAGE_NOCACHE_SVPBMT)
-					snprintf(s, sizeof(s), pte_bits[i].set, "NC");
+					sprintf(s, pte_bits[i].set, "NC");
 				else if (val == _PAGE_IO_SVPBMT)
-					snprintf(s, sizeof(s), pte_bits[i].set, "IO");
+					sprintf(s, pte_bits[i].set, "IO");
 				else
-					snprintf(s, sizeof(s), pte_bits[i].set, "??");
+					sprintf(s, pte_bits[i].set, "??");
 			}
 #endif
 			else
-				strscpy(s, pte_bits[i].set);
+				sprintf(s, "%s", pte_bits[i].set);
 		} else {
-			strscpy(s, pte_bits[i].clear);
+			sprintf(s, "%s", pte_bits[i].clear);
 		}
 
 		pt_dump_seq_printf(st->seq, " %s", s);
@@ -318,38 +317,6 @@ static void note_page(struct ptdump_state *pt_st, unsigned long addr,
 	}
 }
 
-static void note_page_pte(struct ptdump_state *pt_st, unsigned long addr, pte_t pte)
-{
-	note_page(pt_st, addr, 4, pte_val(pte));
-}
-
-static void note_page_pmd(struct ptdump_state *pt_st, unsigned long addr, pmd_t pmd)
-{
-	note_page(pt_st, addr, 3, pmd_val(pmd));
-}
-
-static void note_page_pud(struct ptdump_state *pt_st, unsigned long addr, pud_t pud)
-{
-	note_page(pt_st, addr, 2, pud_val(pud));
-}
-
-static void note_page_p4d(struct ptdump_state *pt_st, unsigned long addr, p4d_t p4d)
-{
-	note_page(pt_st, addr, 1, p4d_val(p4d));
-}
-
-static void note_page_pgd(struct ptdump_state *pt_st, unsigned long addr, pgd_t pgd)
-{
-	note_page(pt_st, addr, 0, pgd_val(pgd));
-}
-
-static void note_page_flush(struct ptdump_state *pt_st)
-{
-	pte_t pte_zero = {0};
-
-	note_page(pt_st, 0, -1, pte_val(pte_zero));
-}
-
 static void ptdump_walk(struct seq_file *s, struct ptd_mm_info *pinfo)
 {
 	struct pg_state st = {
@@ -357,12 +324,7 @@ static void ptdump_walk(struct seq_file *s, struct ptd_mm_info *pinfo)
 		.marker = pinfo->markers,
 		.level = -1,
 		.ptdump = {
-			.note_page_pte = note_page_pte,
-			.note_page_pmd = note_page_pmd,
-			.note_page_pud = note_page_pud,
-			.note_page_p4d = note_page_p4d,
-			.note_page_pgd = note_page_pgd,
-			.note_page_flush = note_page_flush,
+			.note_page = note_page,
 			.range = (struct ptdump_range[]) {
 				{pinfo->base_addr, pinfo->end},
 				{0, 0}
@@ -384,12 +346,7 @@ bool ptdump_check_wx(void)
 		.level = -1,
 		.check_wx = true,
 		.ptdump = {
-			.note_page_pte = note_page_pte,
-			.note_page_pmd = note_page_pmd,
-			.note_page_pud = note_page_pud,
-			.note_page_p4d = note_page_p4d,
-			.note_page_pgd = note_page_pgd,
-			.note_page_flush = note_page_flush,
+			.note_page = note_page,
 			.range = (struct ptdump_range[]) {
 				{KERN_VIRT_START, ULONG_MAX},
 				{0, 0}

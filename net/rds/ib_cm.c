@@ -810,10 +810,6 @@ int rds_ib_cm_handle_connect(struct rdma_cm_id *cm_id,
 	dp = event->param.conn.private_data;
 	if (isv6) {
 #if IS_ENABLED(CONFIG_IPV6)
-		if (!ipv6_mod_enabled()) {
-			err = -EOPNOTSUPP;
-			goto out;
-		}
 		dp_cmn = &dp->ricp_v6.dp_cmn;
 		saddr6 = &dp->ricp_v6.dp_saddr;
 		daddr6 = &dp->ricp_v6.dp_daddr;
@@ -1043,19 +1039,6 @@ out:
 	return ret;
 }
 
-static unsigned long rds_ib_conn_path_shutdown_check_wait(struct rds_conn_path *cp)
-{
-	struct rds_connection *conn = cp->cp_conn;
-	struct rds_ib_connection *ic = conn->c_transport_data;
-
-	return (!ic->i_cm_id ||
-		(rds_ib_ring_empty(&ic->i_recv_ring) &&
-		 (atomic_read(&ic->i_signaled_sends) == 0) &&
-		 (atomic_read(&ic->i_fastreg_inuse_count)) == 0 &&
-		 (atomic_read(&ic->i_fastreg_wrs) == RDS_IB_DEFAULT_FR_WR))) ? 0
-		: msecs_to_jiffies(1000);
-}
-
 /*
  * This is so careful about only cleaning up resources that were built up
  * so that it can be called at any point during startup.  In fact it
@@ -1096,13 +1079,11 @@ void rds_ib_conn_path_shutdown(struct rds_conn_path *cp)
 		 * sends to complete we're ensured that there will be no
 		 * more tx processing.
 		 */
-		while (!wait_event_timeout(rds_ib_ring_empty_wait,
-					   rds_ib_conn_path_shutdown_check_wait(cp) == 0,
-					   msecs_to_jiffies(1000))) {
-			tasklet_schedule(&ic->i_send_tasklet);
-			tasklet_schedule(&ic->i_recv_tasklet);
-		}
-
+		wait_event(rds_ib_ring_empty_wait,
+			   rds_ib_ring_empty(&ic->i_recv_ring) &&
+			   (atomic_read(&ic->i_signaled_sends) == 0) &&
+			   (atomic_read(&ic->i_fastreg_inuse_count) == 0) &&
+			   (atomic_read(&ic->i_fastreg_wrs) == RDS_IB_DEFAULT_FR_WR));
 		tasklet_kill(&ic->i_send_tasklet);
 		tasklet_kill(&ic->i_recv_tasklet);
 
@@ -1223,7 +1204,7 @@ int rds_ib_conn_alloc(struct rds_connection *conn, gfp_t gfp)
 	int ret;
 
 	/* XXX too lazy? */
-	ic = kzalloc_obj(struct rds_ib_connection, gfp);
+	ic = kzalloc(sizeof(struct rds_ib_connection), gfp);
 	if (!ic)
 		return -ENOMEM;
 

@@ -80,6 +80,7 @@
 #include <linux/quotaops.h>
 #include <linux/blkdev.h>
 #include <linux/sched/mm.h>
+#include "../internal.h" /* ugh */
 
 #include <linux/uaccess.h>
 
@@ -1055,7 +1056,7 @@ static int add_dquot_ref(struct super_block *sb, int type)
 	spin_lock(&sb->s_inode_list_lock);
 	list_for_each_entry(inode, &sb->s_inodes, i_sb_list) {
 		spin_lock(&inode->i_lock);
-		if ((inode_state_read(inode) & (I_FREEING | I_WILL_FREE | I_NEW)) ||
+		if ((inode->i_state & (I_FREEING|I_WILL_FREE|I_NEW)) ||
 		    !atomic_read(&inode->i_writecount) ||
 		    !dqinit_needed(inode, type)) {
 			spin_unlock(&inode->i_lock);
@@ -2585,7 +2586,7 @@ int dquot_quota_on_mount(struct super_block *sb, char *qf_name,
 	struct dentry *dentry;
 	int error;
 
-	dentry = lookup_noperm_positive_unlocked(&QSTR(qf_name), sb->s_root);
+	dentry = lookup_positive_unlocked(qf_name, sb->s_root, strlen(qf_name));
 	if (IS_ERR(dentry))
 		return PTR_ERR(dentry);
 
@@ -2951,7 +2952,7 @@ static int do_proc_dqstats(const struct ctl_table *table, int write,
 	return proc_doulongvec_minmax(table, write, buffer, lenp, ppos);
 }
 
-static const struct ctl_table fs_dqstats_table[] = {
+static struct ctl_table fs_dqstats_table[] = {
 	{
 		.procname	= "lookups",
 		.data		= &dqstats.stat[DQST_LOOKUPS],
@@ -3022,7 +3023,7 @@ static const struct ctl_table fs_dqstats_table[] = {
 static int __init dquot_init(void)
 {
 	int i, ret;
-	unsigned long nr_hash;
+	unsigned long nr_hash, order;
 	struct shrinker *dqcache_shrinker;
 
 	printk(KERN_NOTICE "VFS: Disk quotas %s\n", __DQUOT_VERSION__);
@@ -3035,7 +3036,8 @@ static int __init dquot_init(void)
 				SLAB_PANIC),
 			NULL);
 
-	dquot_hash = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	order = 0;
+	dquot_hash = (struct hlist_head *)__get_free_pages(GFP_KERNEL, order);
 	if (!dquot_hash)
 		panic("Cannot create dquot hash table");
 
@@ -3045,7 +3047,7 @@ static int __init dquot_init(void)
 		panic("Cannot create dquot stat counters");
 
 	/* Find power-of-two hlist_heads which can fit into allocation */
-	nr_hash = PAGE_SIZE / sizeof(struct hlist_head);
+	nr_hash = (1UL << order) * PAGE_SIZE / sizeof(struct hlist_head);
 	dq_hash_bits = ilog2(nr_hash);
 
 	nr_hash = 1UL << dq_hash_bits;
@@ -3053,8 +3055,8 @@ static int __init dquot_init(void)
 	for (i = 0; i < nr_hash; i++)
 		INIT_HLIST_HEAD(dquot_hash + i);
 
-	pr_info("VFS: Dquot-cache hash table entries: %ld (%ld bytes)\n",
-		nr_hash, PAGE_SIZE);
+	pr_info("VFS: Dquot-cache hash table entries: %ld (order %ld,"
+		" %ld bytes)\n", nr_hash, order, (PAGE_SIZE << order));
 
 	dqcache_shrinker = shrinker_alloc(0, "dquota-cache");
 	if (!dqcache_shrinker)

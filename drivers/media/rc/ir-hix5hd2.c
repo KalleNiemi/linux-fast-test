@@ -394,7 +394,7 @@ static struct platform_driver hix5hd2_ir_driver = {
 		.pm     = &hix5hd2_ir_pm_ops,
 	},
 	.probe = hix5hd2_ir_probe,
-	.remove = hix5hd2_ir_remove,
+	.remove_new = hix5hd2_ir_remove,
 };
 
 module_platform_driver(hix5hd2_ir_driver);
@@ -402,3 +402,4 @@ module_platform_driver(hix5hd2_ir_driver);
 MODULE_DESCRIPTION("IR controller driver for hix5hd2 platforms");
 MODULE_AUTHOR("Guoxiong Yan <yanguoxiong@huawei.com>");
 MODULE_LICENSE("GPL v2");
+MODULE_ALIAS("platform:hix5hd2-ir");

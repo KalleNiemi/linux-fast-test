@@ -249,14 +249,14 @@ static int cm3323_probe(struct i2c_client *client)
 }
 
 static const struct i2c_device_id cm3323_id[] = {
-	{ .name = "cm3323" },
-	{ }
+	{ "cm3323" },
+	{}
 };
 MODULE_DEVICE_TABLE(i2c, cm3323_id);
 
 static const struct of_device_id cm3323_of_match[] = {
 	{ .compatible = "capella,cm3323", },
-	{ }
+	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, cm3323_of_match);
 

@@ -378,7 +378,7 @@ static int fsl_spi_setup(struct spi_device *spi)
 		return -EINVAL;
 
 	if (!cs) {
-		cs = kzalloc_obj(*cs);
+		cs = kzalloc(sizeof(*cs), GFP_KERNEL);
 		if (!cs)
 			return -ENOMEM;
 		spi_set_ctldata(spi, cs);
@@ -535,7 +535,7 @@ static struct spi_controller *fsl_spi_probe(struct device *dev,
 	u32 regval;
 	int ret = 0;
 
-	host = devm_spi_alloc_host(dev, sizeof(struct mpc8xxx_spi));
+	host = spi_alloc_host(dev, sizeof(struct mpc8xxx_spi));
 	if (host == NULL) {
 		ret = -ENOMEM;
 		goto err;
@@ -559,7 +559,7 @@ static struct spi_controller *fsl_spi_probe(struct device *dev,
 
 	ret = fsl_spi_cpm_init(mpc8xxx_spi);
 	if (ret)
-		goto err;
+		goto err_cpm_init;
 
 	mpc8xxx_spi->reg_base = devm_ioremap_resource(dev, mem);
 	if (IS_ERR(mpc8xxx_spi->reg_base)) {
@@ -618,13 +618,15 @@ static struct spi_controller *fsl_spi_probe(struct device *dev,
 	if (ret < 0)
 		goto err_probe;
 
-	dev_info(dev, "at MMIO %pa (irq = %d), %s mode\n", &mem->start,
+	dev_info(dev, "at 0x%p (irq = %d), %s mode\n", reg_base,
 		 mpc8xxx_spi->irq, mpc8xxx_spi_strmode(mpc8xxx_spi->flags));
 
 	return host;
 
 err_probe:
 	fsl_spi_cpm_free(mpc8xxx_spi);
+err_cpm_init:
+	spi_controller_put(host);
 err:
 	return ERR_PTR(ret);
 }
@@ -703,9 +705,13 @@ static void of_fsl_spi_remove(struct platform_device *ofdev)
 	struct spi_controller *host = platform_get_drvdata(ofdev);
 	struct mpc8xxx_spi *mpc8xxx_spi = spi_controller_get_devdata(host);
 
+	spi_controller_get(host);
+
 	spi_unregister_controller(host);
 
 	fsl_spi_cpm_free(mpc8xxx_spi);
+
+	spi_controller_put(host);
 }
 
 static struct platform_driver of_fsl_spi_driver = {
@@ -714,7 +720,7 @@ static struct platform_driver of_fsl_spi_driver = {
 		.of_match_table = of_fsl_spi_match,
 	},
 	.probe		= of_fsl_spi_probe,
-	.remove		= of_fsl_spi_remove,
+	.remove_new	= of_fsl_spi_remove,
 };
 
 #ifdef CONFIG_MPC832x_RDB
@@ -751,15 +757,19 @@ static void plat_mpc8xxx_spi_remove(struct platform_device *pdev)
 	struct spi_controller *host = platform_get_drvdata(pdev);
 	struct mpc8xxx_spi *mpc8xxx_spi = spi_controller_get_devdata(host);
 
+	spi_controller_get(host);
+
 	spi_unregister_controller(host);
 
 	fsl_spi_cpm_free(mpc8xxx_spi);
+
+	spi_controller_put(host);
 }
 
 MODULE_ALIAS("platform:mpc8xxx_spi");
 static struct platform_driver mpc8xxx_spi_driver = {
 	.probe = plat_mpc8xxx_spi_probe,
-	.remove = plat_mpc8xxx_spi_remove,
+	.remove_new = plat_mpc8xxx_spi_remove,
 	.driver = {
 		.name = "mpc8xxx_spi",
 	},

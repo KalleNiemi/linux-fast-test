@@ -67,6 +67,8 @@ static bool virtio_transport_can_zcopy(const struct virtio_transport *t_ops,
 		return false;
 
 	/* Check that transport can send data in zerocopy mode. */
+	t_ops = virtio_transport_get_ops(info->vsk);
+
 	if (t_ops->can_msgzerocopy) {
 		int pages_to_send = iov_iter_npages(iov_iter, MAX_SKB_FRAGS);
 
@@ -86,7 +88,8 @@ static int virtio_transport_fill_skb(struct sk_buff *skb,
 
 	if (zcopy)
 		return __zerocopy_sg_from_iter(msg, NULL, skb,
-					       &msg->msg_iter, len, NULL);
+					       &msg->msg_iter,
+					       len);
 
 	virtio_vsock_skb_put(skb, len);
 	return skb_copy_datagram_from_iter_full(skb, 0, &msg->msg_iter, len);
@@ -355,7 +358,7 @@ static int virtio_transport_send_pkt_info(struct vsock_sock *vsk,
 
 			if (!uarg) {
 				uarg = msg_zerocopy_realloc(sk_vsock(vsk),
-							    pkt_len, NULL, false);
+							    pkt_len, NULL);
 				if (!uarg) {
 					virtio_transport_put_credit(vvs, pkt_len);
 					return -ENOMEM;
@@ -388,7 +391,7 @@ static int virtio_transport_send_pkt_info(struct vsock_sock *vsk,
 
 		virtio_transport_inc_tx_pkt(vvs, skb);
 
-		ret = t_ops->send_pkt(skb, info->net);
+		ret = t_ops->send_pkt(skb);
 		if (ret < 0)
 			break;
 
@@ -569,7 +572,7 @@ next:
 static bool virtio_transport_inc_rx_pkt(struct virtio_vsock_sock *vvs,
 					u32 len)
 {
-	u64 skb_overhead = (skb_queue_len(&vvs->rx_queue) + 1) * SKB_TRUESIZE(0);
+	u64 skb_overhead = ((u64)skb_queue_len(&vvs->rx_queue) + 1) * SKB_TRUESIZE(0);
 
 	/* Allow at most buf_alloc * 2 total budget (payload + overhead),
 	 * similar to how SO_RCVBUF is doubled to reserve space for sk_buff
@@ -660,7 +663,6 @@ static int virtio_transport_send_credit_update(struct vsock_sock *vsk)
 	struct virtio_vsock_pkt_info info = {
 		.op = VIRTIO_VSOCK_OP_CREDIT_UPDATE,
 		.vsk = vsk,
-		.net = sock_net(sk_vsock(vsk)),
 	};
 
 	return virtio_transport_send_pkt_info(vsk, &info);
@@ -1053,7 +1055,7 @@ int virtio_transport_do_socket_init(struct vsock_sock *vsk,
 {
 	struct virtio_vsock_sock *vvs;
 
-	vvs = kzalloc_obj(*vvs);
+	vvs = kzalloc(sizeof(*vvs), GFP_KERNEL);
 	if (!vvs)
 		return -ENOMEM;
 
@@ -1189,6 +1191,12 @@ bool virtio_transport_stream_is_active(struct vsock_sock *vsk)
 }
 EXPORT_SYMBOL_GPL(virtio_transport_stream_is_active);
 
+bool virtio_transport_stream_allow(u32 cid, u32 port)
+{
+	return true;
+}
+EXPORT_SYMBOL_GPL(virtio_transport_stream_allow);
+
 int virtio_transport_dgram_bind(struct vsock_sock *vsk,
 				struct sockaddr_vm *addr)
 {
@@ -1196,7 +1204,7 @@ int virtio_transport_dgram_bind(struct vsock_sock *vsk,
 }
 EXPORT_SYMBOL_GPL(virtio_transport_dgram_bind);
 
-bool virtio_transport_dgram_allow(struct vsock_sock *vsk, u32 cid, u32 port)
+bool virtio_transport_dgram_allow(u32 cid, u32 port)
 {
 	return false;
 }
@@ -1207,7 +1215,6 @@ int virtio_transport_connect(struct vsock_sock *vsk)
 	struct virtio_vsock_pkt_info info = {
 		.op = VIRTIO_VSOCK_OP_REQUEST,
 		.vsk = vsk,
-		.net = sock_net(sk_vsock(vsk)),
 	};
 
 	return virtio_transport_send_pkt_info(vsk, &info);
@@ -1223,7 +1230,6 @@ int virtio_transport_shutdown(struct vsock_sock *vsk, int mode)
 			 (mode & SEND_SHUTDOWN ?
 			  VIRTIO_VSOCK_SHUTDOWN_SEND : 0),
 		.vsk = vsk,
-		.net = sock_net(sk_vsock(vsk)),
 	};
 
 	return virtio_transport_send_pkt_info(vsk, &info);
@@ -1250,7 +1256,6 @@ virtio_transport_stream_enqueue(struct vsock_sock *vsk,
 		.msg = msg,
 		.pkt_len = len,
 		.vsk = vsk,
-		.net = sock_net(sk_vsock(vsk)),
 	};
 
 	return virtio_transport_send_pkt_info(vsk, &info);
@@ -1288,7 +1293,6 @@ static int virtio_transport_reset(struct vsock_sock *vsk,
 		.op = VIRTIO_VSOCK_OP_RST,
 		.reply = !!skb,
 		.vsk = vsk,
-		.net = sock_net(sk_vsock(vsk)),
 	};
 
 	/* Send RST only if the original pkt is not a RST pkt */
@@ -1300,31 +1304,15 @@ static int virtio_transport_reset(struct vsock_sock *vsk,
 
 /* Normally packets are associated with a socket.  There may be no socket if an
  * attempt was made to connect to a socket that does not exist.
- *
- * net refers to the namespace of whoever sent the invalid message. For
- * loopback, this is the namespace of the socket. For vhost, this is the
- * namespace of the VM (i.e., vhost_vsock).
  */
 static int virtio_transport_reset_no_sock(const struct virtio_transport *t,
-					  struct sk_buff *skb, struct net *net)
+					  struct sk_buff *skb)
 {
 	struct virtio_vsock_hdr *hdr = virtio_vsock_hdr(skb);
 	struct virtio_vsock_pkt_info info = {
 		.op = VIRTIO_VSOCK_OP_RST,
 		.type = le16_to_cpu(hdr->type),
 		.reply = true,
-
-		/* Set sk owner to socket we are replying to (may be NULL for
-		 * non-loopback). This keeps a reference to the sock and
-		 * sock_net(sk) until the reply skb is freed.
-		 */
-		.vsk = vsock_sk(skb->sk),
-
-		/* net is not defined here because we pass it directly to
-		 * t->send_pkt(), instead of relying on
-		 * virtio_transport_send_pkt_info() to pass it. It is not needed
-		 * by virtio_transport_alloc_skb().
-		 */
 	};
 	struct sk_buff *reply;
 
@@ -1343,7 +1331,7 @@ static int virtio_transport_reset_no_sock(const struct virtio_transport *t,
 	if (!reply)
 		return -ENOMEM;
 
-	return t->send_pkt(reply, net);
+	return t->send_pkt(reply);
 }
 
 /* This function should be called with sk_lock held and SOCK_DONE set */
@@ -1356,6 +1344,23 @@ static void virtio_transport_remove_sock(struct vsock_sock *vsk)
 	 */
 	__skb_queue_purge(&vvs->rx_queue);
 	vsock_remove_sock(vsk);
+}
+
+static void virtio_transport_wait_close(struct sock *sk, long timeout)
+{
+	if (timeout) {
+		DEFINE_WAIT_FUNC(wait, woken_wake_function);
+
+		add_wait_queue(sk_sleep(sk), &wait);
+
+		do {
+			if (sk_wait_event(sk, &timeout,
+					  sock_flag(sk, SOCK_DONE), &wait))
+				break;
+		} while (!signal_pending(current) && timeout);
+
+		remove_wait_queue(sk_sleep(sk), &wait);
+	}
 }
 
 static void virtio_transport_cancel_close_work(struct vsock_sock *vsk,
@@ -1427,8 +1432,8 @@ static bool virtio_transport_close(struct vsock_sock *vsk)
 	if ((sk->sk_shutdown & SHUTDOWN_MASK) != SHUTDOWN_MASK)
 		(void)virtio_transport_shutdown(vsk, SHUTDOWN_MASK);
 
-	if (!(current->flags & PF_EXITING))
-		vsock_linger(sk);
+	if (sock_flag(sk, SOCK_LINGER) && !(current->flags & PF_EXITING))
+		virtio_transport_wait_close(sk, sk->sk_lingertime);
 
 	if (sock_flag(sk, SOCK_DONE)) {
 		return true;
@@ -1658,7 +1663,6 @@ virtio_transport_send_response(struct vsock_sock *vsk,
 		.remote_port = le32_to_cpu(hdr->src_port),
 		.reply = true,
 		.vsk = vsk,
-		.net = sock_net(sk_vsock(vsk)),
 	};
 
 	return virtio_transport_send_pkt_info(vsk, &info);
@@ -1701,12 +1705,12 @@ virtio_transport_recv_listen(struct sock *sk, struct sk_buff *skb,
 	int ret;
 
 	if (le16_to_cpu(hdr->op) != VIRTIO_VSOCK_OP_REQUEST) {
-		virtio_transport_reset_no_sock(t, skb, sock_net(sk));
+		virtio_transport_reset_no_sock(t, skb);
 		return -EINVAL;
 	}
 
 	if (sk_acceptq_is_full(sk)) {
-		virtio_transport_reset_no_sock(t, skb, sock_net(sk));
+		virtio_transport_reset_no_sock(t, skb);
 		return -ENOMEM;
 	}
 
@@ -1714,13 +1718,13 @@ virtio_transport_recv_listen(struct sock *sk, struct sk_buff *skb,
 	 * Subsequent enqueues would lead to a memory leak.
 	 */
 	if (sk->sk_shutdown == SHUTDOWN_MASK) {
-		virtio_transport_reset_no_sock(t, skb, sock_net(sk));
+		virtio_transport_reset_no_sock(t, skb);
 		return -ESHUTDOWN;
 	}
 
 	child = vsock_create_connected(sk);
 	if (!child) {
-		virtio_transport_reset_no_sock(t, skb, sock_net(sk));
+		virtio_transport_reset_no_sock(t, skb);
 		return -ENOMEM;
 	}
 
@@ -1740,11 +1744,12 @@ virtio_transport_recv_listen(struct sock *sk, struct sk_buff *skb,
 	 */
 	if (ret || vchild->transport != &t->transport) {
 		release_sock(child);
-		virtio_transport_reset_no_sock(t, skb, sock_net(sk));
+		virtio_transport_reset_no_sock(t, skb);
 		sock_put(child);
 		return ret;
 	}
 
+	sk_acceptq_added(sk);
 	if (virtio_transport_space_update(child, skb))
 		child->sk_write_space(child);
 
@@ -1768,7 +1773,7 @@ static bool virtio_transport_valid_type(u16 type)
  * lock.
  */
 void virtio_transport_recv_pkt(struct virtio_transport *t,
-			       struct sk_buff *skb, struct net *net)
+			       struct sk_buff *skb)
 {
 	struct virtio_vsock_hdr *hdr = virtio_vsock_hdr(skb);
 	struct sockaddr_vm src, dst;
@@ -1791,24 +1796,24 @@ void virtio_transport_recv_pkt(struct virtio_transport *t,
 					le32_to_cpu(hdr->fwd_cnt));
 
 	if (!virtio_transport_valid_type(le16_to_cpu(hdr->type))) {
-		(void)virtio_transport_reset_no_sock(t, skb, net);
+		(void)virtio_transport_reset_no_sock(t, skb);
 		goto free_pkt;
 	}
 
 	/* The socket must be in connected or bound table
 	 * otherwise send reset back
 	 */
-	sk = vsock_find_connected_socket_net(&src, &dst, net);
+	sk = vsock_find_connected_socket(&src, &dst);
 	if (!sk) {
-		sk = vsock_find_bound_socket_net(&dst, net);
+		sk = vsock_find_bound_socket(&dst);
 		if (!sk) {
-			(void)virtio_transport_reset_no_sock(t, skb, net);
+			(void)virtio_transport_reset_no_sock(t, skb);
 			goto free_pkt;
 		}
 	}
 
 	if (virtio_transport_get_type(sk) != le16_to_cpu(hdr->type)) {
-		(void)virtio_transport_reset_no_sock(t, skb, net);
+		(void)virtio_transport_reset_no_sock(t, skb);
 		sock_put(sk);
 		goto free_pkt;
 	}
@@ -1827,7 +1832,7 @@ void virtio_transport_recv_pkt(struct virtio_transport *t,
 	 */
 	if (sock_flag(sk, SOCK_DONE) ||
 	    (sk->sk_state != TCP_LISTEN && vsk->transport != &t->transport)) {
-		(void)virtio_transport_reset_no_sock(t, skb, net);
+		(void)virtio_transport_reset_no_sock(t, skb);
 		release_sock(sk);
 		sock_put(sk);
 		goto free_pkt;
@@ -1859,7 +1864,7 @@ void virtio_transport_recv_pkt(struct virtio_transport *t,
 		kfree_skb(skb);
 		break;
 	default:
-		(void)virtio_transport_reset_no_sock(t, skb, net);
+		(void)virtio_transport_reset_no_sock(t, skb);
 		kfree_skb(skb);
 		break;
 	}

@@ -21,22 +21,25 @@
 #include <net/netfilter/nf_log.h>
 #include <net/netfilter/nft_meta.h>
 
-#ifdef CONFIG_MITIGATION_RETPOLINE
+#if defined(CONFIG_MITIGATION_RETPOLINE) && defined(CONFIG_X86)
+
 static struct static_key_false nf_tables_skip_direct_calls;
 
-static inline bool nf_skip_indirect_calls(void)
+static bool nf_skip_indirect_calls(void)
 {
 	return static_branch_likely(&nf_tables_skip_direct_calls);
 }
 
-static inline void __init nf_skip_indirect_calls_enable(void)
+static void __init nf_skip_indirect_calls_enable(void)
 {
 	if (!cpu_feature_enabled(X86_FEATURE_RETPOLINE))
 		static_branch_enable(&nf_tables_skip_direct_calls);
 }
 #else
+static inline bool nf_skip_indirect_calls(void) { return false; }
+
 static inline void nf_skip_indirect_calls_enable(void) { }
-#endif /* CONFIG_MITIGATION_RETPOLINE */
+#endif
 
 static noinline void __nft_trace_packet(const struct nft_pktinfo *pkt,
 					const struct nft_verdict *verdict,
@@ -151,9 +154,9 @@ static bool nft_payload_fast_eval(const struct nft_expr *expr,
 	unsigned char *ptr;
 
 	if (priv->base == NFT_PAYLOAD_NETWORK_HEADER)
-		ptr = skb_network_header(skb) + pkt->nhoff;
+		ptr = skb_network_header(skb);
 	else {
-		if (!(pkt->flags & NFT_PKTINFO_L4PROTO) || pkt->fragoff)
+		if (!(pkt->flags & NFT_PKTINFO_L4PROTO))
 			return false;
 		ptr = skb->data + nft_thoff(pkt);
 	}
@@ -314,10 +317,8 @@ next_rule:
 
 	switch (regs.verdict.code) {
 	case NFT_JUMP:
-		if (unlikely(stackptr >= NFT_JUMP_STACK_SIZE)) {
-			DEBUG_NET_WARN_ON_ONCE(1);
-			return NF_DROP_REASON(pkt->skb, SKB_DROP_REASON_NETFILTER_DROP, ELOOP);
-		}
+		if (WARN_ON_ONCE(stackptr >= NFT_JUMP_STACK_SIZE))
+			return NF_DROP;
 		jumpstack[stackptr].rule = nft_rule_next(rule);
 		stackptr++;
 		fallthrough;
@@ -328,7 +329,7 @@ next_rule:
 	case NFT_RETURN:
 		break;
 	default:
-		DEBUG_NET_WARN_ON_ONCE(1);
+		WARN_ON_ONCE(1);
 	}
 
 	if (stackptr > 0) {

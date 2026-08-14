@@ -15,7 +15,6 @@
 #include <linux/phy.h>
 #include <linux/dim.h>
 #include <linux/ethtool.h>
-#include <net/page_pool/helpers.h>
 
 #include "../unimac.h"
 
@@ -150,6 +149,7 @@ struct bcmgenet_mib_counters {
 	u32	rbuf_err_cnt;
 	u32	mdf_err_cnt;
 	u32	alloc_rx_buff_failed;
+	u32	rx_dma_failed;
 	u32	tx_dma_failed;
 	u32	tx_realloc_tsb;
 	u32	tx_realloc_tsb_failed;
@@ -170,13 +170,10 @@ struct bcmgenet_rx_stats64 {
 	u64_stats_t	errors;
 	u64_stats_t	dropped;
 	u64_stats_t	multicast;
-	u64_stats_t	broadcast;
-	u64_stats_t	missed;
 	u64_stats_t	length_errors;
 	u64_stats_t	over_errors;
 	u64_stats_t	crc_errors;
 	u64_stats_t	frame_errors;
-	u64_stats_t	fragmented_errors;
 };
 
 #define UMAC_MIB_START			0x400
@@ -298,8 +295,6 @@ struct bcmgenet_rx_stats64 {
 /* Only valid for GENETv3+ */
 #define UMAC_IRQ_MDIO_DONE		(1 << 23)
 #define UMAC_IRQ_MDIO_ERROR		(1 << 24)
-#define UMAC_IRQ_MDIO_EVENT		(UMAC_IRQ_MDIO_DONE | \
-					 UMAC_IRQ_MDIO_ERROR)
 
 /* INTRL2 instance 1 definitions */
 #define UMAC_IRQ1_TX_INTR_MASK		0xFFFF
@@ -469,7 +464,6 @@ struct bcmgenet_rx_stats64 {
 
 struct enet_cb {
 	struct sk_buff      *skb;
-	struct page         *rx_page;
 	void __iomem *bd_addr;
 	DEFINE_DMA_UNMAP_ADDR(dma_addr);
 	DEFINE_DMA_UNMAP_LEN(dma_len);
@@ -506,7 +500,6 @@ enum bcmgenet_version {
 #define GENET_HAS_EXT		(1 << 1)
 #define GENET_HAS_MDIO_INTR	(1 << 2)
 #define GENET_HAS_MOCA_LINK_DET	(1 << 3)
-#define GENET_HAS_EPHY_16NM	(1 << 4)
 
 /* BCMGENET hardware parameters, keep this structure nicely aligned
  * since it is going to be used in hot paths
@@ -527,6 +520,7 @@ struct bcmgenet_hw_params {
 	u32		rdma_offset;
 	u32		tdma_offset;
 	u32		words_per_bd;
+	u32		flags;
 };
 
 struct bcmgenet_skb_cb {
@@ -576,7 +570,6 @@ struct bcmgenet_rx_ring {
 	struct bcmgenet_net_dim dim;
 	u32		rx_max_coalesced_frames;
 	u32		rx_coalesce_usecs;
-	struct page_pool *page_pool;
 	struct bcmgenet_priv *priv;
 };
 
@@ -611,14 +604,14 @@ struct bcmgenet_priv {
 	void __iomem *rx_bds;
 	struct enet_cb *rx_cbs;
 	unsigned int num_rx_bds;
+	unsigned int rx_buf_len;
 	struct bcmgenet_rxnfc_rule rxnfc_rules[MAX_NUM_OF_FS_RULES];
 	struct list_head rxnfc_list;
 
 	struct bcmgenet_rx_ring rx_rings[GENET_MAX_MQ_CNT + 1];
 
 	/* other misc variables */
-	const struct bcmgenet_hw_params *hw_params;
-	u32 flags;
+	struct bcmgenet_hw_params *hw_params;
 	unsigned autoneg_pause:1;
 	unsigned tx_pause:1;
 	unsigned rx_pause:1;
@@ -637,6 +630,7 @@ struct bcmgenet_priv {
 	phy_interface_t phy_interface;
 	int phy_addr;
 	int ext_phy;
+	bool ephy_16nm;
 
 	/* Interrupt variables */
 	struct work_struct bcmgenet_irq_work;
@@ -664,33 +658,34 @@ struct bcmgenet_priv {
 	struct clk *clk_wol;
 	u32 wolopts;
 	u8 sopass[SOPASS_MAX];
+	bool wol_active;
 
 	struct bcmgenet_mib_counters mib;
 };
 
 static inline bool bcmgenet_has_40bits(struct bcmgenet_priv *priv)
 {
-	return !!(priv->flags & GENET_HAS_40BITS);
+	return !!(priv->hw_params->flags & GENET_HAS_40BITS);
 }
 
 static inline bool bcmgenet_has_ext(struct bcmgenet_priv *priv)
 {
-	return !!(priv->flags & GENET_HAS_EXT);
+	return !!(priv->hw_params->flags & GENET_HAS_EXT);
 }
 
 static inline bool bcmgenet_has_mdio_intr(struct bcmgenet_priv *priv)
 {
-	return !!(priv->flags & GENET_HAS_MDIO_INTR);
+	return !!(priv->hw_params->flags & GENET_HAS_MDIO_INTR);
 }
 
 static inline bool bcmgenet_has_moca_link_det(struct bcmgenet_priv *priv)
 {
-	return !!(priv->flags & GENET_HAS_MOCA_LINK_DET);
+	return !!(priv->hw_params->flags & GENET_HAS_MOCA_LINK_DET);
 }
 
 static inline bool bcmgenet_has_ephy_16nm(struct bcmgenet_priv *priv)
 {
-	return !!(priv->flags & GENET_HAS_EPHY_16NM);
+	return priv->ephy_16nm;
 }
 
 #define GENET_IO_MACRO(name, offset)					\
@@ -745,8 +740,8 @@ void bcmgenet_get_wol(struct net_device *dev, struct ethtool_wolinfo *wol);
 int bcmgenet_set_wol(struct net_device *dev, struct ethtool_wolinfo *wol);
 int bcmgenet_wol_power_down_cfg(struct bcmgenet_priv *priv,
 				enum bcmgenet_power_mode mode);
-int bcmgenet_wol_power_up_cfg(struct bcmgenet_priv *priv,
-			      enum bcmgenet_power_mode mode);
+void bcmgenet_wol_power_up_cfg(struct bcmgenet_priv *priv,
+			       enum bcmgenet_power_mode mode);
 
 void bcmgenet_eee_enable_set(struct net_device *dev, bool enable);
 

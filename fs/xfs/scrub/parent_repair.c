@@ -3,7 +3,7 @@
  * Copyright (c) 2020-2024 Oracle.  All Rights Reserved.
  * Author: Darrick J. Wong <djwong@kernel.org>
  */
-#include "xfs_platform.h"
+#include "xfs.h"
 #include "xfs_fs.h"
 #include "xfs_shared.h"
 #include "xfs_format.h"
@@ -217,7 +217,7 @@ xrep_setup_parent(
 
 	xchk_fsgates_enable(sc, XCHK_FSGATES_DIRENTS);
 
-	rp = kvzalloc_obj(struct xrep_parent, XCHK_GFP_FLAGS);
+	rp = kvzalloc(sizeof(struct xrep_parent), XCHK_GFP_FLAGS);
 	if (!rp)
 		return -ENOMEM;
 	rp->sc = sc;
@@ -302,14 +302,14 @@ xrep_parent_replay_update(
 		trace_xrep_parent_replay_parentadd(sc->tempip, xname,
 				&pptr->pptr_rec);
 
-		return xfs_parent_set(sc->tempip, I_INO(sc->ip), xname,
+		return xfs_parent_set(sc->tempip, sc->ip->i_ino, xname,
 				&pptr->pptr_rec, &rp->pptr_args);
 	case XREP_PPTR_REMOVE:
 		/* Remove parent pointer. */
 		trace_xrep_parent_replay_parentremove(sc->tempip, xname,
 				&pptr->pptr_rec);
 
-		return xfs_parent_unset(sc->tempip, I_INO(sc->ip), xname,
+		return xfs_parent_unset(sc->tempip, sc->ip->i_ino, xname,
 				&pptr->pptr_rec, &rp->pptr_args);
 	}
 
@@ -434,7 +434,7 @@ xrep_parent_scan_dirent(
 	int			error;
 
 	/* Dirent doesn't point to this directory. */
-	if (ino != I_INO(rp->sc->ip))
+	if (ino != rp->sc->ip->i_ino)
 		return 0;
 
 	/* No weird looking names. */
@@ -569,7 +569,9 @@ xrep_parent_scan_dirtree(
 	if (sc->ilock_flags & (XFS_ILOCK_SHARED | XFS_ILOCK_EXCL))
 		xchk_iunlock(sc, sc->ilock_flags & (XFS_ILOCK_SHARED |
 						    XFS_ILOCK_EXCL));
-	xchk_trans_alloc_empty(sc);
+	error = xchk_trans_alloc_empty(sc);
+	if (error)
+		return error;
 
 	while ((error = xchk_iscan_iter(&rp->pscan.iscan, &ip)) == 1) {
 		bool		flush;
@@ -595,7 +597,9 @@ xrep_parent_scan_dirtree(
 			if (error)
 				break;
 
-			xchk_trans_alloc_empty(sc);
+			error = xchk_trans_alloc_empty(sc);
+			if (error)
+				break;
 		}
 
 		if (xchk_should_terminate(sc, &error))
@@ -645,8 +649,8 @@ xrep_parent_live_update(
 	 * repairing, so stash the update for replay against the temporary
 	 * file.
 	 */
-	if (I_INO(p->ip) == I_INO(sc->ip) &&
-	    xchk_iscan_want_live_update(&rp->pscan.iscan, I_INO(p->dp))) {
+	if (p->ip->i_ino == sc->ip->i_ino &&
+	    xchk_iscan_want_live_update(&rp->pscan.iscan, p->dp->i_ino)) {
 		mutex_lock(&rp->pscan.lock);
 		if (p->delta > 0)
 			error = xrep_parent_stash_parentadd(rp, p->name, p->dp);
@@ -906,7 +910,7 @@ xrep_parent_fetch_xattr_remote(
 		.namelen	= namelen,
 		.trans		= sc->tp,
 		.valuelen	= valuelen,
-		.owner		= I_INO(ip),
+		.owner		= ip->i_ino,
 	};
 	int			error;
 
@@ -984,7 +988,7 @@ xrep_parent_insert_xattr(
 		.attr_filter		= key->flags,
 		.namelen		= key->namelen,
 		.valuelen		= key->valuelen,
-		.owner			= I_INO(rp->sc->ip),
+		.owner			= rp->sc->ip->i_ino,
 		.geo			= rp->sc->mp->m_attr_geo,
 		.whichfork		= XFS_ATTR_FORK,
 		.op_flags		= XFS_DA_OP_OKNOENT,
@@ -1095,7 +1099,9 @@ xrep_parent_flush_xattrs(
 	xrep_tempfile_iounlock(rp->sc);
 
 	/* Recreate the empty transaction and relock the inode. */
-	xchk_trans_alloc_empty(rp->sc);
+	error = xchk_trans_alloc_empty(rp->sc);
+	if (error)
+		return error;
 	xchk_ilock(rp->sc, XFS_ILOCK_EXCL);
 	return 0;
 }
@@ -1328,8 +1334,8 @@ xrep_parent_rebuild_pptrs(
 	 * so that we can decide if we're moving this file to the orphanage.
 	 * For this purpose, root directories are their own parents.
 	 */
-	if (xchk_inode_is_dirtree_root(sc->ip)) {
-		xrep_findparent_scan_found(&rp->pscan, I_INO(sc->ip));
+	if (sc->ip == sc->mp->m_rootip) {
+		xrep_findparent_scan_found(&rp->pscan, sc->ip->i_ino);
 	} else {
 		error = xrep_parent_lookup_pptrs(sc, &parent_ino);
 		if (error)
@@ -1348,40 +1354,21 @@ STATIC int
 xrep_parent_rebuild_tree(
 	struct xrep_parent	*rp)
 {
-	struct xfs_scrub	*sc = rp->sc;
-	bool			try_adoption;
 	int			error;
 
-	if (xfs_has_parent(sc->mp)) {
+	if (xfs_has_parent(rp->sc->mp)) {
 		error = xrep_parent_rebuild_pptrs(rp);
 		if (error)
 			return error;
 	}
 
-	/*
-	 * Any file with no parent could be adopted.  This check happens after
-	 * rebuilding the parent pointer structure because we might have cycled
-	 * the ILOCK during that process.
-	 */
-	try_adoption = rp->pscan.parent_ino == NULLFSINO;
-
-	/*
-	 * Starting with metadir, we allow checking of parent pointers
-	 * of non-directory files that are children of the superblock.
-	 * Lack of parent is ok here.
-	 */
-	if (try_adoption && xfs_has_metadir(sc->mp) &&
-	    xchk_inode_is_sb_rooted(sc->ip))
-		try_adoption = false;
-
-	if (try_adoption) {
-		if (xrep_orphanage_can_adopt(sc))
+	if (rp->pscan.parent_ino == NULLFSINO) {
+		if (xrep_orphanage_can_adopt(rp->sc))
 			return xrep_parent_move_to_orphanage(rp);
 		return -EFSCORRUPTED;
-
 	}
 
-	if (S_ISDIR(VFS_I(sc->ip)->i_mode))
+	if (S_ISDIR(VFS_I(rp->sc->ip)->i_mode))
 		return xrep_parent_reset_dotdot(rp);
 
 	return 0;
@@ -1435,14 +1422,6 @@ xrep_parent_set_nondir_nlink(
 	if (error)
 		return error;
 
-	/*
-	 * Starting with metadir, we allow checking of parent pointers of
-	 * non-directory files that are children of the superblock.  Pretend
-	 * that we found a parent pointer attr.
-	 */
-	if (xfs_has_metadir(sc->mp) && xchk_inode_is_sb_rooted(sc->ip))
-		rp->parents++;
-
 	if (rp->parents > 0 && xfs_inode_on_unlinked_list(ip)) {
 		xfs_trans_ijoin(sc->tp, sc->ip, 0);
 		joined = true;
@@ -1451,7 +1430,7 @@ xrep_parent_set_nondir_nlink(
 		 * The file is on the unlinked list but we found parents.
 		 * Remove the file from the unlinked list.
 		 */
-		pag = xfs_perag_get(sc->mp, XFS_INODE_TO_AGNO(ip));
+		pag = xfs_perag_get(sc->mp, XFS_INO_TO_AGNO(sc->mp, ip->i_ino));
 		if (!pag) {
 			ASSERT(0);
 			return -EFSCORRUPTED;

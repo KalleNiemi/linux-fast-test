@@ -10,6 +10,7 @@
  */
 
 #include <linux/module.h>
+#include <linux/mod_devicetable.h>
 #include <linux/init.h>
 #include <linux/i2c.h>
 #include <linux/delay.h>
@@ -20,6 +21,7 @@
 #include <linux/iio/sysfs.h>
 
 #define MMC35240_DRV_NAME "mmc35240"
+#define MMC35240_REGMAP_NAME "mmc35240_regmap"
 
 #define MMC35240_REG_XOUT_L	0x00
 #define MMC35240_REG_XOUT_H	0x01
@@ -461,7 +463,7 @@ static const struct reg_default mmc35240_reg_defaults[] = {
 };
 
 static const struct regmap_config mmc35240_regmap_config = {
-	.name = "mmc35240_regmap",
+	.name = MMC35240_REGMAP_NAME,
 
 	.reg_bits = 8,
 	.val_bits = 8,
@@ -554,13 +556,13 @@ MODULE_DEVICE_TABLE(of, mmc35240_of_match);
 
 static const struct acpi_device_id mmc35240_acpi_match[] = {
 	{"MMC35240", 0},
-	{ }
+	{ },
 };
 MODULE_DEVICE_TABLE(acpi, mmc35240_acpi_match);
 
 static const struct i2c_device_id mmc35240_id[] = {
-	{ .name = "mmc35240" },
-	{ }
+	{ "mmc35240" },
+	{}
 };
 MODULE_DEVICE_TABLE(i2c, mmc35240_id);
 

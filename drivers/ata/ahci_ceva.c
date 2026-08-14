@@ -206,21 +206,15 @@ static int ceva_ahci_platform_enable_resources(struct ahci_host_priv *hpriv)
 		goto disable_clks;
 
 	for (i = 0; i < hpriv->nports; i++) {
-		if (ahci_ignore_port(hpriv, i))
-			continue;
-
 		rc = phy_init(hpriv->phys[i]);
 		if (rc)
-			goto exit_phys;
+			goto disable_rsts;
 	}
 
 	/* De-assert the controller reset */
 	ahci_platform_deassert_rsts(hpriv);
 
 	for (i = 0; i < hpriv->nports; i++) {
-		if (ahci_ignore_port(hpriv, i))
-			continue;
-
 		rc = phy_power_on(hpriv->phys[i]);
 		if (rc) {
 			phy_exit(hpriv->phys[i]);
@@ -230,22 +224,12 @@ static int ceva_ahci_platform_enable_resources(struct ahci_host_priv *hpriv)
 
 	return 0;
 
+disable_rsts:
+	ahci_platform_deassert_rsts(hpriv);
+
 disable_phys:
 	while (--i >= 0) {
-		if (ahci_ignore_port(hpriv, i))
-			continue;
-
 		phy_power_off(hpriv->phys[i]);
-		phy_exit(hpriv->phys[i]);
-	}
-	ahci_platform_assert_rsts(hpriv);
-	goto disable_clks;
-
-exit_phys:
-	while (--i >= 0) {
-		if (ahci_ignore_port(hpriv, i))
-			continue;
-
 		phy_exit(hpriv->phys[i]);
 	}
 
@@ -418,7 +402,7 @@ MODULE_DEVICE_TABLE(of, ceva_ahci_of_match);
 
 static struct platform_driver ceva_ahci_driver = {
 	.probe = ceva_ahci_probe,
-	.remove = ata_platform_remove_one,
+	.remove_new = ata_platform_remove_one,
 	.driver = {
 		.name = DRV_NAME,
 		.of_match_table = ceva_ahci_of_match,

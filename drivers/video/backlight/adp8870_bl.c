@@ -11,6 +11,7 @@
 #include <linux/pm.h>
 #include <linux/platform_device.h>
 #include <linux/i2c.h>
+#include <linux/fb.h>
 #include <linux/backlight.h>
 #include <linux/leds.h>
 #include <linux/workqueue.h>
@@ -962,7 +963,7 @@ static SIMPLE_DEV_PM_OPS(adp8870_i2c_pm_ops, adp8870_i2c_suspend,
 			adp8870_i2c_resume);
 
 static const struct i2c_device_id adp8870_id[] = {
-	{ .name = "adp8870" },
+	{ "adp8870" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, adp8870_id);

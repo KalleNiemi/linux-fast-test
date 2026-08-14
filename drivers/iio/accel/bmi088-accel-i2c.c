@@ -9,6 +9,7 @@
  */
 
 #include <linux/i2c.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/regmap.h>
 #include <linux/slab.h>
@@ -39,15 +40,15 @@ static const struct of_device_id bmi088_of_match[] = {
 	{ .compatible = "bosch,bmi085-accel" },
 	{ .compatible = "bosch,bmi088-accel" },
 	{ .compatible = "bosch,bmi090l-accel" },
-	{ }
+	{}
 };
 MODULE_DEVICE_TABLE(of, bmi088_of_match);
 
 static const struct i2c_device_id bmi088_accel_id[] = {
-	{ .name = "bmi085-accel",  .driver_data = BOSCH_BMI085 },
-	{ .name = "bmi088-accel",  .driver_data = BOSCH_BMI088 },
-	{ .name = "bmi090l-accel", .driver_data = BOSCH_BMI090L },
-	{ }
+	{ "bmi085-accel",  BOSCH_BMI085 },
+	{ "bmi088-accel",  BOSCH_BMI088 },
+	{ "bmi090l-accel", BOSCH_BMI090L },
+	{}
 };
 MODULE_DEVICE_TABLE(i2c, bmi088_accel_id);
 
@@ -66,4 +67,4 @@ module_i2c_driver(bmi088_accel_driver);
 MODULE_AUTHOR("Jun Yan <jerrysteve1101@gmail.com>");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("BMI088 accelerometer driver (I2C)");
-MODULE_IMPORT_NS("IIO_BMI088");
+MODULE_IMPORT_NS(IIO_BMI088);

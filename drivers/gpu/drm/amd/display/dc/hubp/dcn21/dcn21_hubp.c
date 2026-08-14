@@ -73,6 +73,8 @@
  * On any mode switch, if the new reg values are smaller than the current values,
  * then update the regs with the new values.
  *
+ * Link to the ticket: http://ontrack-internal.amd.com/browse/DEDCN21-142
+ *
  */
 void apply_DEDCN21_142_wa_for_hostvm_deadline(
 		struct hubp *hubp,
@@ -238,10 +240,10 @@ static void hubp21_set_vm_system_aperture_settings(struct hubp *hubp,
 	mc_vm_apt_high.quad_part = apt->sys_high.quad_part >> 18;
 
 	REG_SET(DCN_VM_SYSTEM_APERTURE_LOW_ADDR, 0,
-			MC_VM_SYSTEM_APERTURE_LOW_ADDR, mc_vm_apt_low.low_part);
+			MC_VM_SYSTEM_APERTURE_LOW_ADDR, mc_vm_apt_low.quad_part);
 
 	REG_SET(DCN_VM_SYSTEM_APERTURE_HIGH_ADDR, 0,
-			MC_VM_SYSTEM_APERTURE_HIGH_ADDR, mc_vm_apt_high.low_part);
+			MC_VM_SYSTEM_APERTURE_HIGH_ADDR, mc_vm_apt_high.quad_part);
 
 	REG_SET_2(DCN_VM_MX_L1_TLB_CNTL, 0,
 			ENABLE_L1_TLB, 1,
@@ -838,7 +840,6 @@ static struct hubp_funcs dcn21_hubp_funcs = {
 	.hubp_init = hubp21_init,
 	.validate_dml_output = hubp21_validate_dml_output,
 	.hubp_set_flip_int = hubp1_set_flip_int,
-	.hubp_clear_tiling = hubp1_clear_tiling,
 };
 
 bool hubp21_construct(

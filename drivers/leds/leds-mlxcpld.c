@@ -32,6 +32,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <linux/acpi.h>
 #include <linux/device.h>
 #include <linux/dmi.h>
 #include <linux/hwmon.h>
@@ -39,6 +40,7 @@
 #include <linux/io.h>
 #include <linux/leds.h>
 #include <linux/module.h>
+#include <linux/mod_devicetable.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 

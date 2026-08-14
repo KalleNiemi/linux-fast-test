@@ -57,9 +57,11 @@ static void dw_mci_hi3798cv200_set_ios(struct dw_mci *host, struct mmc_ios *ios)
 		clk_set_phase(priv->drive_clk, 135);
 }
 
-static int dw_mci_hi3798cv200_execute_tuning(struct dw_mci *host, u32 opcode)
+static int dw_mci_hi3798cv200_execute_tuning(struct dw_mci_slot *slot,
+					     u32 opcode)
 {
 	static const int degrees[] = { 0, 45, 90, 135, 180, 225, 270, 315 };
+	struct dw_mci *host = slot->host;
 	struct hi3798cv200_priv *priv = host->priv;
 	int raise_point = -1, fall_point = -1;
 	int err, prev_err = -1;
@@ -70,7 +72,7 @@ static int dw_mci_hi3798cv200_execute_tuning(struct dw_mci *host, u32 opcode)
 		clk_set_phase(priv->sample_clk, degrees[i]);
 		mci_writel(host, RINTSTS, ALL_INT_CLR);
 
-		err = mmc_send_tuning(host->mmc, opcode, NULL);
+		err = mmc_send_tuning(slot->mmc, opcode, NULL);
 		if (!err)
 			found = 1;
 
@@ -187,7 +189,7 @@ static const struct of_device_id dw_mci_hi3798cv200_match[] = {
 MODULE_DEVICE_TABLE(of, dw_mci_hi3798cv200_match);
 static struct platform_driver dw_mci_hi3798cv200_driver = {
 	.probe = dw_mci_hi3798cv200_probe,
-	.remove = dw_mci_hi3798cv200_remove,
+	.remove_new = dw_mci_hi3798cv200_remove,
 	.driver = {
 		.name = "dwmmc_hi3798cv200",
 		.probe_type = PROBE_PREFER_ASYNCHRONOUS,

@@ -290,7 +290,6 @@ static void calculate_inits(
 	const struct scaler_data *data,
 	struct scl_ratios_inits *inits)
 {
-	(void)xfm_dce;
 	struct fixed31_32 h_init;
 	struct fixed31_32 v_init;
 
@@ -810,7 +809,7 @@ static void program_bit_depth_reduction(
 
 	ASSERT(depth <= COLOR_DEPTH_121212); /* Invalid clamp bit depth */
 
-	spatial_dither_enable = bit_depth_params->flags.SPATIAL_DITHER_ENABLED != 0;
+	spatial_dither_enable = bit_depth_params->flags.SPATIAL_DITHER_ENABLED;
 	/* Default to 12 bit truncation without rounding */
 	trunc_round_depth = DCP_OUT_TRUNC_ROUND_DEPTH_12BIT;
 	trunc_mode = DCP_OUT_TRUNC_ROUND_MODE_TRUNCATE;
@@ -843,9 +842,9 @@ static void program_bit_depth_reduction(
 		   spatial_dither_enable,
 		   DCP_SPATIAL_DITHER_MODE_A_AA_A,
 		   DCP_SPATIAL_DITHER_DEPTH_30BPP,
-		   bit_depth_params->flags.FRAME_RANDOM != 0,
-		   bit_depth_params->flags.RGB_RANDOM != 0,
-		   bit_depth_params->flags.HIGHPASS_RANDOM != 0);
+		   bit_depth_params->flags.FRAME_RANDOM,
+		   bit_depth_params->flags.RGB_RANDOM,
+		   bit_depth_params->flags.HIGHPASS_RANDOM);
 }
 
 #if defined(CONFIG_DRM_AMD_DC_SI)
@@ -1181,13 +1180,13 @@ bool dce_transform_get_optimal_number_of_taps(
 {
 	struct dce_transform *xfm_dce = TO_DCE_TRANSFORM(xfm);
 	int pixel_width = scl_data->viewport.width;
-	uint32_t max_num_of_lines;
+	int max_num_of_lines;
 
 	if (xfm_dce->prescaler_on &&
 			(scl_data->viewport.width > scl_data->recout.width))
 		pixel_width = scl_data->recout.width;
 
-	max_num_of_lines = (uint32_t)dce_transform_get_max_num_of_supported_lines(
+	max_num_of_lines = dce_transform_get_max_num_of_supported_lines(
 		xfm_dce,
 		scl_data->lb_params.depth,
 		pixel_width);
@@ -1249,7 +1248,6 @@ static void program_color_matrix(
 	const struct out_csc_color_matrix *tbl_entry,
 	enum grph_color_adjust_option options)
 {
-	(void)options;
 	{
 		REG_SET_2(OUTPUT_CSC_C11_C12, 0,
 			OUTPUT_CSC_C11, tbl_entry->regval[0],

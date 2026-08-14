@@ -215,13 +215,13 @@ static struct nvme_rdma_qe *nvme_rdma_alloc_ring(struct ib_device *ibdev,
 	struct nvme_rdma_qe *ring;
 	int i;
 
-	ring = kzalloc_objs(struct nvme_rdma_qe, ib_queue_size);
+	ring = kcalloc(ib_queue_size, sizeof(struct nvme_rdma_qe), GFP_KERNEL);
 	if (!ring)
 		return NULL;
 
 	/*
 	 * Bind the CQEs (post recv buffers) DMA mapping to the RDMA queue
-	 * lifetime. It's safe, since any change in the underlying RDMA device
+	 * lifetime. It's safe, since any chage in the underlying RDMA device
 	 * will issue error recovery and queue re-creation.
 	 */
 	for (i = 0; i < ib_queue_size; i++) {
@@ -292,7 +292,7 @@ static void nvme_rdma_exit_request(struct blk_mq_tag_set *set,
 
 static int nvme_rdma_init_request(struct blk_mq_tag_set *set,
 		struct request *rq, unsigned int hctx_idx,
-		int numa_node)
+		unsigned int numa_node)
 {
 	struct nvme_rdma_ctrl *ctrl = to_rdma_ctrl(set->driver_data);
 	struct nvme_rdma_request *req = blk_mq_rq_to_pdu(rq);
@@ -300,7 +300,7 @@ static int nvme_rdma_init_request(struct blk_mq_tag_set *set,
 	struct nvme_rdma_queue *queue = &ctrl->queues[queue_idx];
 
 	nvme_req(rq)->ctrl = &ctrl->ctrl;
-	req->sqe.data = kzalloc_obj(struct nvme_command);
+	req->sqe.data = kzalloc(sizeof(struct nvme_command), GFP_KERNEL);
 	if (!req->sqe.data)
 		return -ENOMEM;
 
@@ -375,7 +375,7 @@ nvme_rdma_find_get_device(struct rdma_cm_id *cm_id)
 			goto out_unlock;
 	}
 
-	ndev = kzalloc_obj(*ndev);
+	ndev = kzalloc(sizeof(*ndev), GFP_KERNEL);
 	if (!ndev)
 		goto out_err;
 
@@ -800,7 +800,7 @@ static int nvme_rdma_configure_admin_queue(struct nvme_rdma_ctrl *ctrl,
 
 	/*
 	 * Bind the async event SQE DMA mapping to the admin queue lifetime.
-	 * It's safe, since any change in the underlying RDMA device will issue
+	 * It's safe, since any chage in the underlying RDMA device will issue
 	 * error recovery and queue re-creation.
 	 */
 	error = nvme_rdma_alloc_qe(ctrl->device->dev, &ctrl->async_event_sqe,
@@ -877,7 +877,7 @@ static int nvme_rdma_configure_io_queues(struct nvme_rdma_ctrl *ctrl, bool new)
 
 	/*
 	 * Only start IO queues for which we have allocated the tagset
-	 * and limited it to the available queues. On reconnects, the
+	 * and limitted it to the available queues. On reconnects, the
 	 * queue number might have changed.
 	 */
 	nr_queues = min(ctrl->tag_set.nr_hw_queues + 1, ctrl->ctrl.queue_count);
@@ -888,7 +888,7 @@ static int nvme_rdma_configure_io_queues(struct nvme_rdma_ctrl *ctrl, bool new)
 	if (!new) {
 		nvme_start_freeze(&ctrl->ctrl);
 		nvme_unquiesce_io_queues(&ctrl->ctrl);
-		if (!nvme_wait_freeze_timeout(&ctrl->ctrl)) {
+		if (!nvme_wait_freeze_timeout(&ctrl->ctrl, NVME_IO_TIMEOUT)) {
 			/*
 			 * If we timed out waiting for freeze we are likely to
 			 * be stuck.  Fail the controller initialization just
@@ -1019,7 +1019,7 @@ static int nvme_rdma_setup_ctrl(struct nvme_rdma_ctrl *ctrl, bool new)
 		goto destroy_admin;
 	}
 
-	if (!(ctrl->ctrl.sgls & NVME_CTRL_SGLS_KSDBDS)) {
+	if (!(ctrl->ctrl.sgls & (1 << 2))) {
 		ret = -EOPNOTSUPP;
 		dev_err(ctrl->ctrl.device,
 			"Mandatory keyed sgls are not supported!\n");
@@ -1051,7 +1051,7 @@ static int nvme_rdma_setup_ctrl(struct nvme_rdma_ctrl *ctrl, bool new)
 		ctrl->ctrl.sqsize = ctrl->ctrl.maxcmd - 1;
 	}
 
-	if (ctrl->ctrl.sgls & NVME_CTRL_SGLS_SAOS)
+	if (ctrl->ctrl.sgls & (1 << 20))
 		ctrl->use_inline_data = true;
 
 	if (ctrl->ctrl.queue_count > 1) {
@@ -1110,8 +1110,6 @@ static void nvme_rdma_reconnect_ctrl_work(struct work_struct *work)
 	dev_info(ctrl->ctrl.device, "Successfully reconnected (%d attempts)\n",
 			ctrl->ctrl.nr_reconnects);
 
-	/* accumulate reconnect attempts before resetting it to zero */
-	atomic_long_add(ctrl->ctrl.nr_reconnects, &ctrl->ctrl.acc_reconnects);
 	ctrl->ctrl.nr_reconnects = 0;
 
 	return;
@@ -1478,7 +1476,8 @@ static int nvme_rdma_dma_map_req(struct ib_device *ibdev, struct request *rq,
 	if (ret)
 		return -ENOMEM;
 
-	req->data_sgl.nents = blk_rq_map_sg(rq, req->data_sgl.sg_table.sgl);
+	req->data_sgl.nents = blk_rq_map_sg(rq->q, rq,
+					    req->data_sgl.sg_table.sgl);
 
 	*count = ib_dma_map_sg(ibdev, req->data_sgl.sg_table.sgl,
 			       req->data_sgl.nents, rq_dma_dir(rq));
@@ -2191,13 +2190,6 @@ out_fail:
 	nvme_rdma_reconnect_or_remove(ctrl, ret);
 }
 
-static bool nvme_rdma_supports_pci_p2pdma(struct nvme_ctrl *ctrl)
-{
-	struct nvme_rdma_ctrl *r_ctrl = to_rdma_ctrl(ctrl);
-
-	return ib_dma_pci_p2p_dma_supported(r_ctrl->device->dev);
-}
-
 static const struct nvme_ctrl_ops nvme_rdma_ctrl_ops = {
 	.name			= "rdma",
 	.module			= THIS_MODULE,
@@ -2211,8 +2203,6 @@ static const struct nvme_ctrl_ops nvme_rdma_ctrl_ops = {
 	.delete_ctrl		= nvme_rdma_delete_ctrl,
 	.get_address		= nvmf_get_address,
 	.stop_ctrl		= nvme_rdma_stop_ctrl,
-	.get_virt_boundary	= nvme_get_virt_boundary,
-	.supports_pci_p2pdma	= nvme_rdma_supports_pci_p2pdma,
 };
 
 /*
@@ -2250,7 +2240,7 @@ static struct nvme_rdma_ctrl *nvme_rdma_alloc_ctrl(struct device *dev,
 	struct nvme_rdma_ctrl *ctrl;
 	int ret;
 
-	ctrl = kzalloc_obj(*ctrl);
+	ctrl = kzalloc(sizeof(*ctrl), GFP_KERNEL);
 	if (!ctrl)
 		return ERR_PTR(-ENOMEM);
 	ctrl->ctrl.opts = opts;
@@ -2300,7 +2290,8 @@ static struct nvme_rdma_ctrl *nvme_rdma_alloc_ctrl(struct device *dev,
 	ctrl->ctrl.kato = opts->kato;
 
 	ret = -ENOMEM;
-	ctrl->queues = kzalloc_objs(*ctrl->queues, ctrl->ctrl.queue_count);
+	ctrl->queues = kcalloc(ctrl->ctrl.queue_count, sizeof(*ctrl->queues),
+				GFP_KERNEL);
 	if (!ctrl->queues)
 		goto out_free_ctrl;
 
@@ -2442,4 +2433,3 @@ module_exit(nvme_rdma_cleanup_module);
 
 MODULE_DESCRIPTION("NVMe host RDMA transport driver");
 MODULE_LICENSE("GPL v2");
-MODULE_ALIAS("nvme-rdma");

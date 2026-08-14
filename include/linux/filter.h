@@ -21,6 +21,7 @@
 #include <linux/if_vlan.h>
 #include <linux/vmalloc.h>
 #include <linux/sockptr.h>
+#include <crypto/sha1.h>
 #include <linux/static_call.h>
 #include <linux/u64_stats_sync.h>
 
@@ -59,9 +60,8 @@ struct ctl_table_header;
 #define BPF_REG_H	BPF_REG_9	/* hlen, callee-saved */
 
 /* Kernel hidden auxiliary/helper register. */
-#define BPF_REG_PARAMS		MAX_BPF_REG
-#define BPF_REG_AX		(MAX_BPF_REG + 1)
-#define MAX_BPF_EXT_REG		(MAX_BPF_REG + 2)
+#define BPF_REG_AX		MAX_BPF_REG
+#define MAX_BPF_EXT_REG		(MAX_BPF_REG + 1)
 #define MAX_BPF_JIT_REG		MAX_BPF_EXT_REG
 
 /* unused opcode to mark special call to bpf_tail_call() helper */
@@ -79,14 +79,11 @@ struct ctl_table_header;
 /* unused opcode to mark special atomic instruction */
 #define BPF_PROBE_ATOMIC 0xe0
 
-/* unused opcode to mark special ldsx instruction. Same as BPF_NOSPEC */
-#define BPF_PROBE_MEM32SX 0xc0
-
 /* unused opcode to mark call to interpreter with arguments */
 #define BPF_CALL_ARGS	0xe0
 
 /* unused opcode to mark speculation barrier for mitigating
- * Spectre v1 and v4
+ * Speculative Store Bypass
  */
 #define BPF_NOSPEC	0xc0
 
@@ -368,8 +365,6 @@ static inline bool insn_is_cast_user(const struct bpf_insn *insn)
  *   BPF_XOR | BPF_FETCH      src_reg = atomic_fetch_xor(dst_reg + off16, src_reg);
  *   BPF_XCHG                 src_reg = atomic_xchg(dst_reg + off16, src_reg)
  *   BPF_CMPXCHG              r0 = atomic_cmpxchg(dst_reg + off16, r0, src_reg)
- *   BPF_LOAD_ACQ             dst_reg = smp_load_acquire(src_reg + off16)
- *   BPF_STORE_REL            smp_store_release(dst_reg + off16, src_reg)
  */
 
 #define BPF_ATOMIC_OP(SIZE, OP, DST, SRC, OFF)			\
@@ -474,16 +469,6 @@ static inline bool insn_is_cast_user(const struct bpf_insn *insn)
 		.src_reg = 0,					\
 		.off   = 0,					\
 		.imm   = BPF_CALL_IMM(FUNC) })
-
-/* Kfunc call */
-
-#define BPF_CALL_KFUNC(OFF, IMM)				\
-	((struct bpf_insn) {					\
-		.code  = BPF_JMP | BPF_CALL,			\
-		.dst_reg = 0,					\
-		.src_reg = BPF_PSEUDO_KFUNC_CALL,		\
-		.off   = OFF,					\
-		.imm   = IMM })
 
 /* Raw code statement block */
 
@@ -675,11 +660,6 @@ struct bpf_prog_stats {
 	struct u64_stats_sync syncp;
 } __aligned(2 * sizeof(u64));
 
-struct bpf_timed_may_goto {
-	u64 count;
-	u64 timestamp;
-};
-
 struct sk_filter {
 	refcount_t	refcnt;
 	struct rcu_head	rcu;
@@ -748,27 +728,6 @@ static inline u32 bpf_prog_run_pin_on_cpu(const struct bpf_prog *prog,
 	ret = bpf_prog_run(prog, ctx);
 	migrate_enable();
 	return ret;
-}
-
-static inline bool is_stack_arg_ldx(const struct bpf_insn *insn)
-{
-	return insn->code == (BPF_LDX | BPF_MEM | BPF_DW) &&
-	       insn->src_reg == BPF_REG_PARAMS &&
-	       insn->off > 0 && insn->off % 8 == 0;
-}
-
-static inline bool is_stack_arg_st(const struct bpf_insn *insn)
-{
-	return insn->code == (BPF_ST | BPF_MEM | BPF_DW) &&
-	       insn->dst_reg == BPF_REG_PARAMS &&
-	       insn->off < 0 && insn->off % 8 == 0;
-}
-
-static inline bool is_stack_arg_stx(const struct bpf_insn *insn)
-{
-	return insn->code == (BPF_STX | BPF_MEM | BPF_DW) &&
-	       insn->dst_reg == BPF_REG_PARAMS &&
-	       insn->off < 0 && insn->off % 8 == 0;
 }
 
 #define BPF_SKB_CB_LEN QDISC_CB_PRIV_LEN
@@ -1044,6 +1003,12 @@ static inline u32 bpf_prog_insn_size(const struct bpf_prog *prog)
 	return prog->len * sizeof(struct bpf_insn);
 }
 
+static inline u32 bpf_prog_tag_scratch_size(const struct bpf_prog *prog)
+{
+	return round_up(bpf_prog_insn_size(prog) +
+			sizeof(__be64) + 1, SHA1_BLOCK_SIZE);
+}
+
 static inline unsigned int bpf_prog_size(unsigned int proglen)
 {
 	return max(sizeof(struct bpf_prog),
@@ -1114,25 +1079,12 @@ bpf_jit_binary_lock_ro(struct bpf_binary_header *hdr)
 	return set_memory_rox((unsigned long)hdr, hdr->size >> PAGE_SHIFT);
 }
 
-enum skb_drop_reason
-sk_filter_trim_cap(struct sock *sk, struct sk_buff *skb, unsigned int cap);
-
+int sk_filter_trim_cap(struct sock *sk, struct sk_buff *skb, unsigned int cap);
 static inline int sk_filter(struct sock *sk, struct sk_buff *skb)
-{
-	enum skb_drop_reason drop_reason;
-
-	drop_reason = sk_filter_trim_cap(sk, skb, 1);
-	return drop_reason ? -EPERM : 0;
-}
-
-static inline enum skb_drop_reason
-sk_filter_reason(struct sock *sk, struct sk_buff *skb)
 {
 	return sk_filter_trim_cap(sk, skb, 1);
 }
 
-struct bpf_prog *__bpf_prog_select_runtime(struct bpf_verifier_env *env, struct bpf_prog *fp,
-					   int *err);
 struct bpf_prog *bpf_prog_select_runtime(struct bpf_prog *fp, int *err);
 void bpf_prog_free(struct bpf_prog *fp);
 
@@ -1174,27 +1126,25 @@ bool sk_filter_charge(struct sock *sk, struct sk_filter *fp);
 void sk_filter_uncharge(struct sock *sk, struct sk_filter *fp);
 
 u64 __bpf_call_base(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5);
+#define __bpf_call_base_args \
+	((u64 (*)(u64, u64, u64, u64, u64, const struct bpf_insn *)) \
+	 (void *)__bpf_call_base)
 
-struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog);
+struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog);
 void bpf_jit_compile(struct bpf_prog *prog);
 bool bpf_jit_needs_zext(void);
 bool bpf_jit_inlines_helper_call(s32 imm);
 bool bpf_jit_supports_subprog_tailcalls(void);
 bool bpf_jit_supports_percpu_insn(void);
 bool bpf_jit_supports_kfunc_call(void);
-bool bpf_jit_supports_stack_args(void);
 bool bpf_jit_supports_far_kfunc_call(void);
 bool bpf_jit_supports_exceptions(void);
 bool bpf_jit_supports_ptr_xchg(void);
 bool bpf_jit_supports_arena(void);
 bool bpf_jit_supports_insn(struct bpf_insn *insn, bool in_arena);
 bool bpf_jit_supports_private_stack(void);
-bool bpf_jit_supports_timed_may_goto(void);
-bool bpf_jit_supports_fsession(void);
 u64 bpf_arch_uaddress_limit(void);
 void arch_bpf_stack_walk(bool (*consume_fn)(void *cookie, u64 ip, u64 sp, u64 bp), void *cookie);
-u64 arch_bpf_timed_may_goto(void);
-u64 bpf_check_timed_may_goto(struct bpf_timed_may_goto *);
 bool bpf_helper_changes_pkt_data(enum bpf_func_id func_id);
 
 static inline bool bpf_dump_raw_ok(const struct cred *cred)
@@ -1207,31 +1157,6 @@ static inline bool bpf_dump_raw_ok(const struct cred *cred)
 
 struct bpf_prog *bpf_patch_insn_single(struct bpf_prog *prog, u32 off,
 				       const struct bpf_insn *patch, u32 len);
-
-#ifdef CONFIG_BPF_SYSCALL
-struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 off,
-				     const struct bpf_insn *patch, u32 len);
-struct bpf_insn_aux_data *bpf_dup_insn_aux_data(struct bpf_verifier_env *env);
-void bpf_restore_insn_aux_data(struct bpf_verifier_env *env,
-			       struct bpf_insn_aux_data *orig_insn_aux);
-#else
-static inline struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 off,
-						   const struct bpf_insn *patch, u32 len)
-{
-	return ERR_PTR(-ENOTSUPP);
-}
-
-static inline struct bpf_insn_aux_data *bpf_dup_insn_aux_data(struct bpf_verifier_env *env)
-{
-	return NULL;
-}
-
-static inline void bpf_restore_insn_aux_data(struct bpf_verifier_env *env,
-					     struct bpf_insn_aux_data *orig_insn_aux)
-{
-}
-#endif /* CONFIG_BPF_SYSCALL */
-
 int bpf_remove_insns(struct bpf_prog *prog, u32 off, u32 cnt);
 
 static inline bool xdp_return_frame_no_direct(void)
@@ -1277,18 +1202,17 @@ static inline int xdp_ok_fwd_dev(const struct net_device *fwd,
  * This does not appear to be a real limitation for existing software.
  */
 int xdp_do_generic_redirect(struct net_device *dev, struct sk_buff *skb,
-			    struct xdp_buff *xdp, const struct bpf_prog *prog);
+			    struct xdp_buff *xdp, struct bpf_prog *prog);
 int xdp_do_redirect(struct net_device *dev,
 		    struct xdp_buff *xdp,
-		    const struct bpf_prog *prog);
+		    struct bpf_prog *prog);
 int xdp_do_redirect_frame(struct net_device *dev,
 			  struct xdp_buff *xdp,
 			  struct xdp_frame *xdpf,
-			  const struct bpf_prog *prog);
+			  struct bpf_prog *prog);
 void xdp_do_flush(void);
 
-void bpf_warn_invalid_xdp_action(const struct net_device *dev,
-				 const struct bpf_prog *prog, u32 act);
+void bpf_warn_invalid_xdp_action(struct net_device *dev, struct bpf_prog *prog, u32 act);
 
 #ifdef CONFIG_INET
 struct sock *bpf_run_sk_reuseport(struct sock_reuseport *reuse, struct sock *sk,
@@ -1366,15 +1290,8 @@ int bpf_jit_get_func_addr(const struct bpf_prog *prog,
 			  const struct bpf_insn *insn, bool extra_pass,
 			  u64 *func_addr, bool *func_addr_fixed);
 
-const char *bpf_jit_get_prog_name(struct bpf_prog *prog);
-
-struct bpf_prog *bpf_jit_blind_constants(struct bpf_verifier_env *env, struct bpf_prog *prog);
+struct bpf_prog *bpf_jit_blind_constants(struct bpf_prog *fp);
 void bpf_jit_prog_release_other(struct bpf_prog *fp, struct bpf_prog *fp_other);
-
-static inline bool bpf_prog_need_blind(const struct bpf_prog *prog)
-{
-	return prog->blinding_requested && !prog->blinded;
-}
 
 static inline void bpf_jit_dump(unsigned int flen, unsigned int proglen,
 				u32 pass, void *image)
@@ -1439,12 +1356,23 @@ static inline bool bpf_jit_kallsyms_enabled(void)
 	return false;
 }
 
-int bpf_address_lookup(unsigned long addr, unsigned long *size,
-		       unsigned long *off, char *sym);
+int __bpf_address_lookup(unsigned long addr, unsigned long *size,
+				 unsigned long *off, char *sym);
 bool is_bpf_text_address(unsigned long addr);
 int bpf_get_kallsym(unsigned int symnum, unsigned long *value, char *type,
 		    char *sym);
 struct bpf_prog *bpf_prog_ksym_find(unsigned long addr);
+
+static inline int
+bpf_address_lookup(unsigned long addr, unsigned long *size,
+		   unsigned long *off, char **modname, char *sym)
+{
+	int ret = __bpf_address_lookup(addr, size, off, sym);
+
+	if (ret && modname)
+		*modname = NULL;
+	return ret;
+}
 
 void bpf_prog_kallsyms_add(struct bpf_prog *fp);
 void bpf_prog_kallsyms_del(struct bpf_prog *fp);
@@ -1484,8 +1412,8 @@ static inline bool bpf_jit_kallsyms_enabled(void)
 }
 
 static inline int
-bpf_address_lookup(unsigned long addr, unsigned long *size,
-		   unsigned long *off, char *sym)
+__bpf_address_lookup(unsigned long addr, unsigned long *size,
+		     unsigned long *off, char *sym)
 {
 	return 0;
 }
@@ -1506,6 +1434,13 @@ static inline struct bpf_prog *bpf_prog_ksym_find(unsigned long addr)
 	return NULL;
 }
 
+static inline int
+bpf_address_lookup(unsigned long addr, unsigned long *size,
+		   unsigned long *off, char **modname, char *sym)
+{
+	return 0;
+}
+
 static inline void bpf_prog_kallsyms_add(struct bpf_prog *fp)
 {
 }
@@ -1514,20 +1449,6 @@ static inline void bpf_prog_kallsyms_del(struct bpf_prog *fp)
 {
 }
 
-static inline bool bpf_prog_need_blind(const struct bpf_prog *prog)
-{
-	return false;
-}
-
-static inline
-struct bpf_prog *bpf_jit_blind_constants(struct bpf_verifier_env *env, struct bpf_prog *prog)
-{
-	return prog;
-}
-
-static inline void bpf_jit_prog_release_other(struct bpf_prog *fp, struct bpf_prog *fp_other)
-{
-}
 #endif /* CONFIG_BPF_JIT */
 
 void bpf_prog_kallsyms_del_all(struct bpf_prog *fp);
@@ -1597,7 +1518,7 @@ static inline int bpf_tell_extensions(void)
 
 struct bpf_sock_addr_kern {
 	struct sock *sk;
-	struct sockaddr_unsized *uaddr;
+	struct sockaddr *uaddr;
 	/* Temporary "register" to make indirect stores to nested structures
 	 * defined above. We need three registers to make such a store, but
 	 * only two (src and dst) are available at convert_ctx_access time
@@ -1619,7 +1540,6 @@ struct bpf_sock_ops_kern {
 	void	*skb_data_end;
 	u8	op;
 	u8	is_fullsock;
-	u8	is_locked_tcp_sock;
 	u8	remaining_opt_len;
 	u64	temp;			/* temp and everything after is not
 					 * initialized to 0 before calling
@@ -1863,9 +1783,6 @@ int __bpf_xdp_store_bytes(struct xdp_buff *xdp, u32 offset, void *buf, u32 len);
 void *bpf_xdp_pointer(struct xdp_buff *xdp, u32 offset, u32 len);
 void bpf_xdp_copy_buf(struct xdp_buff *xdp, unsigned long off,
 		      void *buf, unsigned long len, bool flush);
-int __bpf_skb_meta_store_bytes(struct sk_buff *skb, u32 offset,
-			       const void *from, u32 len, u64 flags);
-void *bpf_skb_meta_pointer(struct sk_buff *skb, u32 offset);
 #else /* CONFIG_NET */
 static inline int __bpf_skb_load_bytes(const struct sk_buff *skb, u32 offset,
 				       void *to, u32 len)
@@ -1899,18 +1816,6 @@ static inline void *bpf_xdp_pointer(struct xdp_buff *xdp, u32 offset, u32 len)
 static inline void bpf_xdp_copy_buf(struct xdp_buff *xdp, unsigned long off, void *buf,
 				    unsigned long len, bool flush)
 {
-}
-
-static inline int __bpf_skb_meta_store_bytes(struct sk_buff *skb, u32 offset,
-					     const void *from, u32 len,
-					     u64 flags)
-{
-	return -EOPNOTSUPP;
-}
-
-static inline void *bpf_skb_meta_pointer(struct sk_buff *skb, u32 offset)
-{
-	return ERR_PTR(-EOPNOTSUPP);
 }
 #endif /* CONFIG_NET */
 

@@ -188,7 +188,7 @@ static int amd76xrom_init_one(struct pci_dev *pdev,
 		int i;
 
 		if (!map) {
-			map = kmalloc_obj(*map);
+			map = kmalloc(sizeof(*map), GFP_KERNEL);
 			if (!map)
 				goto out;
 		}
@@ -296,10 +296,12 @@ static void amd76xrom_remove_one(struct pci_dev *pdev)
 }
 
 static const struct pci_device_id amd76xrom_pci_tbl[] = {
-	{ PCI_DEVICE(PCI_VENDOR_ID_AMD, PCI_DEVICE_ID_AMD_VIPER_7410) },
-	{ PCI_DEVICE(PCI_VENDOR_ID_AMD, PCI_DEVICE_ID_AMD_VIPER_7440) },
-	{ PCI_DEVICE_SUB(PCI_VENDOR_ID_AMD, 0x7468, 0, 0) }, /* amd8111 support */
-	{ }
+	{ PCI_VENDOR_ID_AMD, PCI_DEVICE_ID_AMD_VIPER_7410,
+		PCI_ANY_ID, PCI_ANY_ID, },
+	{ PCI_VENDOR_ID_AMD, PCI_DEVICE_ID_AMD_VIPER_7440,
+		PCI_ANY_ID, PCI_ANY_ID, },
+	{ PCI_VENDOR_ID_AMD, 0x7468 }, /* amd8111 support */
+	{ 0, }
 };
 
 MODULE_DEVICE_TABLE(pci, amd76xrom_pci_tbl);

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
    BlueZ - Bluetooth protocol stack for Linux
    Copyright (C) 2000-2001 Qualcomm Incorporated
@@ -8,6 +7,10 @@
    Copyright (c) 2012 Code Aurora Forum.  All rights reserved.
 
    Written 2000,2001 by Maxim Krasnyansky <maxk@qualcomm.com>
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License version 2 as
+   published by the Free Software Foundation;
 
    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
    OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -444,7 +447,7 @@ struct l2cap_chan *l2cap_chan_create(void)
 {
 	struct l2cap_chan *chan;
 
-	chan = kzalloc_obj(*chan, GFP_ATOMIC);
+	chan = kzalloc(sizeof(*chan), GFP_ATOMIC);
 	if (!chan)
 		return NULL;
 
@@ -2554,33 +2557,7 @@ static void l2cap_le_flowctl_send(struct l2cap_chan *chan)
 	       skb_queue_len(&chan->tx_q));
 }
 
-static void l2cap_tx_timestamp(struct sk_buff *skb,
-			       const struct sockcm_cookie *sockc,
-			       size_t len)
-{
-	struct sock *sk = skb ? skb->sk : NULL;
-
-	if (sk && sk->sk_type == SOCK_STREAM)
-		hci_setup_tx_timestamp(skb, len, sockc);
-	else
-		hci_setup_tx_timestamp(skb, 1, sockc);
-}
-
-static void l2cap_tx_timestamp_seg(struct sk_buff_head *queue,
-				   const struct sockcm_cookie *sockc,
-				   size_t len)
-{
-	struct sk_buff *skb = skb_peek(queue);
-	struct sock *sk = skb ? skb->sk : NULL;
-
-	if (sk && sk->sk_type == SOCK_STREAM)
-		l2cap_tx_timestamp(skb_peek_tail(queue), sockc, len);
-	else
-		l2cap_tx_timestamp(skb, sockc, len);
-}
-
-int l2cap_chan_send(struct l2cap_chan *chan, struct msghdr *msg, size_t len,
-		    const struct sockcm_cookie *sockc)
+int l2cap_chan_send(struct l2cap_chan *chan, struct msghdr *msg, size_t len)
 {
 	struct sk_buff *skb;
 	int err;
@@ -2594,8 +2571,6 @@ int l2cap_chan_send(struct l2cap_chan *chan, struct msghdr *msg, size_t len,
 		skb = l2cap_create_connless_pdu(chan, msg, len);
 		if (IS_ERR(skb))
 			return PTR_ERR(skb);
-
-		l2cap_tx_timestamp(skb, sockc, len);
 
 		l2cap_do_send(chan, skb);
 		return len;
@@ -2620,8 +2595,6 @@ int l2cap_chan_send(struct l2cap_chan *chan, struct msghdr *msg, size_t len,
 		if (err)
 			return err;
 
-		l2cap_tx_timestamp_seg(&seg_queue, sockc, len);
-
 		skb_queue_splice_tail_init(&seg_queue, &chan->tx_q);
 
 		l2cap_le_flowctl_send(chan);
@@ -2642,8 +2615,6 @@ int l2cap_chan_send(struct l2cap_chan *chan, struct msghdr *msg, size_t len,
 		skb = l2cap_create_basic_pdu(chan, msg, len);
 		if (IS_ERR(skb))
 			return PTR_ERR(skb);
-
-		l2cap_tx_timestamp(skb, sockc, len);
 
 		l2cap_do_send(chan, skb);
 		err = len;
@@ -2668,13 +2639,10 @@ int l2cap_chan_send(struct l2cap_chan *chan, struct msghdr *msg, size_t len,
 		if (err)
 			break;
 
-		if (chan->mode == L2CAP_MODE_ERTM) {
-			/* TODO: ERTM mode timestamping */
+		if (chan->mode == L2CAP_MODE_ERTM)
 			l2cap_tx(chan, NULL, &seg_queue, L2CAP_EV_DATA_REQUEST);
-		} else {
-			l2cap_tx_timestamp_seg(&seg_queue, sockc, len);
+		else
 			l2cap_streaming_send(chan, &seg_queue);
-		}
 
 		err = len;
 
@@ -4783,8 +4751,16 @@ static inline int l2cap_conn_param_update_req(struct l2cap_conn *conn,
 	l2cap_send_cmd(conn, cmd->ident, L2CAP_CONN_PARAM_UPDATE_RSP,
 		       sizeof(rsp), &rsp);
 
-	if (!err)
-		hci_le_conn_update(hcon, min, max, latency, to_multiplier);
+	if (!err) {
+		u8 store_hint;
+
+		store_hint = hci_le_conn_update(hcon, min, max, latency,
+						to_multiplier);
+		mgmt_new_conn_param(hcon->hdev, &hcon->dst, hcon->dst_type,
+				    store_hint, min, max, latency,
+				    to_multiplier);
+
+	}
 
 	return 0;
 }
@@ -4817,10 +4793,6 @@ static int l2cap_le_connect_rsp(struct l2cap_conn *conn,
 	       dcid, mtu, mps, credits, result);
 
 	chan = __l2cap_get_chan_by_ident(conn, cmd->ident);
-	if (!chan)
-		return -EBADSLT;
-
-	chan = l2cap_chan_hold_unless_zero(chan);
 	if (!chan)
 		return -EBADSLT;
 
@@ -4869,13 +4841,14 @@ static int l2cap_le_connect_rsp(struct l2cap_conn *conn,
 	}
 
 	l2cap_chan_unlock(chan);
-	l2cap_chan_put(chan);
 
 	return err;
 }
 
 static void l2cap_put_ident(struct l2cap_conn *conn, u8 code, u8 id)
 {
+	int ret;
+
 	switch (code) {
 	case L2CAP_COMMAND_REJ:
 	case L2CAP_CONN_RSP:
@@ -4887,10 +4860,15 @@ static void l2cap_put_ident(struct l2cap_conn *conn, u8 code, u8 id)
 	case L2CAP_LE_CONN_RSP:
 	case L2CAP_ECRED_CONN_RSP:
 	case L2CAP_ECRED_RECONF_RSP:
-		/* First do a lookup since the remote may send bogus ids that
-		 * would make ida_free to generate warnings.
+		/* The remote may send bogus ids that would make ida_free
+		 * generate warnings, so only free ids that are actually
+		 * allocated: probing the exact id returns -ENOSPC when it
+		 * is in use, otherwise the probe allocated it and freeing
+		 * is safe either way.  Only on -ENOMEM is the id known to
+		 * be unallocated and the free must be skipped.
 		 */
-		if (ida_find_first_range(&conn->tx_ida, id, id) >= 0)
+		ret = ida_alloc_range(&conn->tx_ida, id, id, GFP_ATOMIC);
+		if (ret >= 0 || ret == -ENOSPC)
 			ida_free(&conn->tx_ida, id);
 	}
 }
@@ -5516,7 +5494,7 @@ static inline int l2cap_ecred_reconf_req(struct l2cap_conn *conn,
 		 * configured, the MPS field may be less than the current MPS
 		 * of that channel.
 		 */
-		if (chan[i]->remote_mps > mps && num_scid > 1) {
+		if (chan[i]->remote_mps >= mps && i) {
 			BT_ERR("chan %p decreased MPS %u -> %u", chan[i],
 			       chan[i]->remote_mps, mps);
 			result = L2CAP_RECONF_INVALID_MPS;
@@ -6861,13 +6839,6 @@ static int l2cap_ecred_data_rcv(struct l2cap_chan *chan, struct sk_buff *skb)
 		return -ENOBUFS;
 	}
 
-	if (skb->len > chan->mps) {
-		BT_ERR("Too big LE L2CAP MPS: len %u > %u", skb->len,
-		       chan->mps);
-		l2cap_send_disconn_req(chan, ECONNRESET);
-		return -ENOBUFS;
-	}
-
 	chan->rx_credits--;
 	BT_DBG("chan %p: rx_credits %u -> %u",
 	       chan, chan->rx_credits + 1, chan->rx_credits);
@@ -7113,11 +7084,6 @@ static void l2cap_recv_frame(struct l2cap_conn *conn, struct sk_buff *skb)
 		break;
 
 	case L2CAP_CID_CONN_LESS:
-		if (skb->len < L2CAP_PSMLEN_SIZE) {
-			kfree_skb(skb);
-			break;
-		}
-
 		psm = get_unaligned((__le16 *) skb->data);
 		skb_pull(skb, L2CAP_PSMLEN_SIZE);
 		l2cap_conless_channel(conn, psm, skb);
@@ -7161,7 +7127,7 @@ static struct l2cap_conn *l2cap_conn_add(struct hci_conn *hcon)
 	if (!hchan)
 		return NULL;
 
-	conn = kzalloc_obj(*conn);
+	conn = kzalloc(sizeof(*conn), GFP_KERNEL);
 	if (!conn) {
 		hci_chan_del(hchan);
 		return NULL;
@@ -7786,24 +7752,13 @@ struct l2cap_conn *l2cap_conn_hold_unless_zero(struct l2cap_conn *c)
 }
 EXPORT_SYMBOL(l2cap_conn_hold_unless_zero);
 
-int l2cap_recv_acldata(struct hci_dev *hdev, u16 handle,
-		       struct sk_buff *skb, u16 flags)
+void l2cap_recv_acldata(struct hci_conn *hcon, struct sk_buff *skb, u16 flags)
 {
-	struct hci_conn *hcon;
 	struct l2cap_conn *conn;
 	int len;
 
-	/* Lock hdev for hci_conn, and race on l2cap_data vs. l2cap_conn_del */
-	hci_dev_lock(hdev);
-
-	hcon = hci_conn_hash_lookup_handle(hdev, handle);
-	if (!hcon) {
-		hci_dev_unlock(hdev);
-		kfree_skb(skb);
-		return -ENOENT;
-	}
-
-	hci_conn_enter_active_mode(hcon, BT_POWER_FORCE_ACTIVE_OFF);
+	/* Lock hdev to access l2cap_data to avoid race with l2cap_conn_del */
+	hci_dev_lock(hcon->hdev);
 
 	conn = hcon->l2cap_data;
 
@@ -7811,13 +7766,12 @@ int l2cap_recv_acldata(struct hci_dev *hdev, u16 handle,
 		conn = l2cap_conn_add(hcon);
 
 	conn = l2cap_conn_hold_unless_zero(conn);
-	hcon = NULL;
 
-	hci_dev_unlock(hdev);
+	hci_dev_unlock(hcon->hdev);
 
 	if (!conn) {
 		kfree_skb(skb);
-		return -EINVAL;
+		return;
 	}
 
 	BT_DBG("conn %p len %u flags 0x%x", conn, skb->len, flags);
@@ -7931,7 +7885,6 @@ drop:
 unlock:
 	mutex_unlock(&conn->lock);
 	l2cap_conn_put(conn);
-	return 0;
 }
 
 static struct hci_cb l2cap_cb = {

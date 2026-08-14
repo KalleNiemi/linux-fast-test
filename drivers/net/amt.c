@@ -11,7 +11,6 @@
 #include <linux/net.h>
 #include <linux/igmp.h>
 #include <linux/workqueue.h>
-#include <net/flow.h>
 #include <net/pkt_sched.h>
 #include <net/net_namespace.h>
 #include <net/ip.h>
@@ -29,7 +28,6 @@
 #include <net/addrconf.h>
 #include <net/ip6_route.h>
 #include <net/inet_common.h>
-#include <net/inet_dscp.h>
 #include <net/ip6_checksum.h>
 
 static struct workqueue_struct *amt_wq;
@@ -368,7 +366,7 @@ static struct amt_source_node *amt_alloc_snode(struct amt_group_node *gnode,
 {
 	struct amt_source_node *snode;
 
-	snode = kzalloc_obj(*snode, GFP_ATOMIC);
+	snode = kzalloc(sizeof(*snode), GFP_ATOMIC);
 	if (!snode)
 		return NULL;
 
@@ -614,24 +612,24 @@ static void amt_send_discovery(struct amt_dev *amt)
 {
 	struct amt_header_discovery *amtd;
 	int hlen, tlen, offset;
+	struct socket *sock;
 	struct udphdr *udph;
 	struct sk_buff *skb;
 	struct iphdr *iph;
 	struct rtable *rt;
 	struct flowi4 fl4;
-	struct sock *sk;
 	u32 len;
 	int err;
 
 	rcu_read_lock();
-	sk = rcu_dereference(amt->sk);
-	if (!sk)
+	sock = rcu_dereference(amt->sock);
+	if (!sock)
 		goto out;
 
 	if (!netif_running(amt->stream_dev) || !netif_running(amt->dev))
 		goto out;
 
-	rt = ip_route_output_ports(amt->net, &fl4, sk,
+	rt = ip_route_output_ports(amt->net, &fl4, sock->sk,
 				   amt->discovery_ip, amt->local_ip,
 				   amt->gw_port, amt->relay_port,
 				   IPPROTO_UDP, 0,
@@ -690,7 +688,7 @@ static void amt_send_discovery(struct amt_dev *amt)
 	skb->ip_summed = CHECKSUM_NONE;
 	ip_select_ident(amt->net, skb, NULL);
 	ip_send_check(iph);
-	err = ip_local_out(amt->net, sk, skb);
+	err = ip_local_out(amt->net, sock->sk, skb);
 	if (unlikely(net_xmit_eval(err)))
 		amt->dev->stats.tx_errors++;
 
@@ -703,24 +701,24 @@ static void amt_send_request(struct amt_dev *amt, bool v6)
 {
 	struct amt_header_request *amtrh;
 	int hlen, tlen, offset;
+	struct socket *sock;
 	struct udphdr *udph;
 	struct sk_buff *skb;
 	struct iphdr *iph;
 	struct rtable *rt;
 	struct flowi4 fl4;
-	struct sock *sk;
 	u32 len;
 	int err;
 
 	rcu_read_lock();
-	sk = rcu_dereference(amt->sk);
-	if (!sk)
+	sock = rcu_dereference(amt->sock);
+	if (!sock)
 		goto out;
 
 	if (!netif_running(amt->stream_dev) || !netif_running(amt->dev))
 		goto out;
 
-	rt = ip_route_output_ports(amt->net, &fl4, sk,
+	rt = ip_route_output_ports(amt->net, &fl4, sock->sk,
 				   amt->remote_ip, amt->local_ip,
 				   amt->gw_port, amt->relay_port,
 				   IPPROTO_UDP, 0,
@@ -781,7 +779,7 @@ static void amt_send_request(struct amt_dev *amt, bool v6)
 	skb->ip_summed = CHECKSUM_NONE;
 	ip_select_ident(amt->net, skb, NULL);
 	ip_send_check(iph);
-	err = ip_local_out(amt->net, sk, skb);
+	err = ip_local_out(amt->net, sock->sk, skb);
 	if (unlikely(net_xmit_eval(err)))
 		amt->dev->stats.tx_errors++;
 
@@ -981,7 +979,7 @@ static void amt_event_send_request(struct amt_dev *amt)
 	amt->req_cnt++;
 out:
 	exp = min_t(u32, (1 * (1 << amt->req_cnt)), AMT_MAX_REQ_TIMEOUT);
-	mod_delayed_work(amt_wq, &amt->req_wq, secs_to_jiffies(exp));
+	mod_delayed_work(amt_wq, &amt->req_wq, msecs_to_jiffies(exp * 1000));
 }
 
 static void amt_req_work(struct work_struct *work)
@@ -1000,14 +998,14 @@ static bool amt_send_membership_update(struct amt_dev *amt,
 				       bool v6)
 {
 	struct amt_header_membership_update *amtmu;
+	struct socket *sock;
 	struct iphdr *iph;
 	struct flowi4 fl4;
 	struct rtable *rt;
-	struct sock *sk;
 	int err;
 
-	sk = rcu_dereference_bh(amt->sk);
-	if (!sk)
+	sock = rcu_dereference_bh(amt->sock);
+	if (!sock)
 		return true;
 
 	err = skb_cow_head(skb, LL_RESERVED_SPACE(amt->dev) + sizeof(*amtmu) +
@@ -1020,7 +1018,7 @@ static bool amt_send_membership_update(struct amt_dev *amt,
 	fl4.flowi4_oif         = amt->stream_dev->ifindex;
 	fl4.daddr              = amt->remote_ip;
 	fl4.saddr              = amt->local_ip;
-	fl4.flowi4_dscp        = inet_dsfield_to_dscp(AMT_TOS);
+	fl4.flowi4_tos         = AMT_TOS;
 	fl4.flowi4_proto       = IPPROTO_UDP;
 	rt = ip_route_output_key(amt->net, &fl4);
 	if (IS_ERR(rt)) {
@@ -1039,7 +1037,7 @@ static bool amt_send_membership_update(struct amt_dev *amt,
 		skb_set_inner_protocol(skb, htons(ETH_P_IP));
 	else
 		skb_set_inner_protocol(skb, htons(ETH_P_IPV6));
-	udp_tunnel_xmit_skb(rt, sk, skb,
+	udp_tunnel_xmit_skb(rt, sock->sk, skb,
 			    fl4.saddr,
 			    fl4.daddr,
 			    AMT_TOS,
@@ -1048,8 +1046,7 @@ static bool amt_send_membership_update(struct amt_dev *amt,
 			    amt->gw_port,
 			    amt->relay_port,
 			    false,
-			    false,
-			    0);
+			    false);
 	amt_update_gw_status(amt, AMT_STATUS_SENT_UPDATE, true);
 	return false;
 }
@@ -1060,14 +1057,14 @@ static void amt_send_multicast_data(struct amt_dev *amt,
 				    bool v6)
 {
 	struct amt_header_mcast_data *amtmd;
+	struct socket *sock;
 	struct sk_buff *skb;
 	struct iphdr *iph;
 	struct flowi4 fl4;
 	struct rtable *rt;
-	struct sock *sk;
 
-	sk = rcu_dereference_bh(amt->sk);
-	if (!sk)
+	sock = rcu_dereference_bh(amt->sock);
+	if (!sock)
 		return;
 
 	skb = skb_copy_expand(oskb, sizeof(*amtmd) + sizeof(*iph) +
@@ -1097,7 +1094,7 @@ static void amt_send_multicast_data(struct amt_dev *amt,
 		skb_set_inner_protocol(skb, htons(ETH_P_IP));
 	else
 		skb_set_inner_protocol(skb, htons(ETH_P_IPV6));
-	udp_tunnel_xmit_skb(rt, sk, skb,
+	udp_tunnel_xmit_skb(rt, sock->sk, skb,
 			    fl4.saddr,
 			    fl4.daddr,
 			    AMT_TOS,
@@ -1106,8 +1103,7 @@ static void amt_send_multicast_data(struct amt_dev *amt,
 			    amt->relay_port,
 			    tunnel->source_port,
 			    false,
-			    false,
-			    0);
+			    false);
 }
 
 static bool amt_send_membership_query(struct amt_dev *amt,
@@ -1116,13 +1112,13 @@ static bool amt_send_membership_query(struct amt_dev *amt,
 				      bool v6)
 {
 	struct amt_header_membership_query *amtmq;
+	struct socket *sock;
 	struct rtable *rt;
 	struct flowi4 fl4;
-	struct sock *sk;
 	int err;
 
-	sk = rcu_dereference_bh(amt->sk);
-	if (!sk)
+	sock = rcu_dereference_bh(amt->sock);
+	if (!sock)
 		return true;
 
 	err = skb_cow_head(skb, LL_RESERVED_SPACE(amt->dev) + sizeof(*amtmq) +
@@ -1135,7 +1131,7 @@ static bool amt_send_membership_query(struct amt_dev *amt,
 	fl4.flowi4_oif         = amt->stream_dev->ifindex;
 	fl4.daddr              = tunnel->ip4;
 	fl4.saddr              = amt->local_ip;
-	fl4.flowi4_dscp        = inet_dsfield_to_dscp(AMT_TOS);
+	fl4.flowi4_tos         = AMT_TOS;
 	fl4.flowi4_proto       = IPPROTO_UDP;
 	rt = ip_route_output_key(amt->net, &fl4);
 	if (IS_ERR(rt)) {
@@ -1156,7 +1152,7 @@ static bool amt_send_membership_query(struct amt_dev *amt,
 		skb_set_inner_protocol(skb, htons(ETH_P_IP));
 	else
 		skb_set_inner_protocol(skb, htons(ETH_P_IPV6));
-	udp_tunnel_xmit_skb(rt, sk, skb,
+	udp_tunnel_xmit_skb(rt, sock->sk, skb,
 			    fl4.saddr,
 			    fl4.daddr,
 			    AMT_TOS,
@@ -1165,8 +1161,7 @@ static bool amt_send_membership_query(struct amt_dev *amt,
 			    amt->relay_port,
 			    tunnel->source_port,
 			    false,
-			    false,
-			    0);
+			    false);
 	amt_update_relay_status(tunnel, AMT_STATUS_SENT_QUERY, true);
 	return false;
 }
@@ -2593,24 +2588,24 @@ static void amt_send_advertisement(struct amt_dev *amt, __be32 nonce,
 {
 	struct amt_header_advertisement *amta;
 	int hlen, tlen, offset;
+	struct socket *sock;
 	struct udphdr *udph;
 	struct sk_buff *skb;
 	struct iphdr *iph;
 	struct rtable *rt;
 	struct flowi4 fl4;
-	struct sock *sk;
 	u32 len;
 	int err;
 
 	rcu_read_lock();
-	sk = rcu_dereference(amt->sk);
-	if (!sk)
+	sock = rcu_dereference(amt->sock);
+	if (!sock)
 		goto out;
 
 	if (!netif_running(amt->stream_dev) || !netif_running(amt->dev))
 		goto out;
 
-	rt = ip_route_output_ports(amt->net, &fl4, sk,
+	rt = ip_route_output_ports(amt->net, &fl4, sock->sk,
 				   daddr, amt->local_ip,
 				   dport, amt->relay_port,
 				   IPPROTO_UDP, 0,
@@ -2670,7 +2665,7 @@ static void amt_send_advertisement(struct amt_dev *amt, __be32 nonce,
 	skb->ip_summed = CHECKSUM_NONE;
 	ip_select_ident(amt->net, skb, NULL);
 	ip_send_check(iph);
-	err = ip_local_out(amt->net, sk, skb);
+	err = ip_local_out(amt->net, sock->sk, skb);
 	if (unlikely(net_xmit_eval(err)))
 		amt->dev->stats.tx_errors++;
 
@@ -2983,7 +2978,7 @@ drop:
 	return 0;
 }
 
-static struct sock *amt_create_sock(struct net *net, __be16 port)
+static struct socket *amt_create_sock(struct net *net, __be16 port)
 {
 	struct udp_port_cfg udp_conf;
 	struct socket *sock;
@@ -2999,17 +2994,17 @@ static struct sock *amt_create_sock(struct net *net, __be16 port)
 	if (err < 0)
 		return ERR_PTR(err);
 
-	return sock->sk;
+	return sock;
 }
 
 static int amt_socket_create(struct amt_dev *amt)
 {
 	struct udp_tunnel_sock_cfg tunnel_cfg;
-	struct sock *sk;
+	struct socket *sock;
 
-	sk = amt_create_sock(amt->net, amt->relay_port);
-	if (IS_ERR(sk))
-		return PTR_ERR(sk);
+	sock = amt_create_sock(amt->net, amt->relay_port);
+	if (IS_ERR(sock))
+		return PTR_ERR(sock);
 
 	/* Mark socket as an encapsulation socket */
 	memset(&tunnel_cfg, 0, sizeof(tunnel_cfg));
@@ -3018,9 +3013,9 @@ static int amt_socket_create(struct amt_dev *amt)
 	tunnel_cfg.encap_rcv = amt_rcv;
 	tunnel_cfg.encap_err_lookup = amt_err_lookup;
 	tunnel_cfg.encap_destroy = NULL;
-	setup_udp_tunnel_sock(amt->net, sk, &tunnel_cfg);
+	setup_udp_tunnel_sock(amt->net, sock, &tunnel_cfg);
 
-	rcu_assign_pointer(amt->sk, sk);
+	rcu_assign_pointer(amt->sock, sock);
 	return 0;
 }
 
@@ -3064,8 +3059,8 @@ static int amt_dev_stop(struct net_device *dev)
 {
 	struct amt_dev *amt = netdev_priv(dev);
 	struct amt_tunnel_list *tunnel, *tmp;
+	struct socket *sock;
 	struct sk_buff *skb;
-	struct sock *sk;
 	int i;
 
 	disable_delayed_work_sync(&amt->req_wq);
@@ -3073,11 +3068,11 @@ static int amt_dev_stop(struct net_device *dev)
 	cancel_delayed_work_sync(&amt->secret_wq);
 
 	/* shutdown */
-	sk = rtnl_dereference(amt->sk);
-	RCU_INIT_POINTER(amt->sk, NULL);
+	sock = rtnl_dereference(amt->sock);
+	RCU_INIT_POINTER(amt->sock, NULL);
 	synchronize_net();
-	if (sk)
-		udp_tunnel_sock_release(sk);
+	if (sock)
+		udp_tunnel_sock_release(sock);
 
 	cancel_work_sync(&amt->event_wq);
 	for (i = 0; i < AMT_MAX_EVENTS; i++) {
@@ -3149,7 +3144,7 @@ static void amt_link_setup(struct net_device *dev)
 	dev->addr_len		= 0;
 	dev->priv_flags		|= IFF_NO_QUEUE;
 	dev->lltx		= true;
-	dev->netns_immutable	= true;
+	dev->netns_local	= true;
 	dev->features		|= NETIF_F_GSO_SOFTWARE;
 	dev->hw_features	|= NETIF_F_SG | NETIF_F_HW_CSUM;
 	dev->hw_features	|= NETIF_F_FRAGLIST | NETIF_F_RXCSUM;
@@ -3211,17 +3206,14 @@ static int amt_validate(struct nlattr *tb[], struct nlattr *data[],
 	return 0;
 }
 
-static int amt_newlink(struct net_device *dev,
-		       struct rtnl_newlink_params *params,
+static int amt_newlink(struct net *net, struct net_device *dev,
+		       struct nlattr *tb[], struct nlattr *data[],
 		       struct netlink_ext_ack *extack)
 {
-	struct net *link_net = rtnl_newlink_link_net(params);
 	struct amt_dev *amt = netdev_priv(dev);
-	struct nlattr **data = params->data;
-	struct nlattr **tb = params->tb;
 	int err = -EINVAL;
 
-	amt->net = link_net;
+	amt->net = net;
 	amt->mode = nla_get_u32(data[IFLA_AMT_MODE]);
 
 	if (data[IFLA_AMT_MAX_TUNNELS] &&
@@ -3236,7 +3228,7 @@ static int amt_newlink(struct net_device *dev,
 	amt->hash_buckets = AMT_HSIZE;
 	amt->nr_tunnels = 0;
 	get_random_bytes(&amt->hash_seed, sizeof(amt->hash_seed));
-	amt->stream_dev = dev_get_by_index(link_net,
+	amt->stream_dev = dev_get_by_index(net,
 					   nla_get_u32(data[IFLA_AMT_LINK]));
 	if (!amt->stream_dev) {
 		NL_SET_ERR_MSG_ATTR(extack, tb[IFLA_AMT_LINK],
@@ -3259,11 +3251,15 @@ static int amt_newlink(struct net_device *dev,
 		goto err;
 	}
 
-	amt->relay_port = nla_get_be16_default(data[IFLA_AMT_RELAY_PORT],
-					       htons(IANA_AMT_UDP_PORT));
+	if (data[IFLA_AMT_RELAY_PORT])
+		amt->relay_port = nla_get_be16(data[IFLA_AMT_RELAY_PORT]);
+	else
+		amt->relay_port = htons(IANA_AMT_UDP_PORT);
 
-	amt->gw_port = nla_get_be16_default(data[IFLA_AMT_GATEWAY_PORT],
-					    htons(IANA_AMT_UDP_PORT));
+	if (data[IFLA_AMT_GATEWAY_PORT])
+		amt->gw_port = nla_get_be16(data[IFLA_AMT_GATEWAY_PORT]);
+	else
+		amt->gw_port = htons(IANA_AMT_UDP_PORT);
 
 	if (!amt->relay_port) {
 		NL_SET_ERR_MSG_ATTR(extack, tb[IFLA_AMT_DISCOVERY_IP],

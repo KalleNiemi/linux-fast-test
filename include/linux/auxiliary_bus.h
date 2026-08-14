@@ -9,7 +9,7 @@
 #define _AUXILIARY_BUS_H_
 
 #include <linux/device.h>
-#include <linux/device-id/auxiliary.h>
+#include <linux/mod_devicetable.h>
 
 /**
  * DOC: DEVICE_LIFESPAN
@@ -62,9 +62,6 @@
  * @sysfs.irqs: irqs xarray contains irq indices which are used by the device,
  * @sysfs.lock: Synchronize irq sysfs creation,
  * @sysfs.irq_dir_exists: whether "irqs" directory exists,
- * @registration_data_rust: private data owned by the registering (parent)
- *                          driver; valid for as long as the device is
- *                          registered with the driver core,
  *
  * An auxiliary_device represents a part of its parent device's functionality.
  * It is given a name that, combined with the registering drivers
@@ -151,7 +148,6 @@ struct auxiliary_device {
 		struct mutex lock; /* Synchronize irq sysfs creation */
 		bool irq_dir_exists;
 	} sysfs;
-	void *registration_data_rust;
 };
 
 /**
@@ -258,25 +254,6 @@ int __auxiliary_driver_register(struct auxiliary_driver *auxdrv, struct module *
 
 void auxiliary_driver_unregister(struct auxiliary_driver *auxdrv);
 
-struct auxiliary_device *auxiliary_device_create(struct device *dev,
-						 const char *modname,
-						 const char *devname,
-						 void *platform_data,
-						 int id);
-void auxiliary_device_destroy(void *auxdev);
-
-struct auxiliary_device *__devm_auxiliary_device_create(struct device *dev,
-							const char *modname,
-							const char *devname,
-							void *platform_data,
-							int id);
-
-#define devm_auxiliary_device_create(dev, devname, platform_data)     \
-	__devm_auxiliary_device_create(dev, KBUILD_MODNAME, devname,  \
-				       platform_data, 0)
-
-bool dev_is_auxiliary(struct device *dev);
-
 /**
  * module_auxiliary_driver() - Helper macro for registering an auxiliary driver
  * @__auxiliary_driver: auxiliary driver struct
@@ -291,5 +268,9 @@ bool dev_is_auxiliary(struct device *dev);
  */
 #define module_auxiliary_driver(__auxiliary_driver) \
 	module_driver(__auxiliary_driver, auxiliary_driver_register, auxiliary_driver_unregister)
+
+struct auxiliary_device *auxiliary_find_device(struct device *start,
+					       const void *data,
+					       device_match_t match);
 
 #endif /* _AUXILIARY_BUS_H_ */

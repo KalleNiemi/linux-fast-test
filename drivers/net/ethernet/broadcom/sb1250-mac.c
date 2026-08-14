@@ -622,8 +622,9 @@ static void sbdma_initctx(struct sbmacdma *d, struct sbmac_softc *s, int chan,
 
 	d->sbdma_maxdescr = maxdescr;
 
-	d->sbdma_dscrtable_unaligned = kzalloc_objs(*d->sbdma_dscrtable,
-						    d->sbdma_maxdescr + 1);
+	d->sbdma_dscrtable_unaligned = kcalloc(d->sbdma_maxdescr + 1,
+					       sizeof(*d->sbdma_dscrtable),
+					       GFP_KERNEL);
 
 	/*
 	 * The descriptor table must be aligned to at least 16 bytes or the
@@ -641,7 +642,8 @@ static void sbdma_initctx(struct sbmacdma *d, struct sbmac_softc *s, int chan,
 	 * And context table
 	 */
 
-	d->sbdma_ctxtable = kzalloc_objs(*d->sbdma_ctxtable, d->sbdma_maxdescr);
+	d->sbdma_ctxtable = kcalloc(d->sbdma_maxdescr,
+				    sizeof(*d->sbdma_ctxtable), GFP_KERNEL);
 
 #ifdef CONFIG_SBMAC_COALESCE
 	/*
@@ -2606,7 +2608,7 @@ static void sbmac_remove(struct platform_device *pldev)
 
 static struct platform_driver sbmac_driver = {
 	.probe = sbmac_probe,
-	.remove = sbmac_remove,
+	.remove_new = sbmac_remove,
 	.driver = {
 		.name = sbmac_string,
 	},

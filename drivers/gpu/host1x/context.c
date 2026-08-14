@@ -4,7 +4,6 @@
  */
 
 #include <linux/device.h>
-#include <linux/host1x_context_bus.h>
 #include <linux/kref.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
@@ -36,7 +35,7 @@ int host1x_memory_context_list_init(struct host1x *host1x)
 		return 0;
 
 	cdl->len = err / 4;
-	cdl->devs = kzalloc_objs(*cdl->devs, cdl->len);
+	cdl->devs = kcalloc(cdl->len, sizeof(*cdl->devs), GFP_KERNEL);
 	if (!cdl->devs)
 		return -ENOMEM;
 

@@ -19,6 +19,7 @@
 #include <linux/kernel.h>
 #include <linux/stat.h>
 #include <linux/module.h>
+#include <linux/mod_devicetable.h>
 #include <linux/iio/iio.h>
 #include <linux/iio/sysfs.h>
 
@@ -229,16 +230,16 @@ static int htu21_probe(struct i2c_client *client)
 }
 
 static const struct i2c_device_id htu21_id[] = {
-	{ .name = "htu21", .driver_data = HTU21 },
-	{ .name = "ms8607-humidity", .driver_data = MS8607 },
-	{ }
+	{"htu21", HTU21},
+	{"ms8607-humidity", MS8607},
+	{}
 };
 MODULE_DEVICE_TABLE(i2c, htu21_id);
 
 static const struct of_device_id htu21_of_match[] = {
 	{ .compatible = "meas,htu21", },
 	{ .compatible = "meas,ms8607-humidity", },
-	{ }
+	{ },
 };
 MODULE_DEVICE_TABLE(of, htu21_of_match);
 
@@ -257,4 +258,4 @@ MODULE_DESCRIPTION("Measurement-Specialties htu21 temperature and humidity drive
 MODULE_AUTHOR("William Markezana <william.markezana@meas-spec.com>");
 MODULE_AUTHOR("Ludovic Tancerel <ludovic.tancerel@maplehightech.com>");
 MODULE_LICENSE("GPL v2");
-MODULE_IMPORT_NS("IIO_MEAS_SPEC_SENSORS");
+MODULE_IMPORT_NS(IIO_MEAS_SPEC_SENSORS);

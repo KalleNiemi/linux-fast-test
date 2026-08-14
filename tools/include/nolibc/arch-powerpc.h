@@ -7,11 +7,8 @@
 #ifndef _NOLIBC_ARCH_POWERPC_H
 #define _NOLIBC_ARCH_POWERPC_H
 
-#include <linux/unistd.h>
-
 #include "compiler.h"
 #include "crt.h"
-#include "std.h"
 
 /* Syscalls for PowerPC :
  *   - stack is 16-byte aligned
@@ -28,7 +25,7 @@
 #define _NOLIBC_SYSCALL_CLOBBERLIST \
 	"memory", "cr0", "r12", "r11", "r10", "r9"
 
-#define __nolibc_syscall0(num)                                               \
+#define my_syscall0(num)                                                     \
 ({                                                                           \
 	register long _ret  __asm__ ("r3");                                  \
 	register long _num  __asm__ ("r0") = (num);                          \
@@ -45,7 +42,7 @@
 	_ret;                                                                \
 })
 
-#define __nolibc_syscall1(num, arg1)                                         \
+#define my_syscall1(num, arg1)                                               \
 ({                                                                           \
 	register long _ret  __asm__ ("r3");                                  \
 	register long _num  __asm__ ("r0") = (num);                          \
@@ -64,7 +61,7 @@
 })
 
 
-#define __nolibc_syscall2(num, arg1, arg2)                                   \
+#define my_syscall2(num, arg1, arg2)                                         \
 ({                                                                           \
 	register long _ret  __asm__ ("r3");                                  \
 	register long _num  __asm__ ("r0") = (num);                          \
@@ -84,7 +81,7 @@
 })
 
 
-#define __nolibc_syscall3(num, arg1, arg2, arg3)                             \
+#define my_syscall3(num, arg1, arg2, arg3)                                   \
 ({                                                                           \
 	register long _ret  __asm__ ("r3");                                  \
 	register long _num  __asm__ ("r0") = (num);                          \
@@ -105,7 +102,7 @@
 })
 
 
-#define __nolibc_syscall4(num, arg1, arg2, arg3, arg4)                       \
+#define my_syscall4(num, arg1, arg2, arg3, arg4)                             \
 ({                                                                           \
 	register long _ret  __asm__ ("r3");                                  \
 	register long _num  __asm__ ("r0") = (num);                          \
@@ -128,7 +125,7 @@
 })
 
 
-#define __nolibc_syscall5(num, arg1, arg2, arg3, arg4, arg5)                 \
+#define my_syscall5(num, arg1, arg2, arg3, arg4, arg5)                       \
 ({                                                                           \
 	register long _ret  __asm__ ("r3");                                  \
 	register long _num  __asm__ ("r0") = (num);                          \
@@ -151,7 +148,7 @@
 	_ret;                                                                \
 })
 
-#define __nolibc_syscall6(num, arg1, arg2, arg3, arg4, arg5, arg6)           \
+#define my_syscall6(num, arg1, arg2, arg3, arg4, arg5, arg6)                 \
 ({                                                                           \
 	register long _ret  __asm__ ("r3");                                  \
 	register long _num  __asm__ ("r0") = (num);                          \
@@ -180,15 +177,14 @@
  * "omit-frame-pointer" fails with __attribute__((no_stack_protector)) but
  * works with __attribute__((__optimize__("-fno-stack-protector")))
  */
-#ifdef __nolibc_no_stack_protector
-#undef __nolibc_no_stack_protector
-#define __nolibc_no_stack_protector __attribute__((__optimize__("-fno-stack-protector")))
+#ifdef __no_stack_protector
+#undef __no_stack_protector
+#define __no_stack_protector __attribute__((__optimize__("-fno-stack-protector")))
 #endif
 #endif /* !__powerpc64__ */
 
-#ifndef NOLIBC_NO_RUNTIME
 /* startup code */
-void __attribute__((weak, noreturn)) __nolibc_entrypoint __nolibc_no_stack_protector _start(void)
+void __attribute__((weak, noreturn)) __nolibc_entrypoint __no_stack_protector _start(void)
 {
 #ifdef __powerpc64__
 #if _CALL_ELF == 2
@@ -205,6 +201,7 @@ void __attribute__((weak, noreturn)) __nolibc_entrypoint __nolibc_no_stack_prote
 
 	__asm__ volatile (
 		"mr     3, 1\n"         /* save stack pointer to r3, as arg1 of _start_c */
+		"clrrdi 1, 1, 4\n"      /* align the stack to 16 bytes                   */
 		"li     0, 0\n"         /* zero the frame pointer                        */
 		"stdu   1, -32(1)\n"    /* the initial stack frame                       */
 		"bl     _start_c\n"     /* transfer to c runtime                         */
@@ -212,6 +209,7 @@ void __attribute__((weak, noreturn)) __nolibc_entrypoint __nolibc_no_stack_prote
 #else
 	__asm__ volatile (
 		"mr     3, 1\n"         /* save stack pointer to r3, as arg1 of _start_c */
+		"clrrwi 1, 1, 4\n"      /* align the stack to 16 bytes                   */
 		"li     0, 0\n"         /* zero the frame pointer                        */
 		"stwu   1, -16(1)\n"    /* the initial stack frame                       */
 		"bl     _start_c\n"     /* transfer to c runtime                         */
@@ -219,15 +217,5 @@ void __attribute__((weak, noreturn)) __nolibc_entrypoint __nolibc_no_stack_prote
 #endif
 	__nolibc_entrypoint_epilogue();
 }
-#endif /* NOLIBC_NO_RUNTIME */
-
-#if !defined(__powerpc64__)
-static __attribute__((unused))
-int _sys_ftruncate64(int fd, uint32_t length0, uint32_t length1)
-{
-	return __nolibc_syscall4(__NR_ftruncate64, fd, 0, length0, length1);
-}
-#define _sys_ftruncate64 _sys_ftruncate64
-#endif
 
 #endif /* _NOLIBC_ARCH_POWERPC_H */

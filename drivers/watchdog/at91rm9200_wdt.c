@@ -18,6 +18,7 @@
 #include <linux/mfd/syscon.h>
 #include <linux/mfd/syscon/atmel-st.h>
 #include <linux/miscdevice.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/platform_device.h>
@@ -294,7 +295,7 @@ MODULE_DEVICE_TABLE(of, at91_wdt_dt_ids);
 
 static struct platform_driver at91wdt_driver = {
 	.probe		= at91wdt_probe,
-	.remove		= at91wdt_remove,
+	.remove_new	= at91wdt_remove,
 	.shutdown	= at91wdt_shutdown,
 	.suspend	= pm_ptr(at91wdt_suspend),
 	.resume		= pm_ptr(at91wdt_resume),

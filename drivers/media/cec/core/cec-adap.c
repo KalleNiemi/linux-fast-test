@@ -7,13 +7,12 @@
 
 #include <linux/errno.h>
 #include <linux/init.h>
+#include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/kmod.h>
 #include <linux/ktime.h>
-#include <linux/mm.h>
-#include <linux/module.h>
-#include <linux/seq_file.h>
 #include <linux/slab.h>
+#include <linux/mm.h>
 #include <linux/string.h>
 #include <linux/types.h>
 
@@ -95,7 +94,7 @@ void cec_queue_event_fh(struct cec_fh *fh,
 	if (ev_idx < CEC_NUM_CORE_EVENTS)
 		entry = &fh->core_events[ev_idx];
 	else
-		entry = kmalloc_obj(*entry);
+		entry = kmalloc(sizeof(*entry), GFP_KERNEL);
 	if (entry) {
 		if (new_ev->event == CEC_EVENT_LOST_MSGS &&
 		    fh->queued_events[ev_idx]) {
@@ -218,7 +217,7 @@ static void cec_queue_msg_fh(struct cec_fh *fh, const struct cec_msg *msg)
 	struct cec_msg_entry *entry;
 
 	mutex_lock(&fh->lock);
-	entry = kmalloc_obj(*entry);
+	entry = kmalloc(sizeof(*entry), GFP_KERNEL);
 	if (entry) {
 		entry->msg = *msg;
 		/* Add new msg at the end of the queue */
@@ -922,7 +921,7 @@ int cec_transmit_msg_fh(struct cec_adapter *adap, struct cec_msg *msg,
 		return -EBUSY;
 	}
 
-	data = kzalloc_obj(*data);
+	data = kzalloc(sizeof(*data), GFP_KERNEL);
 	if (!data)
 		return -ENOMEM;
 
@@ -1098,15 +1097,6 @@ static const u8 cec_msg_size[256] = {
 	[CEC_MSG_REQUEST_CURRENT_LATENCY] = 4 | BCAST,
 	[CEC_MSG_REPORT_CURRENT_LATENCY] = 6 | BCAST,
 	[CEC_MSG_CDC_MESSAGE] = 2 | BCAST,
-	[CEC_MSG_REQUEST_LIP_SUPPORT] = 4 | DIRECTED,
-	[CEC_MSG_REPORT_LIP_SUPPORT] = 6 | DIRECTED,
-	[CEC_MSG_REQUEST_AUDIO_AND_VIDEO_LATENCY] = 6 | DIRECTED,
-	[CEC_MSG_REPORT_AUDIO_AND_VIDEO_LATENCY] = 6 | DIRECTED,
-	[CEC_MSG_REQUEST_AUDIO_LATENCY] = 3 | DIRECTED,
-	[CEC_MSG_REPORT_AUDIO_LATENCY] = 4 | DIRECTED,
-	[CEC_MSG_REQUEST_VIDEO_LATENCY] = 5 | DIRECTED,
-	[CEC_MSG_REPORT_VIDEO_LATENCY] = 4 | DIRECTED,
-	[CEC_MSG_UPDATE_SQID] = 6 | DIRECTED,
 };
 
 /* Called by the CEC adapter if a message is received */

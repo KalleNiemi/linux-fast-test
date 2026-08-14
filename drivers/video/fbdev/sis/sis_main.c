@@ -204,7 +204,8 @@ static void sisfb_search_mode(char *name, bool quiet)
 		return;
 	}
 
-	if (strscpy(strbuf1, name) > 0) {
+	if(strlen(name) <= 19) {
+		strcpy(strbuf1, name);
 		for(i = 0; i < strlen(strbuf1); i++) {
 			if(strbuf1[i] < '0' || strbuf1[i] > '9') strbuf1[i] = ' ';
 		}
@@ -3420,6 +3421,14 @@ sis_malloc(struct sis_memreq *req)
 		req->offset = req->size = 0;
 }
 
+void
+sis_malloc_new(struct pci_dev *pdev, struct sis_memreq *req)
+{
+	struct sis_video_info *ivideo = pci_get_drvdata(pdev);
+
+	sis_int_malloc(ivideo, req);
+}
+
 /* sis_free: u32 because "base" is offset inside video ram, can never be >4GB */
 
 static void
@@ -3442,6 +3451,14 @@ void
 sis_free(u32 base)
 {
 	struct sis_video_info *ivideo = sisfb_heap->vinfo;
+
+	sis_int_free(ivideo, base);
+}
+
+void
+sis_free_new(struct pci_dev *pdev, u32 base)
+{
+	struct sis_video_info *ivideo = pci_get_drvdata(pdev);
 
 	sis_int_free(ivideo, base);
 }
@@ -6815,3 +6832,12 @@ MODULE_PARM_DESC(videoram,
 #endif
 
 #endif 	   /*  /MODULE  */
+
+/* _GPL only for new symbols. */
+EXPORT_SYMBOL(sis_malloc);
+EXPORT_SYMBOL(sis_free);
+EXPORT_SYMBOL_GPL(sis_malloc_new);
+EXPORT_SYMBOL_GPL(sis_free_new);
+
+
+

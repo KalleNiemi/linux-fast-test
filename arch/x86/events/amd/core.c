@@ -2,17 +2,13 @@
 #include <linux/perf_event.h>
 #include <linux/jump_label.h>
 #include <linux/export.h>
-#include <linux/kvm_types.h>
 #include <linux/types.h>
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/jiffies.h>
-
 #include <asm/apicdef.h>
 #include <asm/apic.h>
-#include <asm/cpuid/api.h>
-#include <asm/msr.h>
 #include <asm/nmi.h>
 
 #include "../perf_event.h"
@@ -567,13 +563,13 @@ static void amd_pmu_cpu_reset(int cpu)
 		return;
 
 	/* Clear enable bits i.e. PerfCntrGlobalCtl.PerfCntrEn */
-	wrmsrq(MSR_AMD64_PERF_CNTR_GLOBAL_CTL, 0);
+	wrmsrl(MSR_AMD64_PERF_CNTR_GLOBAL_CTL, 0);
 
 	/*
 	 * Clear freeze and overflow bits i.e. PerfCntrGLobalStatus.LbrFreeze
 	 * and PerfCntrGLobalStatus.PerfCntrOvfl
 	 */
-	wrmsrq(MSR_AMD64_PERF_CNTR_GLOBAL_STATUS_CLR,
+	wrmsrl(MSR_AMD64_PERF_CNTR_GLOBAL_STATUS_CLR,
 	       GLOBAL_STATUS_LBRS_FROZEN | amd_pmu_global_cntr_mask);
 }
 
@@ -655,7 +651,7 @@ static void amd_pmu_cpu_dead(int cpu)
 
 static __always_inline void amd_pmu_set_global_ctl(u64 ctl)
 {
-	wrmsrq(MSR_AMD64_PERF_CNTR_GLOBAL_CTL, ctl);
+	wrmsrl(MSR_AMD64_PERF_CNTR_GLOBAL_CTL, ctl);
 }
 
 static inline u64 amd_pmu_get_global_status(void)
@@ -663,7 +659,7 @@ static inline u64 amd_pmu_get_global_status(void)
 	u64 status;
 
 	/* PerfCntrGlobalStatus is read-only */
-	rdmsrq(MSR_AMD64_PERF_CNTR_GLOBAL_STATUS, status);
+	rdmsrl(MSR_AMD64_PERF_CNTR_GLOBAL_STATUS, status);
 
 	return status;
 }
@@ -676,14 +672,14 @@ static inline void amd_pmu_ack_global_status(u64 status)
 	 * clears the same bit in PerfCntrGlobalStatus
 	 */
 
-	wrmsrq(MSR_AMD64_PERF_CNTR_GLOBAL_STATUS_CLR, status);
+	wrmsrl(MSR_AMD64_PERF_CNTR_GLOBAL_STATUS_CLR, status);
 }
 
 static bool amd_pmu_test_overflow_topbit(int idx)
 {
 	u64 counter;
 
-	rdmsrq(x86_pmu_event_addr(idx), counter);
+	rdmsrl(x86_pmu_event_addr(idx), counter);
 
 	return !(counter & BIT_ULL(x86_pmu.cntval_bits - 1));
 }
@@ -1014,9 +1010,11 @@ static int amd_pmu_v2_handle_irq(struct pt_regs *regs)
 		if (!x86_perf_event_set_period(event))
 			continue;
 
-		perf_sample_save_brstack(&data, event, &cpuc->lbr_stack, NULL);
+		if (has_branch_stack(event))
+			perf_sample_save_brstack(&data, event, &cpuc->lbr_stack, NULL);
 
-		perf_event_overflow(event, &data, regs);
+		if (perf_event_overflow(event, &data, regs))
+			x86_pmu_stop(event, 0);
 	}
 
 	/*
@@ -1038,7 +1036,7 @@ static int amd_pmu_v2_handle_irq(struct pt_regs *regs)
 	 * Unmasking the LVTPC is not required as the Mask (M) bit of the LVT
 	 * PMI entry is not set by the local APIC when a PMC overflow occurs
 	 */
-	inc_perf_irq_stat();
+	inc_irq_stat(apic_perf_irqs);
 
 done:
 	cpuc->enabled = pmu_enabled;
@@ -1445,8 +1443,6 @@ static int __init amd_core_pmu_init(void)
 
 		amd_pmu_global_cntr_mask = x86_pmu.cntr_mask64;
 
-		x86_get_pmu(smp_processor_id())->capabilities |= PERF_PMU_CAP_MEDIATED_VPMU;
-
 		/* Update PMC handling functions */
 		x86_pmu.enable_all = amd_pmu_v2_enable_all;
 		x86_pmu.disable_all = amd_pmu_v2_disable_all;
@@ -1583,7 +1579,7 @@ void amd_pmu_enable_virt(void)
 	/* Reload all events */
 	amd_pmu_reload_virt();
 }
-EXPORT_SYMBOL_FOR_KVM(amd_pmu_enable_virt);
+EXPORT_SYMBOL_GPL(amd_pmu_enable_virt);
 
 void amd_pmu_disable_virt(void)
 {
@@ -1600,4 +1596,4 @@ void amd_pmu_disable_virt(void)
 	/* Reload all events */
 	amd_pmu_reload_virt();
 }
-EXPORT_SYMBOL_FOR_KVM(amd_pmu_disable_virt);
+EXPORT_SYMBOL_GPL(amd_pmu_disable_virt);

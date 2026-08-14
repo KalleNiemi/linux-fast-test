@@ -11,6 +11,7 @@
 #include <linux/device.h>
 #include <linux/gfp_types.h>
 #include <linux/ioport.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/pm.h>
 #include <linux/pm_runtime.h>
@@ -207,7 +208,7 @@ static void intel_lpss_acpi_remove(struct platform_device *pdev)
 
 static struct platform_driver intel_lpss_acpi_driver = {
 	.probe = intel_lpss_acpi_probe,
-	.remove = intel_lpss_acpi_remove,
+	.remove_new = intel_lpss_acpi_remove,
 	.driver = {
 		.name = "intel-lpss",
 		.acpi_match_table = intel_lpss_acpi_ids,
@@ -221,4 +222,4 @@ MODULE_AUTHOR("Andy Shevchenko <andriy.shevchenko@linux.intel.com>");
 MODULE_AUTHOR("Mika Westerberg <mika.westerberg@linux.intel.com>");
 MODULE_DESCRIPTION("Intel LPSS ACPI driver");
 MODULE_LICENSE("GPL v2");
-MODULE_IMPORT_NS("INTEL_LPSS");
+MODULE_IMPORT_NS(INTEL_LPSS);

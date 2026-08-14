@@ -351,13 +351,14 @@ static int sil24_port_resume(struct ata_port *ap);
 #endif
 
 static const struct pci_device_id sil24_pci_tbl[] = {
-	{ PCI_VDEVICE(CMD, 0x3124), .driver_data = BID_SIL3124 },
-	{ PCI_VDEVICE(INTEL, 0x3124), .driver_data = BID_SIL3124 },
-	{ PCI_VDEVICE(CMD, 0x3132), .driver_data = BID_SIL3132 },
-	{ PCI_VDEVICE(CMD, 0x0242), .driver_data = BID_SIL3132 },
-	{ PCI_VDEVICE(CMD, 0x0244), .driver_data = BID_SIL3132 },
-	{ PCI_VDEVICE(CMD, 0x3131), .driver_data = BID_SIL3131 },
-	{ PCI_VDEVICE(CMD, 0x3531), .driver_data = BID_SIL3131 },
+	{ PCI_VDEVICE(CMD, 0x3124), BID_SIL3124 },
+	{ PCI_VDEVICE(INTEL, 0x3124), BID_SIL3124 },
+	{ PCI_VDEVICE(CMD, 0x3132), BID_SIL3132 },
+	{ PCI_VDEVICE(CMD, 0x0242), BID_SIL3132 },
+	{ PCI_VDEVICE(CMD, 0x0244), BID_SIL3132 },
+	{ PCI_VDEVICE(CMD, 0x3131), BID_SIL3131 },
+	{ PCI_VDEVICE(CMD, 0x3531), BID_SIL3131 },
+
 	{ } /* terminate list */
 };
 
@@ -377,9 +378,10 @@ static const struct scsi_host_template sil24_sht = {
 	.can_queue		= SIL24_MAX_CMDS,
 	.sg_tablesize		= SIL24_MAX_SGE,
 	.dma_boundary		= ATA_DMA_BOUNDARY,
+	.tag_alloc_policy	= BLK_TAG_ALLOC_FIFO,
 	.sdev_groups		= ata_ncq_sdev_groups,
 	.change_queue_depth	= ata_scsi_change_queue_depth,
-	.sdev_configure		= ata_scsi_sdev_configure
+	.device_configure	= ata_scsi_device_configure
 };
 
 static struct ata_port_operations sil24_ops = {
@@ -392,10 +394,10 @@ static struct ata_port_operations sil24_ops = {
 
 	.freeze			= sil24_freeze,
 	.thaw			= sil24_thaw,
-	.reset.softreset	= sil24_softreset,
-	.reset.hardreset	= sil24_hardreset,
-	.pmp_reset.softreset	= sil24_softreset,
-	.pmp_reset.hardreset	= sil24_pmp_hardreset,
+	.softreset		= sil24_softreset,
+	.hardreset		= sil24_hardreset,
+	.pmp_softreset		= sil24_softreset,
+	.pmp_hardreset		= sil24_pmp_hardreset,
 	.error_handler		= sil24_error_handler,
 	.post_internal_cmd	= sil24_post_internal_cmd,
 	.dev_config		= sil24_dev_config,
@@ -1170,7 +1172,6 @@ static irqreturn_t sil24_interrupt(int irq, void *dev_instance)
 }
 
 static void sil24_error_handler(struct ata_port *ap)
-	__must_hold(&ap->host->eh_mutex)
 {
 	struct sil24_port_priv *pp = ap->private_data;
 
@@ -1320,7 +1321,7 @@ static int sil24_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	if (sata_sil24_msi && !pci_enable_msi(pdev)) {
 		dev_info(&pdev->dev, "Using MSI\n");
-		pcim_intx(pdev, 0);
+		pci_intx(pdev, 0);
 	}
 
 	pci_set_master(pdev);

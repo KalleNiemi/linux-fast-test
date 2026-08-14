@@ -25,12 +25,11 @@
 #include <drm/drm_crtc.h>
 #include <drm/drm_debugfs.h>
 #include <drm/drm_edid.h>
-#include <drm/drm_encoder.h>
 #include <drm/drm_eld.h>
 #include <drm/drm_file.h>
 #include <drm/drm_fourcc.h>
-#include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
+#include <drm/drm_simple_kms_helper.h>
 
 #include "hda.h"
 #include "hdmi.h"
@@ -372,10 +371,6 @@ static const struct tmds_config tegra124_tmds_config[] = {
 	},
 };
 
-static const struct drm_encoder_funcs tegra_hdmi_encoder_funcs = {
-	.destroy = drm_encoder_cleanup,
-};
-
 static void tegra_hdmi_audio_lock(struct tegra_hdmi *hdmi)
 {
 	mutex_lock(&hdmi->audio_lock);
@@ -439,7 +434,7 @@ tegra_hdmi_get_audio_config(unsigned int audio_freq, unsigned int pix_clock,
 
 static void tegra_hdmi_setup_audio_fs_tables(struct tegra_hdmi *hdmi)
 {
-	static const unsigned int freqs[] = {
+	const unsigned int freqs[] = {
 		32000, 44100, 48000, 88200, 96000, 176400, 192000
 	};
 	unsigned int i;
@@ -1142,7 +1137,7 @@ static const struct drm_connector_funcs tegra_hdmi_connector_funcs = {
 
 static enum drm_mode_status
 tegra_hdmi_connector_mode_valid(struct drm_connector *connector,
-				const struct drm_display_mode *mode)
+				struct drm_display_mode *mode)
 {
 	struct tegra_output *output = connector_to_output(connector);
 	struct tegra_hdmi *hdmi = to_hdmi(output);
@@ -1559,8 +1554,8 @@ static int tegra_hdmi_init(struct host1x_client *client)
 
 	hdmi->output.dev = client->dev;
 
-	drm_encoder_init(drm, &hdmi->output.encoder, &tegra_hdmi_encoder_funcs,
-			 DRM_MODE_ENCODER_TMDS, NULL);
+	drm_simple_encoder_init(drm, &hdmi->output.encoder,
+				DRM_MODE_ENCODER_TMDS);
 	drm_encoder_helper_add(&hdmi->output.encoder,
 			       &tegra_hdmi_encoder_helper_funcs);
 
@@ -1580,6 +1575,8 @@ static int tegra_hdmi_init(struct host1x_client *client)
 				connector);
 			return PTR_ERR(connector);
 		}
+
+		drm_connector_attach_encoder(connector, &hdmi->output.encoder);
 	} else {
 		drm_connector_init_with_ddc(drm, &hdmi->output.connector,
 					    &tegra_hdmi_connector_funcs,
@@ -1922,5 +1919,5 @@ struct platform_driver tegra_hdmi_driver = {
 		.of_match_table = tegra_hdmi_of_match,
 	},
 	.probe = tegra_hdmi_probe,
-	.remove = tegra_hdmi_remove,
+	.remove_new = tegra_hdmi_remove,
 };

@@ -12,9 +12,12 @@
 #include <linux/time64.h>
 #include <linux/mutex.h>
 #include <linux/wait.h>
-#include <linux/xarray.h>
 #include "btrfs_inode.h"
 #include "delayed-ref.h"
+#include "extent-io-tree.h"
+#include "block-rsv.h"
+#include "messages.h"
+#include "misc.h"
 
 struct dentry;
 struct inode;
@@ -30,7 +33,7 @@ struct btrfs_path;
  */
 #define BTRFS_TRANS_DIO_WRITE_STUB	((void *) 1)
 
-/* Radix-tree tag for roots that are part of the transaction. */
+/* Radix-tree tag for roots that are part of the trasaction. */
 #define BTRFS_ROOT_TRANS_TAG			0
 
 enum btrfs_trans_state {
@@ -163,8 +166,6 @@ struct btrfs_trans_handle {
 	struct btrfs_fs_info *fs_info;
 	struct list_head new_bgs;
 	struct btrfs_block_rsv delayed_rsv;
-	/* Extent buffers with writeback inhibited by this handle. */
-	struct xarray writeback_inhibited_ebs;
 };
 
 /*
@@ -226,64 +227,32 @@ static inline void btrfs_clear_skip_qgroup(struct btrfs_trans_handle *trans)
 	delayed_refs->qgroup_to_skip = 0;
 }
 
-/*
- * We want the transaction abort to print stack trace only for errors where the
- * cause could be a bug, eg. due to ENOSPC, and not for common errors that are
- * caused by external factors.
- */
-static inline bool btrfs_abort_should_print_stack(int error)
-{
-	switch (error) {
-	case -EIO:
-	case -EROFS:
-	case -ENOMEM:
-		return false;
-	}
-	return true;
-}
+bool __cold abort_should_print_stack(int error);
 
 /*
- * Compile-time and run-time verification of error passed to transaction abort.
- * Direct constants will be caught at compile time, errors read from variables
- * can be caught only at run-time and will warn under debugging config.
- *
- * How verification works:
- * - accepted builtin constants are all -EIO and such
- * - for compile-time check, invalid condition produces a negative-sized array
- *   type, valid zero-sized
- * - when a variable is passed as error the first check is a no-op
- * - with enabled debugging, the second array type size is constructed from the
- *   real variable value, valid condition produces array of size 1
- * - sizeof(type) does not generate any code
- */
-#define VERIFY_NEGATIVE_ERROR(error)						\
-do {										\
-	(void)sizeof(char[-!(__builtin_constant_p(error) ? (error) < 0 : 1)]);	\
-	if (IS_ENABLED(CONFIG_BTRFS_DEBUG)) {					\
-		if (sizeof(char[(error) < 0]) != 1)				\
-			DEBUG_WARN("error >= 0 passed to btrfs_abort_transaction()"); \
-	}									\
-} while(0)
-
-/*
- * Call btrfs_abort_transaction() as early as possible when an error condition
- * is detected, that way the exact stack trace is reported for some errors.
- *
- * Error number must be negative as it encodes wheather it's the first abort.
+ * Call btrfs_abort_transaction as early as possible when an error condition is
+ * detected, that way the exact stack trace is reported for some errors.
  */
 #define btrfs_abort_transaction(trans, error)		\
 do {								\
-	int __error = (error);					\
-								\
-	VERIFY_NEGATIVE_ERROR(error);				\
+	bool __first = false;					\
 	/* Report first abort since mount */			\
 	if (!test_and_set_bit(BTRFS_FS_STATE_TRANS_ABORTED,	\
 			&((trans)->fs_info->fs_state))) {	\
-		WARN_ON(btrfs_abort_should_print_stack(__error)); \
-		__error = -__error;				\
+		__first = true;					\
+		if (WARN(abort_should_print_stack(error),	\
+			KERN_ERR				\
+			"BTRFS: Transaction aborted (error %d)\n",	\
+			(error))) {					\
+			/* Stack trace printed. */			\
+		} else {						\
+			btrfs_err((trans)->fs_info,			\
+				  "Transaction aborted (error %d)",	\
+				  (error));			\
+		}						\
 	}							\
 	__btrfs_abort_transaction((trans), __func__,		\
-				  __LINE__, __error);		\
+				  __LINE__, (error), __first);	\
 } while (0)
 
 int btrfs_end_transaction(struct btrfs_trans_handle *trans);
@@ -321,7 +290,7 @@ void btrfs_add_dropped_root(struct btrfs_trans_handle *trans,
 void btrfs_trans_release_chunk_metadata(struct btrfs_trans_handle *trans);
 void __cold __btrfs_abort_transaction(struct btrfs_trans_handle *trans,
 				      const char *function,
-				      unsigned int line, int error);
+				      unsigned int line, int error, bool first_hit);
 
 int __init btrfs_transaction_init(void);
 void __cold btrfs_transaction_exit(void);

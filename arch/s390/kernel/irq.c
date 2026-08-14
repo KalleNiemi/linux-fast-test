@@ -9,7 +9,6 @@
  */
 
 #include <linux/kernel_stat.h>
-#include <linux/cpufeature.h>
 #include <linux/interrupt.h>
 #include <linux/seq_file.h>
 #include <linux/proc_fs.h>
@@ -26,14 +25,11 @@
 #include <asm/irq_regs.h>
 #include <asm/cputime.h>
 #include <asm/lowcore.h>
-#include <asm/machine.h>
 #include <asm/irq.h>
 #include <asm/hw_irq.h>
 #include <asm/stacktrace.h>
 #include <asm/softirq_stack.h>
 #include <asm/vtime.h>
-#include <asm/asm.h>
-#include <asm/entry-percpu.h>
 #include "entry.h"
 
 DEFINE_PER_CPU_SHARED_ALIGNED(struct irq_stat, irq_stat);
@@ -87,6 +83,7 @@ static const struct irq_class irqclass_sub_desc[] = {
 	{.irq = IRQIO_C70,  .name = "C70", .desc = "[I/O] 3270"},
 	{.irq = IRQIO_TAP,  .name = "TAP", .desc = "[I/O] Tape"},
 	{.irq = IRQIO_VMR,  .name = "VMR", .desc = "[I/O] Unit Record Devices"},
+	{.irq = IRQIO_LCS,  .name = "LCS", .desc = "[I/O] LCS"},
 	{.irq = IRQIO_CTC,  .name = "CTC", .desc = "[I/O] CTC"},
 	{.irq = IRQIO_ADM,  .name = "ADM", .desc = "[I/O] EADM Subchannel"},
 	{.irq = IRQIO_CSC,  .name = "CSC", .desc = "[I/O] CHSC Subchannel"},
@@ -104,10 +101,9 @@ static const struct irq_class irqclass_sub_desc[] = {
 
 static void do_IRQ(struct pt_regs *regs, int irq)
 {
-	struct lowcore *lc = get_lowcore();
-
-	/* Serve timer interrupts first */
-	if (tod_after_eq(lc->int_clock.tod, lc->clock_comparator))
+	if (tod_after_eq(get_lowcore()->int_clock,
+			 get_lowcore()->clock_comparator))
+		/* Serve timer interrupts first. */
 		clock_comparator_work();
 	generic_handle_irq(irq);
 }
@@ -133,24 +129,17 @@ static int irq_pending(struct pt_regs *regs)
 {
 	int cc;
 
-	asm volatile(
-		"	tpi	 0\n"
-		CC_IPM(cc)
-		: CC_OUT(cc, cc)
-		:
-		: CC_CLOBBER);
-	return CC_TRANSFORM(cc);
+	asm volatile("tpi 0\n"
+		     "ipm %0" : "=d" (cc) : : "cc");
+	return cc >> 28;
 }
 
 void noinstr do_io_irq(struct pt_regs *regs)
 {
-	bool from_idle, percpu_needs_fixup;
-	struct pt_regs *old_regs;
-	irqentry_state_t state;
+	irqentry_state_t state = irqentry_enter(regs);
+	struct pt_regs *old_regs = set_irq_regs(regs);
+	bool from_idle;
 
-	percpu_entry(regs);
-	state = irqentry_enter(regs);
-	old_regs = set_irq_regs(regs);
 	from_idle = test_and_clear_cpu_flag(CIF_ENABLED_WAIT);
 	if (from_idle)
 		update_timer_idle();
@@ -159,7 +148,7 @@ void noinstr do_io_irq(struct pt_regs *regs)
 
 	if (user_mode(regs)) {
 		update_timer_sys();
-		if (cpu_has_bear())
+		if (static_branch_likely(&cpu_has_bear))
 			current->thread.last_break = regs->last_break;
 	}
 
@@ -173,27 +162,23 @@ void noinstr do_io_irq(struct pt_regs *regs)
 			do_irq_async(regs, THIN_INTERRUPT);
 		else
 			do_irq_async(regs, IO_INTERRUPT);
-	} while (machine_is_lpar() && irq_pending(regs));
+	} while (MACHINE_IS_LPAR && irq_pending(regs));
 
-	percpu_needs_fixup = percpu_code_check(regs);
 	irq_exit_rcu();
+
 	set_irq_regs(old_regs);
 	irqentry_exit(regs, state);
 
 	if (from_idle)
 		regs->psw.mask &= ~(PSW_MASK_EXT | PSW_MASK_IO | PSW_MASK_WAIT);
-	percpu_exit(regs, percpu_needs_fixup);
 }
 
 void noinstr do_ext_irq(struct pt_regs *regs)
 {
-	bool from_idle, percpu_needs_fixup;
-	struct pt_regs *old_regs;
-	irqentry_state_t state;
+	irqentry_state_t state = irqentry_enter(regs);
+	struct pt_regs *old_regs = set_irq_regs(regs);
+	bool from_idle;
 
-	percpu_entry(regs);
-	state = irqentry_enter(regs);
-	old_regs = set_irq_regs(regs);
 	from_idle = test_and_clear_cpu_flag(CIF_ENABLED_WAIT);
 	if (from_idle)
 		update_timer_idle();
@@ -202,7 +187,7 @@ void noinstr do_ext_irq(struct pt_regs *regs)
 
 	if (user_mode(regs)) {
 		update_timer_sys();
-		if (cpu_has_bear())
+		if (static_branch_likely(&cpu_has_bear))
 			current->thread.last_break = regs->last_break;
 	}
 
@@ -215,14 +200,12 @@ void noinstr do_ext_irq(struct pt_regs *regs)
 
 	do_irq_async(regs, EXT_INTERRUPT);
 
-	percpu_needs_fixup = percpu_code_check(regs);
 	irq_exit_rcu();
 	set_irq_regs(old_regs);
 	irqentry_exit(regs, state);
 
 	if (from_idle)
 		regs->psw.mask &= ~(PSW_MASK_EXT | PSW_MASK_IO | PSW_MASK_WAIT);
-	percpu_exit(regs, percpu_needs_fixup);
 }
 
 static void show_msi_interrupt(struct seq_file *p, int irq)
@@ -276,7 +259,7 @@ int show_interrupts(struct seq_file *p, void *v)
 		seq_putc(p, '\n');
 		goto out;
 	}
-	if (index < irq_get_nr_irqs()) {
+	if (index < nr_irqs) {
 		show_msi_interrupt(p, index);
 		goto out;
 	}
@@ -329,7 +312,7 @@ int register_external_irq(u16 code, ext_int_handler_t handler)
 	unsigned long flags;
 	int index;
 
-	p = kmalloc_obj(*p, GFP_ATOMIC);
+	p = kmalloc(sizeof(*p), GFP_ATOMIC);
 	if (!p)
 		return -ENOMEM;
 	p->code = code;

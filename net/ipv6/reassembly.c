@@ -68,12 +68,11 @@ static u8 ip6_frag_ecn(const struct ipv6hdr *ipv6h)
 static struct inet_frags ip6_frags;
 
 static int ip6_frag_reasm(struct frag_queue *fq, struct sk_buff *skb,
-			  struct sk_buff *prev_tail, struct net_device *dev,
-			  struct inet6_dev *idev, int *refs);
+			  struct sk_buff *prev_tail, struct net_device *dev);
 
 static void ip6_frag_expire(struct timer_list *t)
 {
-	struct inet_frag_queue *frag = timer_container_of(frag, t, timer);
+	struct inet_frag_queue *frag = from_timer(frag, t, timer);
 	struct frag_queue *fq;
 
 	fq = container_of(frag, struct frag_queue, q);
@@ -104,12 +103,11 @@ fq_find(struct net *net, __be32 id, const struct ipv6hdr *hdr, int iif)
 	return container_of(q, struct frag_queue, q);
 }
 
-static int ip6_frag_queue(struct net *net,
-			  struct frag_queue *fq, struct sk_buff *skb,
+static int ip6_frag_queue(struct frag_queue *fq, struct sk_buff *skb,
 			  struct frag_hdr *fhdr, int nhoff,
-			  u32 *prob_offset, int *refs,
-			  struct inet6_dev *idev)
+			  u32 *prob_offset)
 {
+	struct net *net = dev_net(skb_dst(skb)->dev);
 	int offset, end, fragsize;
 	struct sk_buff *prev_tail;
 	struct net_device *dev;
@@ -133,8 +131,6 @@ static int ip6_frag_queue(struct net *net,
 		/* note that if prob_offset is set, the skb is freed elsewhere,
 		 * we do not free it here.
 		 */
-		inet_frag_kill(&fq->q, refs);
-		__IP6_INC_STATS(net, idev, IPSTATS_MIB_REASMFAILS);
 		return -1;
 	}
 
@@ -166,8 +162,6 @@ static int ip6_frag_queue(struct net *net,
 			 * this case. -DaveM
 			 */
 			*prob_offset = offsetof(struct ipv6hdr, payload_len);
-			inet_frag_kill(&fq->q, refs);
-			__IP6_INC_STATS(net, idev, IPSTATS_MIB_REASMFAILS);
 			return -1;
 		}
 		if (end > fq->q.len) {
@@ -226,7 +220,7 @@ static int ip6_frag_queue(struct net *net,
 		unsigned long orefdst = skb->_skb_refdst;
 
 		skb->_skb_refdst = 0UL;
-		err = ip6_frag_reasm(fq, skb, prev_tail, dev, idev, refs);
+		err = ip6_frag_reasm(fq, skb, prev_tail, dev);
 		skb->_skb_refdst = orefdst;
 		return err;
 	}
@@ -241,10 +235,12 @@ insert_error:
 		goto err;
 	}
 	err = -EINVAL;
-	__IP6_INC_STATS(net, idev, IPSTATS_MIB_REASM_OVERLAPS);
+	__IP6_INC_STATS(net, ip6_dst_idev(skb_dst(skb)),
+			IPSTATS_MIB_REASM_OVERLAPS);
 discard_fq:
-	inet_frag_kill(&fq->q, refs);
-	__IP6_INC_STATS(net, idev, IPSTATS_MIB_REASMFAILS);
+	inet_frag_kill(&fq->q);
+	__IP6_INC_STATS(net, ip6_dst_idev(skb_dst(skb)),
+			IPSTATS_MIB_REASMFAILS);
 err:
 	kfree_skb_reason(skb, reason);
 	return err;
@@ -258,8 +254,7 @@ err:
  *	the last and the first frames arrived and all the bits are here.
  */
 static int ip6_frag_reasm(struct frag_queue *fq, struct sk_buff *skb,
-			  struct sk_buff *prev_tail, struct net_device *dev,
-			  struct inet6_dev *idev, int *refs)
+			  struct sk_buff *prev_tail, struct net_device *dev)
 {
 	struct net *net = fq->q.fqdir->net;
 	unsigned int nhoff;
@@ -267,7 +262,7 @@ static int ip6_frag_reasm(struct frag_queue *fq, struct sk_buff *skb,
 	int payload_len;
 	u8 ecn;
 
-	inet_frag_kill(&fq->q, refs);
+	inet_frag_kill(&fq->q);
 
 	ecn = ip_frag_ecn_table[fq->ecn];
 	if (unlikely(ecn == 0xff))
@@ -308,7 +303,9 @@ static int ip6_frag_reasm(struct frag_queue *fq, struct sk_buff *skb,
 	skb_postpush_rcsum(skb, skb_network_header(skb),
 			   skb_network_header_len(skb));
 
-	__IP6_INC_STATS(net, idev, IPSTATS_MIB_REASMOKS);
+	rcu_read_lock();
+	__IP6_INC_STATS(net, __in6_dev_stats_get(dev, skb), IPSTATS_MIB_REASMOKS);
+	rcu_read_unlock();
 	fq->q.rb_fragments = RB_ROOT;
 	fq->q.fragments_tail = NULL;
 	fq->q.last_run_head = NULL;
@@ -320,27 +317,26 @@ out_oversize:
 out_oom:
 	net_dbg_ratelimited("ip6_frag_reasm: no memory for reassembly\n");
 out_fail:
-	__IP6_INC_STATS(net, idev, IPSTATS_MIB_REASMFAILS);
-	inet_frag_kill(&fq->q, refs);
+	rcu_read_lock();
+	__IP6_INC_STATS(net, __in6_dev_stats_get(dev, skb), IPSTATS_MIB_REASMFAILS);
+	rcu_read_unlock();
+	inet_frag_kill(&fq->q);
 	return -1;
 }
 
 static int ipv6_frag_rcv(struct sk_buff *skb)
 {
-	const struct ipv6hdr *hdr = ipv6_hdr(skb);
-	struct net *net = skb_dst_dev_net(skb);
-	struct inet6_dev *idev;
 	struct frag_hdr *fhdr;
 	struct frag_queue *fq;
+	const struct ipv6hdr *hdr = ipv6_hdr(skb);
+	struct net *net = dev_net(skb_dst(skb)->dev);
 	u8 nexthdr;
 	int iif;
-
-	idev = skb->dev ? __in6_dev_stats_get(skb->dev, skb) : NULL;
 
 	if (IP6CB(skb)->flags & IP6SKB_FRAGMENTED)
 		goto fail_hdr;
 
-	__IP6_INC_STATS(net, idev, IPSTATS_MIB_REASMREQDS);
+	__IP6_INC_STATS(net, ip6_dst_idev(skb_dst(skb)), IPSTATS_MIB_REASMREQDS);
 
 	/* Jumbo payload inhibits frag. header */
 	if (hdr->payload_len == 0)
@@ -356,7 +352,8 @@ static int ipv6_frag_rcv(struct sk_buff *skb)
 	if (!(fhdr->frag_off & htons(IP6_OFFSET | IP6_MF))) {
 		/* It is not a fragmented frame */
 		skb->transport_header += sizeof(struct frag_hdr);
-		__IP6_INC_STATS(net, idev, IPSTATS_MIB_REASMOKS);
+		__IP6_INC_STATS(net,
+				ip6_dst_idev(skb_dst(skb)), IPSTATS_MIB_REASMOKS);
 
 		IP6CB(skb)->nhoff = (u8 *)fhdr - skb_network_header(skb);
 		IP6CB(skb)->flags |= IP6SKB_FRAGMENTED;
@@ -373,42 +370,42 @@ static int ipv6_frag_rcv(struct sk_buff *skb)
 	 */
 	nexthdr = hdr->nexthdr;
 	if (ipv6frag_thdr_truncated(skb, skb_network_offset(skb) + sizeof(struct ipv6hdr), &nexthdr)) {
-		__IP6_INC_STATS(net, idev, IPSTATS_MIB_INHDRERRORS);
+		__IP6_INC_STATS(net, __in6_dev_get_safely(skb->dev),
+				IPSTATS_MIB_INHDRERRORS);
 		icmpv6_param_prob(skb, ICMPV6_HDR_INCOMP, 0);
 		return -1;
 	}
 
 	iif = skb->dev ? skb->dev->ifindex : 0;
-	rcu_read_lock();
 	fq = fq_find(net, fhdr->identification, hdr, iif);
 	if (fq) {
 		u32 prob_offset = 0;
-		int ret, refs = 0;
+		int ret;
 
 		spin_lock(&fq->q.lock);
 
 		fq->iif = iif;
-		ret = ip6_frag_queue(net, fq, skb, fhdr, IP6CB(skb)->nhoff,
-				     &prob_offset, &refs, idev);
+		ret = ip6_frag_queue(fq, skb, fhdr, IP6CB(skb)->nhoff,
+				     &prob_offset);
 
 		spin_unlock(&fq->q.lock);
-		rcu_read_unlock();
-		inet_frag_putn(&fq->q, refs);
+		inet_frag_put(&fq->q);
 		if (prob_offset) {
-			__IP6_INC_STATS(net, idev, IPSTATS_MIB_INHDRERRORS);
+			__IP6_INC_STATS(net, __in6_dev_get_safely(skb->dev),
+					IPSTATS_MIB_INHDRERRORS);
 			/* icmpv6_param_prob() calls kfree_skb(skb) */
 			icmpv6_param_prob(skb, ICMPV6_HDR_FIELD, prob_offset);
 		}
 		return ret;
 	}
-	rcu_read_unlock();
 
-	__IP6_INC_STATS(net, idev, IPSTATS_MIB_REASMFAILS);
+	__IP6_INC_STATS(net, ip6_dst_idev(skb_dst(skb)), IPSTATS_MIB_REASMFAILS);
 	kfree_skb(skb);
 	return -1;
 
 fail_hdr:
-	__IP6_INC_STATS(net, idev, IPSTATS_MIB_INHDRERRORS);
+	__IP6_INC_STATS(net, __in6_dev_get_safely(skb->dev),
+			IPSTATS_MIB_INHDRERRORS);
 	icmpv6_param_prob(skb, ICMPV6_HDR_FIELD, skb_network_header_len(skb));
 	return -1;
 }

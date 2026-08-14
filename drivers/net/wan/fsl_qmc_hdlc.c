@@ -16,6 +16,7 @@
 #include <linux/err.h>
 #include <linux/framer/framer.h>
 #include <linux/hdlc.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/platform_device.h>
@@ -798,7 +799,7 @@ static struct platform_driver qmc_hdlc_driver = {
 		.of_match_table = qmc_hdlc_id_table,
 	},
 	.probe = qmc_hdlc_probe,
-	.remove = qmc_hdlc_remove,
+	.remove_new = qmc_hdlc_remove,
 };
 module_platform_driver(qmc_hdlc_driver);
 

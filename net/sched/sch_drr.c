@@ -97,13 +97,15 @@ static int drr_change_class(struct Qdisc *sch, u32 classid, u32 parentid,
 			}
 		}
 
+		sch_tree_lock(sch);
 		if (tb[TCA_DRR_QUANTUM])
-			WRITE_ONCE(cl->quantum, quantum);
+			cl->quantum = quantum;
+		sch_tree_unlock(sch);
 
 		return 0;
 	}
 
-	cl = kzalloc_obj(struct drr_class);
+	cl = kzalloc(sizeof(struct drr_class), GFP_KERNEL);
 	if (cl == NULL)
 		return -ENOBUFS;
 
@@ -249,7 +251,7 @@ static int drr_dump_class(struct Qdisc *sch, unsigned long arg,
 	nest = nla_nest_start_noflag(skb, TCA_OPTIONS);
 	if (nest == NULL)
 		goto nla_put_failure;
-	if (nla_put_u32(skb, TCA_DRR_QUANTUM, READ_ONCE(cl->quantum)))
+	if (nla_put_u32(skb, TCA_DRR_QUANTUM, cl->quantum))
 		goto nla_put_failure;
 	return nla_nest_end(skb, nest);
 
@@ -312,7 +314,7 @@ static struct drr_class *drr_classify(struct sk_buff *skb, struct Qdisc *sch,
 
 	*qerr = NET_XMIT_SUCCESS | __NET_XMIT_BYPASS;
 	fl = rcu_dereference_bh(q->filter_list);
-	result = tcf_classify_qdisc(skb, fl, &res, false);
+	result = tcf_classify(skb, NULL, fl, &res, false);
 	if (result >= 0) {
 #ifdef CONFIG_NET_CLS_ACT
 		switch (result) {
@@ -360,11 +362,11 @@ static int drr_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 
 	if (!cl_is_active(cl)) {
 		list_add_tail(&cl->alist, &q->active);
-		WRITE_ONCE(cl->deficit, READ_ONCE(cl->quantum));
+		WRITE_ONCE(cl->deficit, cl->quantum);
 	}
 
-	qstats_backlog_add(sch, len);
-	qdisc_qlen_inc(sch);
+	sch->qstats.backlog += len;
+	sch->q.qlen++;
 	return err;
 }
 
@@ -397,11 +399,11 @@ static struct sk_buff *drr_dequeue(struct Qdisc *sch)
 			bstats_update(&cl->bstats, skb);
 			qdisc_bstats_update(sch, skb);
 			qdisc_qstats_backlog_dec(sch, skb);
-			qdisc_qlen_dec(sch);
+			sch->q.qlen--;
 			return skb;
 		}
 
-		WRITE_ONCE(cl->deficit, cl->deficit + READ_ONCE(cl->quantum));
+		WRITE_ONCE(cl->deficit, cl->deficit + cl->quantum);
 		list_move_tail(&cl->alist, &q->active);
 	}
 out:

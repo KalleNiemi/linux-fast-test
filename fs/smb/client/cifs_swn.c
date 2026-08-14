@@ -127,8 +127,10 @@ static int cifs_swn_send_register_message(struct cifs_swn_reg_info *swnreg,
 	int ret;
 
 	skb = genlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
-	if (!skb)
-		return -ENOMEM;
+	if (skb == NULL) {
+		ret = -ENOMEM;
+		goto fail;
+	}
 
 	hdr = genlmsg_put(skb, 0, 0, &cifs_genl_family, 0, CIFS_GENL_CMD_SWN_REGISTER);
 	if (hdr == NULL) {
@@ -215,6 +217,7 @@ static int cifs_swn_send_register_message(struct cifs_swn_reg_info *swnreg,
 nlmsg_fail:
 	genlmsg_cancel(skb, hdr);
 	nlmsg_free(skb);
+fail:
 	return ret;
 }
 
@@ -425,7 +428,7 @@ static struct cifs_swn_reg *cifs_find_swn_reg(struct cifs_tcon *tcon)
 
 /*
  * Get a registration for the tcon's server and share name, allocating a new one if it does not
- * exist.
+ * exists
  */
 static struct cifs_swn_reg *cifs_get_swn_reg(struct cifs_tcon *tcon)
 {
@@ -443,7 +446,7 @@ static struct cifs_swn_reg *cifs_get_swn_reg(struct cifs_tcon *tcon)
 		goto unlock;
 	}
 
-	reg = kmalloc_obj(struct cifs_swn_reg, GFP_KERNEL);
+	reg = kmalloc(sizeof(struct cifs_swn_reg), GFP_ATOMIC);
 	if (reg == NULL) {
 		ret = -ENOMEM;
 		goto fail_unlock;
@@ -451,7 +454,7 @@ static struct cifs_swn_reg *cifs_get_swn_reg(struct cifs_tcon *tcon)
 
 	kref_init(&reg->ref_count);
 
-	reg->id = idr_alloc(&cifs_swnreg_idr, reg, 1, 0, GFP_KERNEL);
+	reg->id = idr_alloc(&cifs_swnreg_idr, reg, 1, 0, GFP_ATOMIC);
 	if (reg->id < 0) {
 		cifs_dbg(FYI, "%s: failed to allocate registration id\n", __func__);
 		ret = reg->id;

@@ -70,7 +70,7 @@ int af_alg_register_type(const struct af_alg_type *type)
 			goto unlock;
 	}
 
-	node = kmalloc_obj(*node);
+	node = kmalloc(sizeof(*node), GFP_KERNEL);
 	err = -ENOMEM;
 	if (!node)
 		goto unlock;
@@ -145,7 +145,7 @@ void af_alg_release_parent(struct sock *sk)
 }
 EXPORT_SYMBOL_GPL(af_alg_release_parent);
 
-static int alg_bind(struct socket *sock, struct sockaddr_unsized *uaddr, int addr_len)
+static int alg_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 {
 	const u32 allowed = CRYPTO_ALG_KERN_DRIVER_ONLY;
 	struct sock *sk = sock->sk;
@@ -181,7 +181,7 @@ static int alg_bind(struct socket *sock, struct sockaddr_unsized *uaddr, int add
 	if (IS_ERR(type))
 		return PTR_ERR(type);
 
-	private = type->bind(sa->salg_name);
+	private = type->bind(sa->salg_name, sa->salg_feat, sa->salg_mask);
 	if (IS_ERR(private)) {
 		module_put(type->owner);
 		return PTR_ERR(private);
@@ -324,12 +324,14 @@ static int alg_setkey_by_key_serial(struct alg_sock *ask, sockptr_t optval,
 		return PTR_ERR(ret);
 	}
 
-	key_data = sock_kmemdup(&ask->sk, ret, key_datalen, GFP_KERNEL);
+	key_data = sock_kmalloc(&ask->sk, key_datalen, GFP_KERNEL);
 	if (!key_data) {
 		up_read(&key->sem);
 		key_put(key);
 		return -ENOMEM;
 	}
+
+	memcpy(key_data, ret, key_datalen);
 
 	up_read(&key->sem);
 	key_put(key);
@@ -1086,6 +1088,35 @@ void af_alg_free_resources(struct af_alg_async_req *areq)
 EXPORT_SYMBOL_GPL(af_alg_free_resources);
 
 /**
+ * af_alg_async_cb - AIO callback handler
+ * @data: async request completion data
+ * @err: if non-zero, error result to be returned via ki_complete();
+ *       otherwise return the AIO output length via ki_complete().
+ *
+ * This handler cleans up the struct af_alg_async_req upon completion of the
+ * AIO operation.
+ *
+ * The number of bytes to be generated with the AIO operation must be set
+ * in areq->outlen before the AIO callback handler is invoked.
+ */
+void af_alg_async_cb(void *data, int err)
+{
+	struct af_alg_async_req *areq = data;
+	struct sock *sk = areq->sk;
+	struct kiocb *iocb = areq->iocb;
+	unsigned int resultlen;
+
+	/* Buffer size written by crypto operation. */
+	resultlen = areq->outlen;
+
+	af_alg_free_resources(areq);
+	sock_put(sk);
+
+	iocb->ki_complete(iocb, err ? err : (int)resultlen);
+}
+EXPORT_SYMBOL_GPL(af_alg_async_cb);
+
+/**
  * af_alg_poll - poll system call handler
  * @file: file pointer
  * @sock: socket to poll
@@ -1125,8 +1156,8 @@ struct af_alg_async_req *af_alg_alloc_areq(struct sock *sk,
 	struct af_alg_ctx *ctx = alg_sk(sk)->private;
 	struct af_alg_async_req *areq;
 
-	/* Only one request can be in flight. */
-	if (WARN_ON_ONCE(ctx->inflight))
+	/* Only one AIO request can be in flight. */
+	if (ctx->inflight)
 		return ERR_PTR(-EBUSY);
 
 	areq = sock_kmalloc(sk, areqlen, GFP_KERNEL);

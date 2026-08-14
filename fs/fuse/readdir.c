@@ -1,7 +1,9 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
   FUSE: Filesystem in Userspace
   Copyright (C) 2001-2018  Miklos Szeredi <miklos@szeredi.hu>
+
+  This program can be distributed under the terms of the GNU GPL.
+  See the file COPYING.
 */
 
 
@@ -10,7 +12,6 @@
 #include <linux/posix_acl.h>
 #include <linux/pagemap.h>
 #include <linux/highmem.h>
-#include <linux/vmalloc.h>
 
 static bool fuse_use_readdirplus(struct inode *dir, struct dir_context *ctx)
 {
@@ -55,7 +56,7 @@ static void fuse_add_dirent_to_cache(struct file *file,
 	}
 	version = fi->rdc.version;
 	size = fi->rdc.size;
-	offset = offset_in_page(size);
+	offset = size & ~PAGE_MASK;
 	index = size >> PAGE_SHIFT;
 	/* Dirent doesn't fit in current page?  Jump to next page. */
 	if (offset + reclen > PAGE_SIZE) {
@@ -123,7 +124,7 @@ static bool fuse_emit(struct file *file, struct dir_context *ctx,
 		fuse_add_dirent_to_cache(file, dirent, ctx->pos);
 
 	return dir_emit(ctx, dirent->name, dirent->namelen, dirent->ino,
-			dirent->type | FILLDIR_FLAG_NOINTR);
+			dirent->type);
 }
 
 static int parse_dirfile(char *buf, size_t nbytes, struct file *file,
@@ -152,7 +153,7 @@ static int parse_dirfile(char *buf, size_t nbytes, struct file *file,
 
 static int fuse_direntplus_link(struct file *file,
 				struct fuse_direntplus *direntplus,
-				u64 attr_version, u64 evict_ctr)
+				u64 attr_version)
 {
 	struct fuse_entry_out *o = &direntplus->entry_out;
 	struct fuse_dirent *dirent = &direntplus->dirent;
@@ -163,7 +164,7 @@ static int fuse_direntplus_link(struct file *file,
 	struct inode *dir = d_inode(parent);
 	struct fuse_conn *fc;
 	struct inode *inode;
-	int epoch;
+	DECLARE_WAIT_QUEUE_HEAD_ONSTACK(wq);
 
 	if (!o->nodeid) {
 		/*
@@ -193,13 +194,12 @@ static int fuse_direntplus_link(struct file *file,
 		return -EIO;
 
 	fc = get_fuse_conn(dir);
-	epoch = atomic_read(&fc->epoch);
 
 	name.hash = full_name_hash(parent, name.name, name.len);
 	dentry = d_lookup(parent, &name);
 	if (!dentry) {
 retry:
-		dentry = d_alloc_parallel(parent, &name);
+		dentry = d_alloc_parallel(parent, &name, &wq);
 		if (IS_ERR(dentry))
 			return PTR_ERR(dentry);
 	}
@@ -237,7 +237,7 @@ retry:
 	} else {
 		inode = fuse_iget(dir->i_sb, o->nodeid, o->generation,
 				  &o->attr, ATTR_TIMEOUT(o),
-				  attr_version, evict_ctr);
+				  attr_version);
 		if (!inode)
 			inode = ERR_PTR(-ENOMEM);
 
@@ -260,7 +260,6 @@ retry:
 	}
 	if (fc->readdirplus_auto)
 		set_bit(FUSE_I_INIT_RDPLUS, &get_fuse_inode(inode)->state);
-	dentry->d_time = epoch;
 	fuse_change_entry_timeout(dentry, o);
 
 	dput(dentry);
@@ -289,8 +288,7 @@ static void fuse_force_forget(struct file *file, u64 nodeid)
 }
 
 static int parse_dirplusfile(char *buf, size_t nbytes, struct file *file,
-			     struct dir_context *ctx, u64 attr_version,
-			     u64 evict_ctr)
+			     struct dir_context *ctx, u64 attr_version)
 {
 	struct fuse_direntplus *direntplus;
 	struct fuse_dirent *dirent;
@@ -325,7 +323,7 @@ static int parse_dirplusfile(char *buf, size_t nbytes, struct file *file,
 		buf += reclen;
 		nbytes -= reclen;
 
-		ret = fuse_direntplus_link(file, direntplus, attr_version, evict_ctr);
+		ret = fuse_direntplus_link(file, direntplus, attr_version);
 		if (ret)
 			fuse_force_forget(file, direntplus->entry_out.nodeid);
 	}
@@ -333,101 +331,56 @@ static int parse_dirplusfile(char *buf, size_t nbytes, struct file *file,
 	return 0;
 }
 
-static struct page **fuse_readdir_alloc_buf(struct fuse_args_pages *ap, size_t *bufsize)
-{
-	unsigned int i, nr_alloc, nr_pages = DIV_ROUND_UP(*bufsize, PAGE_SIZE);
-	struct page **pages = kcalloc(nr_pages, sizeof(*pages), GFP_KERNEL);
-
-	if (!pages)
-		return NULL;
-
-	nr_alloc = alloc_pages_bulk(GFP_KERNEL, nr_pages, pages);
-	if (!nr_alloc)
-		goto free_array;
-
-	if (nr_alloc < nr_pages) {
-		nr_pages = nr_alloc;
-		*bufsize = (size_t) nr_pages << PAGE_SHIFT;
-	}
-
-	ap->folios = fuse_folios_alloc(nr_pages, GFP_KERNEL, &ap->descs);
-	if (!ap->folios)
-		goto release_pages;
-
-	for (i = 0; i < nr_pages; i++) {
-		ap->folios[i] = page_folio(pages[i]);
-		ap->descs[i].length = min_t(size_t, *bufsize - (size_t)i * PAGE_SIZE, PAGE_SIZE);
-	}
-	ap->num_folios = nr_pages;
-	ap->args.out_pages = true;
-
-	return pages;
-
-release_pages:
-	release_pages(pages, nr_pages);
-free_array:
-	kfree(pages);
-	return NULL;
-}
-
 static int fuse_readdir_uncached(struct file *file, struct dir_context *ctx)
 {
 	int plus;
 	ssize_t res;
+	struct page *page;
 	struct inode *inode = file_inode(file);
 	struct fuse_mount *fm = get_fuse_mount(inode);
-	struct fuse_conn *fc = fm->fc;
 	struct fuse_io_args ia = {};
 	struct fuse_args_pages *ap = &ia.ap;
-	void *buf;
-	size_t bufsize = clamp((unsigned int) ctx->count, PAGE_SIZE, fc->max_pages << PAGE_SHIFT);
-	u64 attr_version = 0, evict_ctr = 0;
+	struct fuse_page_desc desc = { .length = PAGE_SIZE };
+	u64 attr_version = 0;
 	bool locked;
-	struct page **pages = fuse_readdir_alloc_buf(ap, &bufsize);
 
-	if (!pages)
+	page = alloc_page(GFP_KERNEL);
+	if (!page)
 		return -ENOMEM;
 
 	plus = fuse_use_readdirplus(inode, ctx);
+	ap->args.out_pages = true;
+	ap->num_pages = 1;
+	ap->pages = &page;
+	ap->descs = &desc;
 	if (plus) {
 		attr_version = fuse_get_attr_version(fm->fc);
-		evict_ctr = fuse_get_evict_ctr(fm->fc);
-		fuse_read_args_fill(&ia, file, ctx->pos, bufsize, FUSE_READDIRPLUS);
+		fuse_read_args_fill(&ia, file, ctx->pos, PAGE_SIZE,
+				    FUSE_READDIRPLUS);
 	} else {
-		fuse_read_args_fill(&ia, file, ctx->pos, bufsize, FUSE_READDIR);
+		fuse_read_args_fill(&ia, file, ctx->pos, PAGE_SIZE,
+				    FUSE_READDIR);
 	}
 	locked = fuse_lock_inode(inode);
 	res = fuse_simple_request(fm, &ap->args);
 	fuse_unlock_inode(inode, locked);
-	if (res < 0)
-		goto out;
+	if (res >= 0) {
+		if (!res) {
+			struct fuse_file *ff = file->private_data;
 
-	if (!res) {
-		struct fuse_file *ff = file->private_data;
-
-		if (ff->open_flags & FOPEN_CACHE_DIR)
-			fuse_readdir_cache_end(file, ctx->pos);
-		goto out;
+			if (ff->open_flags & FOPEN_CACHE_DIR)
+				fuse_readdir_cache_end(file, ctx->pos);
+		} else if (plus) {
+			res = parse_dirplusfile(page_address(page), res,
+						file, ctx, attr_version);
+		} else {
+			res = parse_dirfile(page_address(page), res, file,
+					    ctx);
+		}
 	}
 
-	buf = vm_map_ram(pages, ap->num_folios, -1);
-	if (!buf) {
-		res = -ENOMEM;
-	} else {
-		if (plus)
-			res = parse_dirplusfile(buf, res, file, ctx, attr_version, evict_ctr);
-		else
-			res = parse_dirfile(buf, res, file, ctx);
-
-		vm_unmap_ram(buf, ap->num_folios);
-	}
-out:
-	kfree(ap->folios);
-	release_pages(pages, ap->num_folios);
-	kfree(pages);
-
+	__free_page(page);
 	fuse_invalidate_atime(inode);
-
 	return res;
 }
 
@@ -442,7 +395,7 @@ static enum fuse_parse_result fuse_parse_cache(struct fuse_file *ff,
 					       void *addr, unsigned int size,
 					       struct dir_context *ctx)
 {
-	unsigned int offset = offset_in_page(ff->readdir.cache_off);
+	unsigned int offset = ff->readdir.cache_off & ~PAGE_MASK;
 	enum fuse_parse_result res = FOUND_NONE;
 
 	WARN_ON(offset >= size);
@@ -467,7 +420,7 @@ static enum fuse_parse_result fuse_parse_cache(struct fuse_file *ff,
 		if (ff->readdir.pos == ctx->pos) {
 			res = FOUND_SOME;
 			if (!dir_emit(ctx, dirent->name, dirent->namelen,
-				      dirent->ino, dirent->type | FILLDIR_FLAG_NOINTR))
+				      dirent->ino, dirent->type))
 				return FOUND_ALL;
 			ctx->pos = dirent->off;
 		}
@@ -488,7 +441,6 @@ static void fuse_rdc_reset(struct inode *inode)
 	fi->rdc.version++;
 	fi->rdc.size = 0;
 	fi->rdc.pos = 0;
-	fi->rdc.epoch = 0;
 }
 
 #define UNCACHED 1
@@ -530,7 +482,6 @@ retry_locked:
 		if (!ctx->pos && !fi->rdc.size) {
 			fi->rdc.mtime = inode_get_mtime(inode);
 			fi->rdc.iversion = inode_query_iversion(inode);
-			fi->rdc.epoch = atomic_read(&fc->epoch);
 		}
 		spin_unlock(&fi->rdc.lock);
 		return UNCACHED;
@@ -544,8 +495,7 @@ retry_locked:
 		struct timespec64 mtime = inode_get_mtime(inode);
 
 		if (inode_peek_iversion(inode) != fi->rdc.iversion ||
-		    !timespec64_equal(&fi->rdc.mtime, &mtime) ||
-		    fi->rdc.epoch != atomic_read(&fc->epoch)) {
+		    !timespec64_equal(&fi->rdc.mtime, &mtime)) {
 			fuse_rdc_reset(inode);
 			goto retry_locked;
 		}
@@ -571,13 +521,13 @@ retry_locked:
 	index = ff->readdir.cache_off >> PAGE_SHIFT;
 
 	if (index == (fi->rdc.size >> PAGE_SHIFT))
-		size = offset_in_page(fi->rdc.size);
+		size = fi->rdc.size & ~PAGE_MASK;
 	else
 		size = PAGE_SIZE;
 	spin_unlock(&fi->rdc.lock);
 
 	/* EOF? */
-	if (offset_in_page(ff->readdir.cache_off) == size)
+	if ((ff->readdir.cache_off & ~PAGE_MASK) == size)
 		return 0;
 
 	page = find_get_page_flags(file->f_mapping, index,

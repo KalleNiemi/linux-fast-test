@@ -89,6 +89,17 @@ static struct dpll_pin *dpll_netdev_pin(const struct net_device *dev)
 	return rcu_dereference_rtnl(dev->dpll_pin);
 }
 
+/**
+ * dpll_netdev_pin_handle_size - get size of pin handle attribute of a netdev
+ * @dev: netdev from which to get the pin
+ *
+ * Return: byte size of pin handle attribute, or 0 if @dev has no pin.
+ */
+size_t dpll_netdev_pin_handle_size(const struct net_device *dev)
+{
+	return dpll_netdev_pin(dev) ? nla_total_size(4) : 0; /* DPLL_A_PIN_ID */
+}
+
 int dpll_netdev_add_pin_handle(struct sk_buff *msg,
 			       const struct net_device *dev)
 {
@@ -117,90 +128,18 @@ dpll_msg_add_mode_supported(struct sk_buff *msg, struct dpll_device *dpll,
 			    struct netlink_ext_ack *extack)
 {
 	const struct dpll_device_ops *ops = dpll_device_ops(dpll);
-	DECLARE_BITMAP(modes, DPLL_MODE_MAX + 1) = { 0 };
 	enum dpll_mode mode;
 	int ret;
 
-	if (ops->supported_modes_get) {
-		ret = ops->supported_modes_get(dpll, dpll_priv(dpll), modes,
-					       extack);
-		if (ret)
-			return ret;
-	} else {
-		/* If the supported modes are not reported by the driver, the
-		 * only supported mode is the one obtained by mode_get().
-		 */
-		ret = ops->mode_get(dpll, dpll_priv(dpll), &mode, extack);
-		if (ret)
-			return ret;
+	/* No mode change is supported now, so the only supported mode is the
+	 * one obtained by mode_get().
+	 */
 
-		__set_bit(mode, modes);
-	}
-
-	for_each_set_bit(mode, modes, DPLL_MODE_MAX + 1)
-		if (nla_put_u32(msg, DPLL_A_MODE_SUPPORTED, mode))
-			return -EMSGSIZE;
-
-	return 0;
-}
-
-static int
-dpll_msg_add_phase_offset_monitor(struct sk_buff *msg, struct dpll_device *dpll,
-				  struct netlink_ext_ack *extack)
-{
-	const struct dpll_device_ops *ops = dpll_device_ops(dpll);
-	enum dpll_feature_state state;
-	int ret;
-
-	if (ops->phase_offset_monitor_set && ops->phase_offset_monitor_get) {
-		ret = ops->phase_offset_monitor_get(dpll, dpll_priv(dpll),
-						    &state, extack);
-		if (ret)
-			return ret;
-		if (nla_put_u32(msg, DPLL_A_PHASE_OFFSET_MONITOR, state))
-			return -EMSGSIZE;
-	}
-
-	return 0;
-}
-
-static int
-dpll_msg_add_freq_monitor(struct sk_buff *msg, struct dpll_device *dpll,
-			  struct netlink_ext_ack *extack)
-{
-	const struct dpll_device_ops *ops = dpll_device_ops(dpll);
-	enum dpll_feature_state state;
-	int ret;
-
-	if (ops->freq_monitor_set && ops->freq_monitor_get) {
-		ret = ops->freq_monitor_get(dpll, dpll_priv(dpll),
-					    &state, extack);
-		if (ret)
-			return ret;
-		if (nla_put_u32(msg, DPLL_A_FREQUENCY_MONITOR, state))
-			return -EMSGSIZE;
-	}
-
-	return 0;
-}
-
-static int
-dpll_msg_add_phase_offset_avg_factor(struct sk_buff *msg,
-				     struct dpll_device *dpll,
-				     struct netlink_ext_ack *extack)
-{
-	const struct dpll_device_ops *ops = dpll_device_ops(dpll);
-	u32 factor;
-	int ret;
-
-	if (ops->phase_offset_avg_factor_get) {
-		ret = ops->phase_offset_avg_factor_get(dpll, dpll_priv(dpll),
-						       &factor, extack);
-		if (ret)
-			return ret;
-		if (nla_put_u32(msg, DPLL_A_PHASE_OFFSET_AVG_FACTOR, factor))
-			return -EMSGSIZE;
-	}
+	ret = ops->mode_get(dpll, dpll_priv(dpll), &mode, extack);
+	if (ret)
+		return ret;
+	if (nla_put_u32(msg, DPLL_A_MODE_SUPPORTED, mode))
+		return -EMSGSIZE;
 
 	return 0;
 }
@@ -314,30 +253,6 @@ dpll_msg_add_pin_on_dpll_state(struct sk_buff *msg, struct dpll_pin *pin,
 }
 
 static int
-dpll_msg_add_pin_operstate(struct sk_buff *msg, struct dpll_pin *pin,
-			   struct dpll_pin_ref *ref,
-			   struct netlink_ext_ack *extack)
-{
-	const struct dpll_pin_ops *ops = dpll_pin_ops(ref);
-	struct dpll_device *dpll = ref->dpll;
-	enum dpll_pin_operstate operstate;
-	int ret;
-
-	if (!ops->operstate_on_dpll_get)
-		return 0;
-	ret = ops->operstate_on_dpll_get(pin,
-					  dpll_pin_on_dpll_priv(dpll, pin),
-					  dpll, dpll_priv(dpll),
-					  &operstate, extack);
-	if (ret)
-		return ret;
-	if (nla_put_u32(msg, DPLL_A_PIN_OPERSTATE, operstate))
-		return -EMSGSIZE;
-
-	return 0;
-}
-
-static int
 dpll_msg_add_pin_direction(struct sk_buff *msg, struct dpll_pin *pin,
 			   struct dpll_pin_ref *ref,
 			   struct netlink_ext_ack *extack)
@@ -406,60 +321,23 @@ dpll_msg_add_phase_offset(struct sk_buff *msg, struct dpll_pin *pin,
 
 static int dpll_msg_add_ffo(struct sk_buff *msg, struct dpll_pin *pin,
 			    struct dpll_pin_ref *ref,
-			    enum dpll_ffo_type type,
 			    struct netlink_ext_ack *extack)
 {
 	const struct dpll_pin_ops *ops = dpll_pin_ops(ref);
-	struct dpll_ffo_param ffo = { .type = type };
+	struct dpll_device *dpll = ref->dpll;
+	s64 ffo;
 	int ret;
 
-	if (!ops->ffo_get || !(ops->supported_ffo & BIT(type)))
+	if (!ops->ffo_get)
 		return 0;
-	ret = ops->ffo_get(pin, dpll_pin_on_dpll_priv(ref->dpll, pin),
-			   ref->dpll, dpll_priv(ref->dpll), &ffo, extack);
+	ret = ops->ffo_get(pin, dpll_pin_on_dpll_priv(dpll, pin),
+			   dpll, dpll_priv(dpll), &ffo, extack);
 	if (ret) {
 		if (ret == -ENODATA)
 			return 0;
 		return ret;
 	}
-	if (nla_put_sint(msg, DPLL_A_PIN_FRACTIONAL_FREQUENCY_OFFSET,
-			 div_s64(ffo.ffo, 1000000)))
-		return -EMSGSIZE;
-	return nla_put_sint(msg,
-			    DPLL_A_PIN_FRACTIONAL_FREQUENCY_OFFSET_PPT,
-			    ffo.ffo);
-}
-
-static int dpll_msg_add_measured_freq(struct sk_buff *msg, struct dpll_pin *pin,
-				      struct dpll_pin_ref *ref,
-				      struct netlink_ext_ack *extack)
-{
-	const struct dpll_device_ops *dev_ops = dpll_device_ops(ref->dpll);
-	const struct dpll_pin_ops *ops = dpll_pin_ops(ref);
-	struct dpll_device *dpll = ref->dpll;
-	enum dpll_feature_state state;
-	u64 measured_freq;
-	int ret;
-
-	if (!ops->measured_freq_get)
-		return 0;
-	ret = dev_ops->freq_monitor_get(dpll, dpll_priv(dpll),
-					&state, extack);
-	if (ret)
-		return ret;
-	if (state == DPLL_FEATURE_STATE_DISABLE)
-		return 0;
-	ret = ops->measured_freq_get(pin, dpll_pin_on_dpll_priv(dpll, pin),
-				    dpll, dpll_priv(dpll), &measured_freq,
-				    extack);
-	if (ret)
-		return ret;
-	if (nla_put_64bit(msg, DPLL_A_PIN_MEASURED_FREQUENCY,
-			  sizeof(measured_freq), &measured_freq,
-			  DPLL_A_PIN_PAD))
-		return -EMSGSIZE;
-
-	return 0;
+	return nla_put_sint(msg, DPLL_A_PIN_FRACTIONAL_FREQUENCY_OFFSET, ffo);
 }
 
 static int
@@ -665,9 +543,6 @@ dpll_msg_add_pin_dplls(struct sk_buff *msg, struct dpll_pin *pin,
 		ret = dpll_msg_add_pin_on_dpll_state(msg, pin, ref, extack);
 		if (ret)
 			goto nest_cancel;
-		ret = dpll_msg_add_pin_operstate(msg, pin, ref, extack);
-		if (ret)
-			goto nest_cancel;
 		ret = dpll_msg_add_pin_prio(msg, pin, ref, extack);
 		if (ret)
 			goto nest_cancel;
@@ -675,10 +550,6 @@ dpll_msg_add_pin_dplls(struct sk_buff *msg, struct dpll_pin *pin,
 		if (ret)
 			goto nest_cancel;
 		ret = dpll_msg_add_phase_offset(msg, pin, ref, extack);
-		if (ret)
-			goto nest_cancel;
-		ret = dpll_msg_add_ffo(msg, pin, ref,
-				       DPLL_FFO_PIN_DEVICE, extack);
 		if (ret)
 			goto nest_cancel;
 		nla_nest_end(msg, attr);
@@ -699,16 +570,14 @@ dpll_cmd_pin_get_one(struct sk_buff *msg, struct dpll_pin *pin,
 	struct dpll_pin_ref *ref;
 	int ret;
 
-	ref = dpll_pin_own_dpll_ref_first(pin);
-	if (!ref)
-		ref = dpll_xa_ref_dpll_first(&pin->dpll_refs);
+	ref = dpll_xa_ref_dpll_first(&pin->dpll_refs);
 	ASSERT_NOT_NULL(ref);
 
 	ret = dpll_msg_add_pin_handle(msg, pin);
 	if (ret)
 		return ret;
 	if (nla_put_string(msg, DPLL_A_PIN_MODULE_NAME,
-			   pin->module_name))
+			   module_name(pin->module)))
 		return -EMSGSIZE;
 	if (nla_put_64bit(msg, DPLL_A_PIN_CLOCK_ID, sizeof(pin->clock_id),
 			  &pin->clock_id, DPLL_A_PIN_PAD))
@@ -730,10 +599,6 @@ dpll_cmd_pin_get_one(struct sk_buff *msg, struct dpll_pin *pin,
 	ret = dpll_msg_add_pin_freq(msg, pin, ref, extack);
 	if (ret)
 		return ret;
-	if (prop->phase_gran &&
-	    nla_put_u32(msg, DPLL_A_PIN_PHASE_ADJUST_GRAN,
-			prop->phase_gran))
-		return -EMSGSIZE;
 	if (nla_put_s32(msg, DPLL_A_PIN_PHASE_ADJUST_MIN,
 			prop->phase_range.min))
 		return -EMSGSIZE;
@@ -743,11 +608,7 @@ dpll_cmd_pin_get_one(struct sk_buff *msg, struct dpll_pin *pin,
 	ret = dpll_msg_add_pin_phase_adjust(msg, pin, ref, extack);
 	if (ret)
 		return ret;
-	ret = dpll_msg_add_ffo(msg, pin, ref,
-			       DPLL_FFO_PORT_RXTX_RATE, extack);
-	if (ret)
-		return ret;
-	ret = dpll_msg_add_measured_freq(msg, pin, ref, extack);
+	ret = dpll_msg_add_ffo(msg, pin, ref, extack);
 	if (ret)
 		return ret;
 	ret = dpll_msg_add_pin_esync(msg, pin, ref, extack);
@@ -796,15 +657,6 @@ dpll_device_get_one(struct dpll_device *dpll, struct sk_buff *msg,
 		return ret;
 	if (nla_put_u32(msg, DPLL_A_TYPE, dpll->type))
 		return -EMSGSIZE;
-	ret = dpll_msg_add_phase_offset_monitor(msg, dpll, extack);
-	if (ret)
-		return ret;
-	ret = dpll_msg_add_phase_offset_avg_factor(msg, dpll, extack);
-	if (ret)
-		return ret;
-	ret = dpll_msg_add_freq_monitor(msg, dpll, extack);
-	if (ret)
-		return ret;
 
 	return 0;
 }
@@ -852,21 +704,12 @@ int dpll_device_delete_ntf(struct dpll_device *dpll)
 	return dpll_device_event_send(DPLL_CMD_DEVICE_DELETE_NTF, dpll);
 }
 
-/**
- * __dpll_device_change_ntf - notify that the dpll device has been changed
- * @dpll: registered dpll pointer
- *
- * Context: caller must hold dpll_lock. Suitable for use inside device
- *          callbacks which are already invoked under dpll_lock.
- * Return: 0 if succeeds, error code otherwise.
- */
-int __dpll_device_change_ntf(struct dpll_device *dpll)
+static int
+__dpll_device_change_ntf(struct dpll_device *dpll)
 {
-	lockdep_assert_held(&dpll_lock);
 	dpll_device_notify(dpll, DPLL_DEVICE_CHANGED);
 	return dpll_device_event_send(DPLL_CMD_DEVICE_CHANGE_NTF, dpll);
 }
-EXPORT_SYMBOL_GPL(__dpll_device_change_ntf);
 
 /**
  * dpll_device_change_ntf - notify that the dpll device has been changed
@@ -920,33 +763,23 @@ err_free_msg:
 	return ret;
 }
 
-int dpll_pin_create_ntf(struct dpll_pin *pin, u64 src_clock_id)
+int dpll_pin_create_ntf(struct dpll_pin *pin)
 {
-	dpll_pin_notify(pin, src_clock_id, DPLL_PIN_CREATED);
+	dpll_pin_notify(pin, DPLL_PIN_CREATED);
 	return dpll_pin_event_send(DPLL_CMD_PIN_CREATE_NTF, pin);
 }
 
-int dpll_pin_delete_ntf(struct dpll_pin *pin, u64 src_clock_id)
+int dpll_pin_delete_ntf(struct dpll_pin *pin)
 {
-	dpll_pin_notify(pin, src_clock_id, DPLL_PIN_DELETED);
+	dpll_pin_notify(pin, DPLL_PIN_DELETED);
 	return dpll_pin_event_send(DPLL_CMD_PIN_DELETE_NTF, pin);
 }
 
-/**
- * __dpll_pin_change_ntf - notify that the pin has been changed
- * @pin: registered pin pointer
- *
- * Context: caller must hold dpll_lock. Suitable for use inside pin
- *          callbacks which are already invoked under dpll_lock.
- * Return: 0 if succeeds, error code otherwise.
- */
 int __dpll_pin_change_ntf(struct dpll_pin *pin)
 {
-	lockdep_assert_held(&dpll_lock);
-	dpll_pin_notify(pin, pin->clock_id, DPLL_PIN_CHANGED);
+	dpll_pin_notify(pin, DPLL_PIN_CHANGED);
 	return dpll_pin_event_send(DPLL_CMD_PIN_CHANGE_NTF, pin);
 }
-EXPORT_SYMBOL_GPL(__dpll_pin_change_ntf);
 
 /**
  * dpll_pin_change_ntf - notify that the pin has been changed
@@ -968,113 +801,6 @@ int dpll_pin_change_ntf(struct dpll_pin *pin)
 EXPORT_SYMBOL_GPL(dpll_pin_change_ntf);
 
 static int
-dpll_mode_set(struct dpll_device *dpll, struct nlattr *a,
-	      struct netlink_ext_ack *extack)
-{
-	const struct dpll_device_ops *ops = dpll_device_ops(dpll);
-	DECLARE_BITMAP(modes, DPLL_MODE_MAX + 1) = { 0 };
-	enum dpll_mode mode = nla_get_u32(a), old_mode;
-	int ret;
-
-	if (!(ops->mode_set && ops->supported_modes_get)) {
-		NL_SET_ERR_MSG_ATTR(extack, a,
-				    "dpll device does not support mode switch");
-		return -EOPNOTSUPP;
-	}
-
-	ret = ops->mode_get(dpll, dpll_priv(dpll), &old_mode, extack);
-	if (ret) {
-		NL_SET_ERR_MSG(extack, "unable to get current mode");
-		return ret;
-	}
-
-	if (mode == old_mode)
-		return 0;
-
-	ret = ops->supported_modes_get(dpll, dpll_priv(dpll), modes, extack);
-	if (ret) {
-		NL_SET_ERR_MSG(extack, "unable to get supported modes");
-		return ret;
-	}
-
-	if (!test_bit(mode, modes)) {
-		NL_SET_ERR_MSG(extack,
-			       "dpll device does not support requested mode");
-		return -EINVAL;
-	}
-
-	return ops->mode_set(dpll, dpll_priv(dpll), mode, extack);
-}
-
-static int
-dpll_phase_offset_monitor_set(struct dpll_device *dpll, struct nlattr *a,
-			      struct netlink_ext_ack *extack)
-{
-	const struct dpll_device_ops *ops = dpll_device_ops(dpll);
-	enum dpll_feature_state state = nla_get_u32(a), old_state;
-	int ret;
-
-	if (!(ops->phase_offset_monitor_set && ops->phase_offset_monitor_get)) {
-		NL_SET_ERR_MSG_ATTR(extack, a, "dpll device not capable of phase offset monitor");
-		return -EOPNOTSUPP;
-	}
-	ret = ops->phase_offset_monitor_get(dpll, dpll_priv(dpll), &old_state,
-					    extack);
-	if (ret) {
-		NL_SET_ERR_MSG(extack, "unable to get current state of phase offset monitor");
-		return ret;
-	}
-	if (state == old_state)
-		return 0;
-
-	return ops->phase_offset_monitor_set(dpll, dpll_priv(dpll), state,
-					     extack);
-}
-
-static int
-dpll_phase_offset_avg_factor_set(struct dpll_device *dpll, struct nlattr *a,
-				 struct netlink_ext_ack *extack)
-{
-	const struct dpll_device_ops *ops = dpll_device_ops(dpll);
-	u32 factor = nla_get_u32(a);
-
-	if (!ops->phase_offset_avg_factor_set) {
-		NL_SET_ERR_MSG_ATTR(extack, a,
-				    "device not capable of changing phase offset average factor");
-		return -EOPNOTSUPP;
-	}
-
-	return ops->phase_offset_avg_factor_set(dpll, dpll_priv(dpll), factor,
-						extack);
-}
-
-static int
-dpll_freq_monitor_set(struct dpll_device *dpll, struct nlattr *a,
-		      struct netlink_ext_ack *extack)
-{
-	const struct dpll_device_ops *ops = dpll_device_ops(dpll);
-	enum dpll_feature_state state = nla_get_u32(a), old_state;
-	int ret;
-
-	if (!(ops->freq_monitor_set && ops->freq_monitor_get)) {
-		NL_SET_ERR_MSG_ATTR(extack, a,
-				    "dpll device not capable of frequency monitor");
-		return -EOPNOTSUPP;
-	}
-	ret = ops->freq_monitor_get(dpll, dpll_priv(dpll), &old_state,
-				    extack);
-	if (ret) {
-		NL_SET_ERR_MSG(extack,
-			       "unable to get current state of frequency monitor");
-		return ret;
-	}
-	if (state == old_state)
-		return 0;
-
-	return ops->freq_monitor_set(dpll, dpll_priv(dpll), state, extack);
-}
-
-static int
 dpll_pin_freq_set(struct dpll_pin *pin, struct nlattr *a,
 		  struct netlink_ext_ack *extack)
 {
@@ -1092,19 +818,12 @@ dpll_pin_freq_set(struct dpll_pin *pin, struct nlattr *a,
 
 	xa_for_each(&pin->dpll_refs, i, ref) {
 		ops = dpll_pin_ops(ref);
-		if ((!ops->frequency_set || !ops->frequency_get) &&
-		    ref->dpll->module == pin->module &&
-		    ref->dpll->clock_id == pin->clock_id) {
-			NL_SET_ERR_MSG(extack,
-				       "frequency set not supported by the device");
+		if (!ops->frequency_set || !ops->frequency_get) {
+			NL_SET_ERR_MSG(extack, "frequency set not supported by the device");
 			return -EOPNOTSUPP;
 		}
 	}
-	ref = dpll_pin_own_dpll_ref_first(pin);
-	if (!ref) {
-		NL_SET_ERR_MSG(extack, "pin owner dpll not found");
-		return -ENODEV;
-	}
+	ref = dpll_xa_ref_dpll_first(&pin->dpll_refs);
 	ops = dpll_pin_ops(ref);
 	dpll = ref->dpll;
 	ret = ops->frequency_get(pin, dpll_pin_on_dpll_priv(dpll, pin), dpll,
@@ -1118,8 +837,6 @@ dpll_pin_freq_set(struct dpll_pin *pin, struct nlattr *a,
 
 	xa_for_each(&pin->dpll_refs, i, ref) {
 		ops = dpll_pin_ops(ref);
-		if (!ops->frequency_set)
-			continue;
 		dpll = ref->dpll;
 		ret = ops->frequency_set(pin, dpll_pin_on_dpll_priv(dpll, pin),
 					 dpll, dpll_priv(dpll), freq, extack);
@@ -1139,8 +856,6 @@ rollback:
 		if (ref == failed)
 			break;
 		ops = dpll_pin_ops(ref);
-		if (!ops->frequency_set)
-			continue;
 		dpll = ref->dpll;
 		if (ops->frequency_set(pin, dpll_pin_on_dpll_priv(dpll, pin),
 				       dpll, dpll_priv(dpll), old_freq, extack))
@@ -1164,19 +879,13 @@ dpll_pin_esync_set(struct dpll_pin *pin, struct nlattr *a,
 
 	xa_for_each(&pin->dpll_refs, i, ref) {
 		ops = dpll_pin_ops(ref);
-		if ((!ops->esync_set || !ops->esync_get) &&
-		    ref->dpll->module == pin->module &&
-		    ref->dpll->clock_id == pin->clock_id) {
+		if (!ops->esync_set || !ops->esync_get) {
 			NL_SET_ERR_MSG(extack,
 				       "embedded sync feature is not supported by this device");
 			return -EOPNOTSUPP;
 		}
 	}
-	ref = dpll_pin_own_dpll_ref_first(pin);
-	if (!ref) {
-		NL_SET_ERR_MSG(extack, "pin owner dpll not found");
-		return -ENODEV;
-	}
+	ref = dpll_xa_ref_dpll_first(&pin->dpll_refs);
 	ops = dpll_pin_ops(ref);
 	dpll = ref->dpll;
 	ret = ops->esync_get(pin, dpll_pin_on_dpll_priv(dpll, pin), dpll,
@@ -1200,8 +909,6 @@ dpll_pin_esync_set(struct dpll_pin *pin, struct nlattr *a,
 		void *pin_dpll_priv;
 
 		ops = dpll_pin_ops(ref);
-		if (!ops->esync_set)
-			continue;
 		dpll = ref->dpll;
 		pin_dpll_priv = dpll_pin_on_dpll_priv(dpll, pin);
 		ret = ops->esync_set(pin, pin_dpll_priv, dpll, dpll_priv(dpll),
@@ -1225,8 +932,6 @@ rollback:
 		if (ref == failed)
 			break;
 		ops = dpll_pin_ops(ref);
-		if (!ops->esync_set)
-			continue;
 		dpll = ref->dpll;
 		pin_dpll_priv = dpll_pin_on_dpll_priv(dpll, pin);
 		if (ops->esync_set(pin, pin_dpll_priv, dpll, dpll_priv(dpll),
@@ -1261,11 +966,8 @@ dpll_pin_ref_sync_state_set(struct dpll_pin *pin,
 		NL_SET_ERR_MSG(extack, "reference sync pin not available");
 		return -EINVAL;
 	}
-	ref = dpll_pin_own_dpll_ref_first(pin);
-	if (!ref) {
-		NL_SET_ERR_MSG(extack, "pin owner dpll not found");
-		return -ENODEV;
-	}
+	ref = dpll_xa_ref_dpll_first(&pin->dpll_refs);
+	ASSERT_NOT_NULL(ref);
 	ops = dpll_pin_ops(ref);
 	if (!ops->ref_sync_set || !ops->ref_sync_get) {
 		NL_SET_ERR_MSG(extack, "reference sync not supported by this pin");
@@ -1284,8 +986,6 @@ dpll_pin_ref_sync_state_set(struct dpll_pin *pin,
 		return 0;
 	xa_for_each(&pin->dpll_refs, i, ref) {
 		ops = dpll_pin_ops(ref);
-		if (!ops->ref_sync_set)
-			continue;
 		dpll = ref->dpll;
 		ret = ops->ref_sync_set(pin, dpll_pin_on_dpll_priv(dpll, pin),
 					ref_sync_pin,
@@ -1308,8 +1008,6 @@ rollback:
 		if (ref == failed)
 			break;
 		ops = dpll_pin_ops(ref);
-		if (!ops->ref_sync_set)
-			continue;
 		dpll = ref->dpll;
 		if (ops->ref_sync_set(pin, dpll_pin_on_dpll_priv(dpll, pin),
 				      ref_sync_pin,
@@ -1358,11 +1056,8 @@ dpll_pin_on_pin_state_set(struct dpll_pin *pin, u32 parent_idx,
 	unsigned long i;
 	int ret;
 
-	/* fwnode pins may not set the capability bit upfront; let the ops
-	 * layer return -EOPNOTSUPP if the operation is unsupported.
-	 */
 	if (!(DPLL_PIN_CAPABILITIES_STATE_CAN_CHANGE &
-	      pin->prop.capabilities) && !pin->fwnode) {
+	      pin->prop.capabilities)) {
 		NL_SET_ERR_MSG(extack, "state changing is not allowed");
 		return -EOPNOTSUPP;
 	}
@@ -1397,11 +1092,8 @@ dpll_pin_state_set(struct dpll_device *dpll, struct dpll_pin *pin,
 	struct dpll_pin_ref *ref;
 	int ret;
 
-	/* fwnode pins may not set the capability bit upfront; let the ops
-	 * layer return -EOPNOTSUPP if the operation is unsupported.
-	 */
 	if (!(DPLL_PIN_CAPABILITIES_STATE_CAN_CHANGE &
-	      pin->prop.capabilities) && !pin->fwnode) {
+	      pin->prop.capabilities)) {
 		NL_SET_ERR_MSG(extack, "state changing is not allowed");
 		return -EOPNOTSUPP;
 	}
@@ -1489,30 +1181,18 @@ dpll_pin_phase_adj_set(struct dpll_pin *pin, struct nlattr *phase_adj_attr,
 	if (phase_adj > pin->prop.phase_range.max ||
 	    phase_adj < pin->prop.phase_range.min) {
 		NL_SET_ERR_MSG_ATTR(extack, phase_adj_attr,
-				    "phase adjust value of out range");
-		return -EINVAL;
-	}
-	if (pin->prop.phase_gran && phase_adj % (s32)pin->prop.phase_gran) {
-		NL_SET_ERR_MSG_ATTR_FMT(extack, phase_adj_attr,
-					"phase adjust value not multiple of %u",
-					pin->prop.phase_gran);
+				    "phase adjust value not supported");
 		return -EINVAL;
 	}
 
 	xa_for_each(&pin->dpll_refs, i, ref) {
 		ops = dpll_pin_ops(ref);
-		if ((!ops->phase_adjust_set || !ops->phase_adjust_get) &&
-		    ref->dpll->module == pin->module &&
-		    ref->dpll->clock_id == pin->clock_id) {
+		if (!ops->phase_adjust_set || !ops->phase_adjust_get) {
 			NL_SET_ERR_MSG(extack, "phase adjust not supported");
 			return -EOPNOTSUPP;
 		}
 	}
-	ref = dpll_pin_own_dpll_ref_first(pin);
-	if (!ref) {
-		NL_SET_ERR_MSG(extack, "pin owner dpll not found");
-		return -ENODEV;
-	}
+	ref = dpll_xa_ref_dpll_first(&pin->dpll_refs);
 	ops = dpll_pin_ops(ref);
 	dpll = ref->dpll;
 	ret = ops->phase_adjust_get(pin, dpll_pin_on_dpll_priv(dpll, pin),
@@ -1527,8 +1207,6 @@ dpll_pin_phase_adj_set(struct dpll_pin *pin, struct nlattr *phase_adj_attr,
 
 	xa_for_each(&pin->dpll_refs, i, ref) {
 		ops = dpll_pin_ops(ref);
-		if (!ops->phase_adjust_set)
-			continue;
 		dpll = ref->dpll;
 		ret = ops->phase_adjust_set(pin,
 					    dpll_pin_on_dpll_priv(dpll, pin),
@@ -1551,8 +1229,6 @@ rollback:
 		if (ref == failed)
 			break;
 		ops = dpll_pin_ops(ref);
-		if (!ops->phase_adjust_set)
-			continue;
 		dpll = ref->dpll;
 		if (ops->phase_adjust_set(pin, dpll_pin_on_dpll_priv(dpll, pin),
 					  dpll, dpll_priv(dpll), old_phase_adj,
@@ -1699,9 +1375,9 @@ dpll_pin_find(u64 clock_id, struct nlattr *mod_name_attr,
 	xa_for_each_marked(&dpll_pin_xa, i, pin, DPLL_REGISTERED) {
 		prop = &pin->prop;
 		cid_match = clock_id ? pin->clock_id == clock_id : true;
-		mod_match = mod_name_attr && pin->module_name[0] ?
+		mod_match = mod_name_attr && module_name(pin->module) ?
 			!nla_strcmp(mod_name_attr,
-				    pin->module_name) : true;
+				    module_name(pin->module)) : true;
 		type_match = type ? prop->type == type : true;
 		board_match = board_label ? (prop->board_label ?
 			!nla_strcmp(board_label, prop->board_label) : false) :
@@ -1803,18 +1479,16 @@ int dpll_nl_pin_id_get_doit(struct sk_buff *skb, struct genl_info *info)
 		return -EMSGSIZE;
 	}
 	pin = dpll_pin_find_from_nlattr(info);
-	if (IS_ERR(pin)) {
-		nlmsg_free(msg);
-		return PTR_ERR(pin);
-	}
-	if (!dpll_pin_available(pin)) {
-		nlmsg_free(msg);
-		return -ENODEV;
-	}
-	ret = dpll_msg_add_pin_handle(msg, pin);
-	if (ret) {
-		nlmsg_free(msg);
-		return ret;
+	if (!IS_ERR(pin)) {
+		if (!dpll_pin_available(pin)) {
+			nlmsg_free(msg);
+			return -ENODEV;
+		}
+		ret = dpll_msg_add_pin_handle(msg, pin);
+		if (ret) {
+			nlmsg_free(msg);
+			return ret;
+		}
 	}
 	genlmsg_end(msg, hdr);
 
@@ -1981,14 +1655,12 @@ int dpll_nl_device_id_get_doit(struct sk_buff *skb, struct genl_info *info)
 	}
 
 	dpll = dpll_device_find_from_nlattr(info);
-	if (IS_ERR(dpll)) {
-		nlmsg_free(msg);
-		return PTR_ERR(dpll);
-	}
-	ret = dpll_msg_add_dev_handle(msg, dpll);
-	if (ret) {
-		nlmsg_free(msg);
-		return ret;
+	if (!IS_ERR(dpll)) {
+		ret = dpll_msg_add_dev_handle(msg, dpll);
+		if (ret) {
+			nlmsg_free(msg);
+			return ret;
+		}
 	}
 	genlmsg_end(msg, hdr);
 
@@ -2022,49 +1694,10 @@ int dpll_nl_device_get_doit(struct sk_buff *skb, struct genl_info *info)
 	return genlmsg_reply(msg, info);
 }
 
-static int
-dpll_set_from_nlattr(struct dpll_device *dpll, struct genl_info *info)
-{
-	struct nlattr *a;
-	int rem, ret;
-
-	nla_for_each_attr(a, genlmsg_data(info->genlhdr),
-			  genlmsg_len(info->genlhdr), rem) {
-		switch (nla_type(a)) {
-		case DPLL_A_MODE:
-			ret = dpll_mode_set(dpll, a, info->extack);
-			if (ret)
-				return ret;
-			break;
-		case DPLL_A_PHASE_OFFSET_MONITOR:
-			ret = dpll_phase_offset_monitor_set(dpll, a,
-							    info->extack);
-			if (ret)
-				return ret;
-			break;
-		case DPLL_A_PHASE_OFFSET_AVG_FACTOR:
-			ret = dpll_phase_offset_avg_factor_set(dpll, a,
-							       info->extack);
-			if (ret)
-				return ret;
-			break;
-		case DPLL_A_FREQUENCY_MONITOR:
-			ret = dpll_freq_monitor_set(dpll, a,
-						    info->extack);
-			if (ret)
-				return ret;
-			break;
-		}
-	}
-
-	return 0;
-}
-
 int dpll_nl_device_set_doit(struct sk_buff *skb, struct genl_info *info)
 {
-	struct dpll_device *dpll = info->user_ptr[0];
-
-	return dpll_set_from_nlattr(dpll, info);
+	/* placeholder for set command */
+	return 0;
 }
 
 int dpll_nl_device_get_dumpit(struct sk_buff *skb, struct netlink_callback *cb)

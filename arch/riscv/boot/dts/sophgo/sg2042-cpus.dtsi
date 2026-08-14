@@ -259,11 +259,9 @@
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x0>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <0>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -272,7 +270,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache0>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <0>;
 
 			cpu0_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -287,11 +284,9 @@
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x1>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <1>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -300,7 +295,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache0>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <0>;
 
 			cpu1_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -315,11 +309,9 @@
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x2>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <2>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -328,7 +320,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache0>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <0>;
 
 			cpu2_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -343,11 +334,9 @@
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x3>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <3>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -356,7 +345,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache0>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <0>;
 
 			cpu3_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -371,11 +359,9 @@
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x4>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <4>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -384,7 +370,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache1>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <0>;
 
 			cpu4_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -399,11 +384,9 @@
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x5>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <5>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -412,7 +395,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache1>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <0>;
 
 			cpu5_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -427,11 +409,9 @@
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x6>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <6>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -440,7 +420,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache1>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <0>;
 
 			cpu6_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -455,11 +434,9 @@
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x7>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <7>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -468,7 +445,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache1>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <0>;
 
 			cpu7_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -483,11 +459,9 @@
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x8>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <8>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -496,7 +470,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache4>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <1>;
 
 			cpu8_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -511,11 +484,9 @@
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x9>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <9>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -524,7 +495,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache4>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <1>;
 
 			cpu9_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -533,17 +503,15 @@
 			};
 		};
 
-		cpu10: cpu@a {
+		cpu10: cpu@10 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0xa>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <10>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -552,7 +520,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache4>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <1>;
 
 			cpu10_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -561,17 +528,15 @@
 			};
 		};
 
-		cpu11: cpu@b {
+		cpu11: cpu@11 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0xb>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <11>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -580,7 +545,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache4>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <1>;
 
 			cpu11_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -589,17 +553,15 @@
 			};
 		};
 
-		cpu12: cpu@c {
+		cpu12: cpu@12 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0xc>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <12>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -608,7 +570,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache5>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <1>;
 
 			cpu12_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -617,17 +578,15 @@
 			};
 		};
 
-		cpu13: cpu@d {
+		cpu13: cpu@13 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0xd>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <13>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -636,7 +595,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache5>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <1>;
 
 			cpu13_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -645,17 +603,15 @@
 			};
 		};
 
-		cpu14: cpu@e {
+		cpu14: cpu@14 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0xe>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <14>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -664,7 +620,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache5>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <1>;
 
 			cpu14_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -673,17 +628,15 @@
 			};
 		};
 
-		cpu15: cpu@f {
+		cpu15: cpu@15 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0xf>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <15>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -692,7 +645,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache5>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <1>;
 
 			cpu15_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -701,17 +653,15 @@
 			};
 		};
 
-		cpu16: cpu@10 {
+		cpu16: cpu@16 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x10>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <16>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -720,7 +670,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache2>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <0>;
 
 			cpu16_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -729,17 +678,15 @@
 			};
 		};
 
-		cpu17: cpu@11 {
+		cpu17: cpu@17 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x11>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <17>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -748,7 +695,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache2>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <0>;
 
 			cpu17_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -757,17 +703,15 @@
 			};
 		};
 
-		cpu18: cpu@12 {
+		cpu18: cpu@18 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x12>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <18>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -776,7 +720,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache2>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <0>;
 
 			cpu18_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -785,17 +728,15 @@
 			};
 		};
 
-		cpu19: cpu@13 {
+		cpu19: cpu@19 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x13>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <19>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -804,7 +745,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache2>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <0>;
 
 			cpu19_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -813,17 +753,15 @@
 			};
 		};
 
-		cpu20: cpu@14 {
+		cpu20: cpu@20 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x14>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <20>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -832,7 +770,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache3>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <0>;
 
 			cpu20_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -841,17 +778,15 @@
 			};
 		};
 
-		cpu21: cpu@15 {
+		cpu21: cpu@21 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x15>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <21>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -860,7 +795,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache3>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <0>;
 
 			cpu21_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -869,17 +803,15 @@
 			};
 		};
 
-		cpu22: cpu@16 {
+		cpu22: cpu@22 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x16>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <22>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -888,7 +820,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache3>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <0>;
 
 			cpu22_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -897,17 +828,15 @@
 			};
 		};
 
-		cpu23: cpu@17 {
+		cpu23: cpu@23 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x17>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <23>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -916,7 +845,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache3>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <0>;
 
 			cpu23_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -925,17 +853,15 @@
 			};
 		};
 
-		cpu24: cpu@18 {
+		cpu24: cpu@24 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x18>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <24>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -944,7 +870,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache6>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <1>;
 
 			cpu24_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -953,17 +878,15 @@
 			};
 		};
 
-		cpu25: cpu@19 {
+		cpu25: cpu@25 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x19>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <25>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -972,7 +895,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache6>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <1>;
 
 			cpu25_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -981,17 +903,15 @@
 			};
 		};
 
-		cpu26: cpu@1a {
+		cpu26: cpu@26 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x1a>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <26>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1000,7 +920,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache6>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <1>;
 
 			cpu26_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1009,17 +928,15 @@
 			};
 		};
 
-		cpu27: cpu@1b {
+		cpu27: cpu@27 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x1b>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <27>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1028,7 +945,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache6>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <1>;
 
 			cpu27_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1037,17 +953,15 @@
 			};
 		};
 
-		cpu28: cpu@1c {
+		cpu28: cpu@28 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x1c>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <28>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1056,7 +970,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache7>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <1>;
 
 			cpu28_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1065,17 +978,15 @@
 			};
 		};
 
-		cpu29: cpu@1d {
+		cpu29: cpu@29 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x1d>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <29>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1084,7 +995,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache7>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <1>;
 
 			cpu29_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1093,17 +1003,15 @@
 			};
 		};
 
-		cpu30: cpu@1e {
+		cpu30: cpu@30 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x1e>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <30>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1112,7 +1020,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache7>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <1>;
 
 			cpu30_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1121,17 +1028,15 @@
 			};
 		};
 
-		cpu31: cpu@1f {
+		cpu31: cpu@31 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x1f>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <31>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1140,7 +1045,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache7>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <1>;
 
 			cpu31_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1149,17 +1053,15 @@
 			};
 		};
 
-		cpu32: cpu@20 {
+		cpu32: cpu@32 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x20>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <32>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1168,7 +1070,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache8>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <2>;
 
 			cpu32_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1177,17 +1078,15 @@
 			};
 		};
 
-		cpu33: cpu@21 {
+		cpu33: cpu@33 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x21>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <33>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1196,7 +1095,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache8>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <2>;
 
 			cpu33_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1205,17 +1103,15 @@
 			};
 		};
 
-		cpu34: cpu@22 {
+		cpu34: cpu@34 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x22>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <34>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1224,7 +1120,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache8>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <2>;
 
 			cpu34_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1233,17 +1128,15 @@
 			};
 		};
 
-		cpu35: cpu@23 {
+		cpu35: cpu@35 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x23>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <35>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1252,7 +1145,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache8>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <2>;
 
 			cpu35_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1261,17 +1153,15 @@
 			};
 		};
 
-		cpu36: cpu@24 {
+		cpu36: cpu@36 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x24>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <36>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1280,7 +1170,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache9>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <2>;
 
 			cpu36_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1289,17 +1178,15 @@
 			};
 		};
 
-		cpu37: cpu@25 {
+		cpu37: cpu@37 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x25>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <37>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1308,7 +1195,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache9>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <2>;
 
 			cpu37_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1317,17 +1203,15 @@
 			};
 		};
 
-		cpu38: cpu@26 {
+		cpu38: cpu@38 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x26>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <38>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1336,7 +1220,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache9>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <2>;
 
 			cpu38_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1345,17 +1228,15 @@
 			};
 		};
 
-		cpu39: cpu@27 {
+		cpu39: cpu@39 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x27>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <39>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1364,7 +1245,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache9>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <2>;
 
 			cpu39_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1373,17 +1253,15 @@
 			};
 		};
 
-		cpu40: cpu@28 {
+		cpu40: cpu@40 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x28>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <40>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1392,7 +1270,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache12>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <3>;
 
 			cpu40_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1401,17 +1278,15 @@
 			};
 		};
 
-		cpu41: cpu@29 {
+		cpu41: cpu@41 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x29>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <41>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1420,7 +1295,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache12>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <3>;
 
 			cpu41_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1429,17 +1303,15 @@
 			};
 		};
 
-		cpu42: cpu@2a {
+		cpu42: cpu@42 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x2a>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <42>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1448,7 +1320,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache12>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <3>;
 
 			cpu42_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1457,17 +1328,15 @@
 			};
 		};
 
-		cpu43: cpu@2b {
+		cpu43: cpu@43 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x2b>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <43>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1476,7 +1345,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache12>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <3>;
 
 			cpu43_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1485,17 +1353,15 @@
 			};
 		};
 
-		cpu44: cpu@2c {
+		cpu44: cpu@44 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x2c>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <44>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1504,7 +1370,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache13>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <3>;
 
 			cpu44_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1513,17 +1378,15 @@
 			};
 		};
 
-		cpu45: cpu@2d {
+		cpu45: cpu@45 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x2d>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <45>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1532,7 +1395,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache13>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <3>;
 
 			cpu45_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1541,17 +1403,15 @@
 			};
 		};
 
-		cpu46: cpu@2e {
+		cpu46: cpu@46 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x2e>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <46>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1560,7 +1420,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache13>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <3>;
 
 			cpu46_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1569,17 +1428,15 @@
 			};
 		};
 
-		cpu47: cpu@2f {
+		cpu47: cpu@47 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x2f>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <47>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1588,7 +1445,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache13>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <3>;
 
 			cpu47_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1597,17 +1453,15 @@
 			};
 		};
 
-		cpu48: cpu@30 {
+		cpu48: cpu@48 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x30>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <48>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1616,7 +1470,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache10>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <2>;
 
 			cpu48_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1625,17 +1478,15 @@
 			};
 		};
 
-		cpu49: cpu@31 {
+		cpu49: cpu@49 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x31>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <49>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1644,7 +1495,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache10>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <2>;
 
 			cpu49_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1653,17 +1503,15 @@
 			};
 		};
 
-		cpu50: cpu@32 {
+		cpu50: cpu@50 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x32>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <50>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1672,7 +1520,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache10>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <2>;
 
 			cpu50_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1681,17 +1528,15 @@
 			};
 		};
 
-		cpu51: cpu@33 {
+		cpu51: cpu@51 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x33>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <51>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1700,7 +1545,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache10>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <2>;
 
 			cpu51_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1709,17 +1553,15 @@
 			};
 		};
 
-		cpu52: cpu@34 {
+		cpu52: cpu@52 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x34>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <52>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1728,7 +1570,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache11>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <2>;
 
 			cpu52_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1737,17 +1578,15 @@
 			};
 		};
 
-		cpu53: cpu@35 {
+		cpu53: cpu@53 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x35>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <53>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1756,7 +1595,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache11>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <2>;
 
 			cpu53_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1765,17 +1603,15 @@
 			};
 		};
 
-		cpu54: cpu@36 {
+		cpu54: cpu@54 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x36>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <54>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1784,7 +1620,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache11>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <2>;
 
 			cpu54_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1793,17 +1628,15 @@
 			};
 		};
 
-		cpu55: cpu@37 {
+		cpu55: cpu@55 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x37>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <55>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1812,7 +1645,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache11>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <2>;
 
 			cpu55_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1821,17 +1653,15 @@
 			};
 		};
 
-		cpu56: cpu@38 {
+		cpu56: cpu@56 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x38>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <56>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1840,7 +1670,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache14>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <3>;
 
 			cpu56_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1849,17 +1678,15 @@
 			};
 		};
 
-		cpu57: cpu@39 {
+		cpu57: cpu@57 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x39>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <57>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1868,7 +1695,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache14>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <3>;
 
 			cpu57_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1877,17 +1703,15 @@
 			};
 		};
 
-		cpu58: cpu@3a {
+		cpu58: cpu@58 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x3a>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <58>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1896,7 +1720,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache14>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <3>;
 
 			cpu58_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1905,17 +1728,15 @@
 			};
 		};
 
-		cpu59: cpu@3b {
+		cpu59: cpu@59 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x3b>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <59>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1924,7 +1745,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache14>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <3>;
 
 			cpu59_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1933,17 +1753,15 @@
 			};
 		};
 
-		cpu60: cpu@3c {
+		cpu60: cpu@60 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x3c>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <60>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1952,7 +1770,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache15>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <3>;
 
 			cpu60_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1961,17 +1778,15 @@
 			};
 		};
 
-		cpu61: cpu@3d {
+		cpu61: cpu@61 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x3d>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <61>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -1980,7 +1795,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache15>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <3>;
 
 			cpu61_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -1989,17 +1803,15 @@
 			};
 		};
 
-		cpu62: cpu@3e {
+		cpu62: cpu@62 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x3e>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <62>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -2008,7 +1820,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache15>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <3>;
 
 			cpu62_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -2017,17 +1828,15 @@
 			};
 		};
 
-		cpu63: cpu@3f {
+		cpu63: cpu@63 {
 			compatible = "thead,c920", "riscv";
 			device_type = "cpu";
 			riscv,isa = "rv64imafdc";
 			riscv,isa-base = "rv64i";
 			riscv,isa-extensions = "i", "m", "a", "f", "d", "c",
-					       "ziccrse", "zicntr", "zicsr",
-					       "zifencei", "zihpm", "zfh",
-					       "xtheadvector";
-			thead,vlenb = <16>;
-			reg = <0x3f>;
+					       "zicntr", "zicsr", "zifencei",
+					       "zihpm";
+			reg = <63>;
 			i-cache-block-size = <64>;
 			i-cache-size = <65536>;
 			i-cache-sets = <512>;
@@ -2036,7 +1845,6 @@
 			d-cache-sets = <512>;
 			next-level-cache = <&l2_cache15>;
 			mmu-type = "riscv,sv39";
-			numa-node-id = <3>;
 
 			cpu63_intc: interrupt-controller {
 				compatible = "riscv,cpu-intc";
@@ -2187,311 +1995,6 @@
 			cache-size = <1048576>;
 			cache-sets = <1024>;
 			cache-unified;
-		};
-	};
-
-	soc {
-		intc: interrupt-controller@7090000000 {
-			compatible = "sophgo,sg2042-plic", "thead,c900-plic";
-			#address-cells = <0>;
-			#interrupt-cells = <2>;
-			reg = <0x00000070 0x90000000 0x00000000 0x04000000>;
-			interrupt-controller;
-			interrupts-extended =
-				<&cpu0_intc 11>,  <&cpu0_intc 9>,
-				<&cpu1_intc 11>,  <&cpu1_intc 9>,
-				<&cpu2_intc 11>,  <&cpu2_intc 9>,
-				<&cpu3_intc 11>,  <&cpu3_intc 9>,
-				<&cpu4_intc 11>,  <&cpu4_intc 9>,
-				<&cpu5_intc 11>,  <&cpu5_intc 9>,
-				<&cpu6_intc 11>,  <&cpu6_intc 9>,
-				<&cpu7_intc 11>,  <&cpu7_intc 9>,
-				<&cpu8_intc 11>,  <&cpu8_intc 9>,
-				<&cpu9_intc 11>,  <&cpu9_intc 9>,
-				<&cpu10_intc 11>, <&cpu10_intc 9>,
-				<&cpu11_intc 11>, <&cpu11_intc 9>,
-				<&cpu12_intc 11>, <&cpu12_intc 9>,
-				<&cpu13_intc 11>, <&cpu13_intc 9>,
-				<&cpu14_intc 11>, <&cpu14_intc 9>,
-				<&cpu15_intc 11>, <&cpu15_intc 9>,
-				<&cpu16_intc 11>, <&cpu16_intc 9>,
-				<&cpu17_intc 11>, <&cpu17_intc 9>,
-				<&cpu18_intc 11>, <&cpu18_intc 9>,
-				<&cpu19_intc 11>, <&cpu19_intc 9>,
-				<&cpu20_intc 11>, <&cpu20_intc 9>,
-				<&cpu21_intc 11>, <&cpu21_intc 9>,
-				<&cpu22_intc 11>, <&cpu22_intc 9>,
-				<&cpu23_intc 11>, <&cpu23_intc 9>,
-				<&cpu24_intc 11>, <&cpu24_intc 9>,
-				<&cpu25_intc 11>, <&cpu25_intc 9>,
-				<&cpu26_intc 11>, <&cpu26_intc 9>,
-				<&cpu27_intc 11>, <&cpu27_intc 9>,
-				<&cpu28_intc 11>, <&cpu28_intc 9>,
-				<&cpu29_intc 11>, <&cpu29_intc 9>,
-				<&cpu30_intc 11>, <&cpu30_intc 9>,
-				<&cpu31_intc 11>, <&cpu31_intc 9>,
-				<&cpu32_intc 11>, <&cpu32_intc 9>,
-				<&cpu33_intc 11>, <&cpu33_intc 9>,
-				<&cpu34_intc 11>, <&cpu34_intc 9>,
-				<&cpu35_intc 11>, <&cpu35_intc 9>,
-				<&cpu36_intc 11>, <&cpu36_intc 9>,
-				<&cpu37_intc 11>, <&cpu37_intc 9>,
-				<&cpu38_intc 11>, <&cpu38_intc 9>,
-				<&cpu39_intc 11>, <&cpu39_intc 9>,
-				<&cpu40_intc 11>, <&cpu40_intc 9>,
-				<&cpu41_intc 11>, <&cpu41_intc 9>,
-				<&cpu42_intc 11>, <&cpu42_intc 9>,
-				<&cpu43_intc 11>, <&cpu43_intc 9>,
-				<&cpu44_intc 11>, <&cpu44_intc 9>,
-				<&cpu45_intc 11>, <&cpu45_intc 9>,
-				<&cpu46_intc 11>, <&cpu46_intc 9>,
-				<&cpu47_intc 11>, <&cpu47_intc 9>,
-				<&cpu48_intc 11>, <&cpu48_intc 9>,
-				<&cpu49_intc 11>, <&cpu49_intc 9>,
-				<&cpu50_intc 11>, <&cpu50_intc 9>,
-				<&cpu51_intc 11>, <&cpu51_intc 9>,
-				<&cpu52_intc 11>, <&cpu52_intc 9>,
-				<&cpu53_intc 11>, <&cpu53_intc 9>,
-				<&cpu54_intc 11>, <&cpu54_intc 9>,
-				<&cpu55_intc 11>, <&cpu55_intc 9>,
-				<&cpu56_intc 11>, <&cpu56_intc 9>,
-				<&cpu57_intc 11>, <&cpu57_intc 9>,
-				<&cpu58_intc 11>, <&cpu58_intc 9>,
-				<&cpu59_intc 11>, <&cpu59_intc 9>,
-				<&cpu60_intc 11>, <&cpu60_intc 9>,
-				<&cpu61_intc 11>, <&cpu61_intc 9>,
-				<&cpu62_intc 11>, <&cpu62_intc 9>,
-				<&cpu63_intc 11>, <&cpu63_intc 9>;
-			riscv,ndev = <224>;
-		};
-
-		clint_mswi: interrupt-controller@7094000000 {
-			compatible = "sophgo,sg2042-aclint-mswi", "thead,c900-aclint-mswi";
-			reg = <0x00000070 0x94000000 0x00000000 0x00004000>;
-			interrupts-extended = <&cpu0_intc 3>,
-					      <&cpu1_intc 3>,
-					      <&cpu2_intc 3>,
-					      <&cpu3_intc 3>,
-					      <&cpu4_intc 3>,
-					      <&cpu5_intc 3>,
-					      <&cpu6_intc 3>,
-					      <&cpu7_intc 3>,
-					      <&cpu8_intc 3>,
-					      <&cpu9_intc 3>,
-					      <&cpu10_intc 3>,
-					      <&cpu11_intc 3>,
-					      <&cpu12_intc 3>,
-					      <&cpu13_intc 3>,
-					      <&cpu14_intc 3>,
-					      <&cpu15_intc 3>,
-					      <&cpu16_intc 3>,
-					      <&cpu17_intc 3>,
-					      <&cpu18_intc 3>,
-					      <&cpu19_intc 3>,
-					      <&cpu20_intc 3>,
-					      <&cpu21_intc 3>,
-					      <&cpu22_intc 3>,
-					      <&cpu23_intc 3>,
-					      <&cpu24_intc 3>,
-					      <&cpu25_intc 3>,
-					      <&cpu26_intc 3>,
-					      <&cpu27_intc 3>,
-					      <&cpu28_intc 3>,
-					      <&cpu29_intc 3>,
-					      <&cpu30_intc 3>,
-					      <&cpu31_intc 3>,
-					      <&cpu32_intc 3>,
-					      <&cpu33_intc 3>,
-					      <&cpu34_intc 3>,
-					      <&cpu35_intc 3>,
-					      <&cpu36_intc 3>,
-					      <&cpu37_intc 3>,
-					      <&cpu38_intc 3>,
-					      <&cpu39_intc 3>,
-					      <&cpu40_intc 3>,
-					      <&cpu41_intc 3>,
-					      <&cpu42_intc 3>,
-					      <&cpu43_intc 3>,
-					      <&cpu44_intc 3>,
-					      <&cpu45_intc 3>,
-					      <&cpu46_intc 3>,
-					      <&cpu47_intc 3>,
-					      <&cpu48_intc 3>,
-					      <&cpu49_intc 3>,
-					      <&cpu50_intc 3>,
-					      <&cpu51_intc 3>,
-					      <&cpu52_intc 3>,
-					      <&cpu53_intc 3>,
-					      <&cpu54_intc 3>,
-					      <&cpu55_intc 3>,
-					      <&cpu56_intc 3>,
-					      <&cpu57_intc 3>,
-					      <&cpu58_intc 3>,
-					      <&cpu59_intc 3>,
-					      <&cpu60_intc 3>,
-					      <&cpu61_intc 3>,
-					      <&cpu62_intc 3>,
-					      <&cpu63_intc 3>;
-		};
-
-		clint_mtimer0: timer@70ac004000 {
-			compatible = "sophgo,sg2042-aclint-mtimer", "thead,c900-aclint-mtimer";
-			reg = <0x00000070 0xac004000 0x00000000 0x0000c000>;
-			reg-names = "mtimecmp";
-			interrupts-extended = <&cpu0_intc 7>,
-					      <&cpu1_intc 7>,
-					      <&cpu2_intc 7>,
-					      <&cpu3_intc 7>;
-		};
-
-		clint_mtimer1: timer@70ac014000 {
-			compatible = "sophgo,sg2042-aclint-mtimer", "thead,c900-aclint-mtimer";
-			reg = <0x00000070 0xac014000 0x00000000 0x0000c000>;
-			reg-names = "mtimecmp";
-			interrupts-extended = <&cpu4_intc 7>,
-					      <&cpu5_intc 7>,
-					      <&cpu6_intc 7>,
-					      <&cpu7_intc 7>;
-		};
-
-		clint_mtimer2: timer@70ac024000 {
-			compatible = "sophgo,sg2042-aclint-mtimer", "thead,c900-aclint-mtimer";
-			reg = <0x00000070 0xac024000 0x00000000 0x0000c000>;
-			reg-names = "mtimecmp";
-			interrupts-extended = <&cpu8_intc 7>,
-					      <&cpu9_intc 7>,
-					      <&cpu10_intc 7>,
-					      <&cpu11_intc 7>;
-		};
-
-		clint_mtimer3: timer@70ac034000 {
-			compatible = "sophgo,sg2042-aclint-mtimer", "thead,c900-aclint-mtimer";
-			reg = <0x00000070 0xac034000 0x00000000 0x0000c000>;
-			reg-names = "mtimecmp";
-			interrupts-extended = <&cpu12_intc 7>,
-					      <&cpu13_intc 7>,
-					      <&cpu14_intc 7>,
-					      <&cpu15_intc 7>;
-		};
-
-		clint_mtimer4: timer@70ac044000 {
-			compatible = "sophgo,sg2042-aclint-mtimer", "thead,c900-aclint-mtimer";
-			reg = <0x00000070 0xac044000 0x00000000 0x0000c000>;
-			reg-names = "mtimecmp";
-			interrupts-extended = <&cpu16_intc 7>,
-					      <&cpu17_intc 7>,
-					      <&cpu18_intc 7>,
-					      <&cpu19_intc 7>;
-		};
-
-		clint_mtimer5: timer@70ac054000 {
-			compatible = "sophgo,sg2042-aclint-mtimer", "thead,c900-aclint-mtimer";
-			reg = <0x00000070 0xac054000 0x00000000 0x0000c000>;
-			reg-names = "mtimecmp";
-			interrupts-extended = <&cpu20_intc 7>,
-					      <&cpu21_intc 7>,
-					      <&cpu22_intc 7>,
-					      <&cpu23_intc 7>;
-		};
-
-		clint_mtimer6: timer@70ac064000 {
-			compatible = "sophgo,sg2042-aclint-mtimer", "thead,c900-aclint-mtimer";
-			reg = <0x00000070 0xac064000 0x00000000 0x0000c000>;
-			reg-names = "mtimecmp";
-			interrupts-extended = <&cpu24_intc 7>,
-					      <&cpu25_intc 7>,
-					      <&cpu26_intc 7>,
-					      <&cpu27_intc 7>;
-		};
-
-		clint_mtimer7: timer@70ac074000 {
-			compatible = "sophgo,sg2042-aclint-mtimer", "thead,c900-aclint-mtimer";
-			reg = <0x00000070 0xac074000 0x00000000 0x0000c000>;
-			reg-names = "mtimecmp";
-			interrupts-extended = <&cpu28_intc 7>,
-					      <&cpu29_intc 7>,
-					      <&cpu30_intc 7>,
-					      <&cpu31_intc 7>;
-		};
-
-		clint_mtimer8: timer@70ac084000 {
-			compatible = "sophgo,sg2042-aclint-mtimer", "thead,c900-aclint-mtimer";
-			reg = <0x00000070 0xac084000 0x00000000 0x0000c000>;
-			reg-names = "mtimecmp";
-			interrupts-extended = <&cpu32_intc 7>,
-					      <&cpu33_intc 7>,
-					      <&cpu34_intc 7>,
-					      <&cpu35_intc 7>;
-		};
-
-		clint_mtimer9: timer@70ac094000 {
-			compatible = "sophgo,sg2042-aclint-mtimer", "thead,c900-aclint-mtimer";
-			reg = <0x00000070 0xac094000 0x00000000 0x0000c000>;
-			reg-names = "mtimecmp";
-			interrupts-extended = <&cpu36_intc 7>,
-					      <&cpu37_intc 7>,
-					      <&cpu38_intc 7>,
-					      <&cpu39_intc 7>;
-		};
-
-		clint_mtimer10: timer@70ac0a4000 {
-			compatible = "sophgo,sg2042-aclint-mtimer", "thead,c900-aclint-mtimer";
-			reg = <0x00000070 0xac0a4000 0x00000000 0x0000c000>;
-			reg-names = "mtimecmp";
-			interrupts-extended = <&cpu40_intc 7>,
-					      <&cpu41_intc 7>,
-					      <&cpu42_intc 7>,
-					      <&cpu43_intc 7>;
-		};
-
-		clint_mtimer11: timer@70ac0b4000 {
-			compatible = "sophgo,sg2042-aclint-mtimer", "thead,c900-aclint-mtimer";
-			reg = <0x00000070 0xac0b4000 0x00000000 0x0000c000>;
-			reg-names = "mtimecmp";
-			interrupts-extended = <&cpu44_intc 7>,
-					      <&cpu45_intc 7>,
-					      <&cpu46_intc 7>,
-					      <&cpu47_intc 7>;
-		};
-
-		clint_mtimer12: timer@70ac0c4000 {
-			compatible = "sophgo,sg2042-aclint-mtimer", "thead,c900-aclint-mtimer";
-			reg = <0x00000070 0xac0c4000 0x00000000 0x0000c000>;
-			reg-names = "mtimecmp";
-			interrupts-extended = <&cpu48_intc 7>,
-					      <&cpu49_intc 7>,
-					      <&cpu50_intc 7>,
-					      <&cpu51_intc 7>;
-		};
-
-		clint_mtimer13: timer@70ac0d4000 {
-			compatible = "sophgo,sg2042-aclint-mtimer", "thead,c900-aclint-mtimer";
-			reg = <0x00000070 0xac0d4000 0x00000000 0x0000c000>;
-			reg-names = "mtimecmp";
-			interrupts-extended = <&cpu52_intc 7>,
-					      <&cpu53_intc 7>,
-					      <&cpu54_intc 7>,
-					      <&cpu55_intc 7>;
-		};
-
-		clint_mtimer14: timer@70ac0e4000 {
-			compatible = "sophgo,sg2042-aclint-mtimer", "thead,c900-aclint-mtimer";
-			reg = <0x00000070 0xac0e4000 0x00000000 0x0000c000>;
-			reg-names = "mtimecmp";
-			interrupts-extended = <&cpu56_intc 7>,
-					      <&cpu57_intc 7>,
-					      <&cpu58_intc 7>,
-					      <&cpu59_intc 7>;
-		};
-
-		clint_mtimer15: timer@70ac0f4000 {
-			compatible = "sophgo,sg2042-aclint-mtimer", "thead,c900-aclint-mtimer";
-			reg = <0x00000070 0xac0f4000 0x00000000 0x0000c000>;
-			reg-names = "mtimecmp";
-			interrupts-extended = <&cpu60_intc 7>,
-					      <&cpu61_intc 7>,
-					      <&cpu62_intc 7>,
-					      <&cpu63_intc 7>;
 		};
 	};
 };

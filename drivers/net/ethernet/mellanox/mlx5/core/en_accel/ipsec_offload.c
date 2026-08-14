@@ -44,7 +44,8 @@ u32 mlx5_ipsec_device_caps(struct mlx5_core_dev *mdev)
 
 	if (MLX5_CAP_IPSEC(mdev, ipsec_full_offload) &&
 	    (mdev->priv.steering->mode == MLX5_FLOW_STEERING_MODE_DMFS ||
-	     is_mdev_legacy_mode(mdev))) {
+	     (mdev->priv.steering->mode == MLX5_FLOW_STEERING_MODE_SMFS &&
+	     is_mdev_legacy_mode(mdev)))) {
 		if (MLX5_CAP_FLOWTABLE_NIC_TX(mdev,
 					      reformat_add_esp_trasport) &&
 		    MLX5_CAP_FLOWTABLE_NIC_RX(mdev,
@@ -497,7 +498,7 @@ static int mlx5e_ipsec_event(struct notifier_block *nb, unsigned long event,
 	if (!sa_entry)
 		return NOTIFY_DONE;
 
-	work = kmalloc_obj(*work, GFP_ATOMIC);
+	work = kmalloc(sizeof(*work), GFP_ATOMIC);
 	if (!work)
 		return NOTIFY_DONE;
 
@@ -516,7 +517,7 @@ int mlx5e_ipsec_aso_init(struct mlx5e_ipsec *ipsec)
 	struct device *pdev;
 	int err;
 
-	aso = kzalloc_obj(*ipsec->aso);
+	aso = kzalloc(sizeof(*ipsec->aso), GFP_KERNEL);
 	if (!aso)
 		return -ENOMEM;
 

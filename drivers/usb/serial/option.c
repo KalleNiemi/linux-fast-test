@@ -32,6 +32,7 @@
 #include <linux/jiffies.h>
 #include <linux/errno.h>
 #include <linux/tty.h>
+#include <linux/tty_flip.h>
 #include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/bitops.h>
@@ -2642,7 +2643,7 @@ static int option_attach(struct usb_serial *serial)
 	struct usb_wwan_intf_private *data;
 	unsigned long device_flags;
 
-	data = kzalloc_obj(struct usb_wwan_intf_private);
+	data = kzalloc(sizeof(struct usb_wwan_intf_private), GFP_KERNEL);
 	if (!data)
 		return -ENOMEM;
 

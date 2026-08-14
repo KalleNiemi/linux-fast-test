@@ -89,9 +89,9 @@ static int cscfg_add_csdev_cfg(struct coresight_device *csdev,
 	}
 	/* if matched features, add config to device.*/
 	if (config_csdev) {
-		raw_spin_lock_irqsave(&csdev->cscfg_csdev_lock, flags);
+		spin_lock_irqsave(&csdev->cscfg_csdev_lock, flags);
 		list_add(&config_csdev->node, &csdev->config_csdev_list);
-		raw_spin_unlock_irqrestore(&csdev->cscfg_csdev_lock, flags);
+		spin_unlock_irqrestore(&csdev->cscfg_csdev_lock, flags);
 	}
 
 	return 0;
@@ -194,9 +194,9 @@ static int cscfg_load_feat_csdev(struct coresight_device *csdev,
 
 	/* add to internal csdev feature list & initialise using reset call */
 	cscfg_reset_feat(feat_csdev);
-	raw_spin_lock_irqsave(&csdev->cscfg_csdev_lock, flags);
+	spin_lock_irqsave(&csdev->cscfg_csdev_lock, flags);
 	list_add(&feat_csdev->node, &csdev->feature_csdev_list);
-	raw_spin_unlock_irqrestore(&csdev->cscfg_csdev_lock, flags);
+	spin_unlock_irqrestore(&csdev->cscfg_csdev_lock, flags);
 
 	return 0;
 }
@@ -394,8 +394,6 @@ static void cscfg_remove_owned_csdev_configs(struct coresight_device *csdev, voi
 
 	if (list_empty(&csdev->config_csdev_list))
 		return;
-
-	guard(raw_spinlock_irqsave)(&csdev->cscfg_csdev_lock);
 
 	list_for_each_entry_safe(config_csdev, tmp, &csdev->config_csdev_list, node) {
 		if (config_csdev->config_desc->load_owner == load_owner)
@@ -756,7 +754,7 @@ static int cscfg_list_add_csdev(struct coresight_device *csdev,
 	struct cscfg_registered_csdev *csdev_item;
 
 	/* allocate the list entry structure */
-	csdev_item = kzalloc_obj(struct cscfg_registered_csdev);
+	csdev_item = kzalloc(sizeof(struct cscfg_registered_csdev), GFP_KERNEL);
 	if (!csdev_item)
 		return -ENOMEM;
 
@@ -767,7 +765,7 @@ static int cscfg_list_add_csdev(struct coresight_device *csdev,
 
 	INIT_LIST_HEAD(&csdev->feature_csdev_list);
 	INIT_LIST_HEAD(&csdev->config_csdev_list);
-	raw_spin_lock_init(&csdev->cscfg_csdev_lock);
+	spin_lock_init(&csdev->cscfg_csdev_lock);
 
 	return 0;
 }
@@ -857,7 +855,7 @@ void cscfg_csdev_reset_feats(struct coresight_device *csdev)
 	struct cscfg_feature_csdev *feat_csdev;
 	unsigned long flags;
 
-	raw_spin_lock_irqsave(&csdev->cscfg_csdev_lock, flags);
+	spin_lock_irqsave(&csdev->cscfg_csdev_lock, flags);
 	if (list_empty(&csdev->feature_csdev_list))
 		goto unlock_exit;
 
@@ -865,7 +863,7 @@ void cscfg_csdev_reset_feats(struct coresight_device *csdev)
 		cscfg_reset_feat(feat_csdev);
 
 unlock_exit:
-	raw_spin_unlock_irqrestore(&csdev->cscfg_csdev_lock, flags);
+	spin_unlock_irqrestore(&csdev->cscfg_csdev_lock, flags);
 }
 EXPORT_SYMBOL_GPL(cscfg_csdev_reset_feats);
 
@@ -953,41 +951,39 @@ int cscfg_config_sysfs_activate(struct cscfg_config_desc *config_desc, bool acti
 	unsigned long cfg_hash;
 	int err = 0;
 
-	guard(mutex)(&cscfg_mutex);
+	mutex_lock(&cscfg_mutex);
 
 	cfg_hash = (unsigned long)config_desc->event_ea->var;
 
 	if (activate) {
 		/* cannot be a current active value to activate this */
-		if (cscfg_mgr->sysfs_active_config)
-			return -EBUSY;
-
-		scoped_guard(raw_spinlock_irqsave, &cscfg_mgr->sysfs_store_lock) {
-			err = _cscfg_activate_config(cfg_hash);
-			if (err)
-				return err;
-
-			cscfg_mgr->sysfs_active_config = cfg_hash;
+		if (cscfg_mgr->sysfs_active_config) {
+			err = -EBUSY;
+			goto exit_unlock;
 		}
+		err = _cscfg_activate_config(cfg_hash);
+		if (!err)
+			cscfg_mgr->sysfs_active_config = cfg_hash;
 	} else {
-		if (cscfg_mgr->sysfs_active_config != cfg_hash)
-			return -EINVAL;
-
-		scoped_guard(raw_spinlock_irqsave, &cscfg_mgr->sysfs_store_lock) {
-			/* disable if matching current value */
+		/* disable if matching current value */
+		if (cscfg_mgr->sysfs_active_config == cfg_hash) {
 			_cscfg_deactivate_config(cfg_hash);
 			cscfg_mgr->sysfs_active_config = 0;
-		}
+		} else
+			err = -EINVAL;
 	}
 
-	return 0;
+exit_unlock:
+	mutex_unlock(&cscfg_mutex);
+	return err;
 }
 
 /* set the sysfs preset value */
 void cscfg_config_sysfs_set_preset(int preset)
 {
-	guard(raw_spinlock_irqsave)(&cscfg_mgr->sysfs_store_lock);
+	mutex_lock(&cscfg_mutex);
 	cscfg_mgr->sysfs_active_preset = preset;
+	mutex_unlock(&cscfg_mutex);
 }
 
 /*
@@ -996,9 +992,10 @@ void cscfg_config_sysfs_set_preset(int preset)
  */
 void cscfg_config_sysfs_get_active_cfg(unsigned long *cfg_hash, int *preset)
 {
-	guard(raw_spinlock_irqsave)(&cscfg_mgr->sysfs_store_lock);
+	mutex_lock(&cscfg_mutex);
 	*preset = cscfg_mgr->sysfs_active_preset;
 	*cfg_hash = cscfg_mgr->sysfs_active_config;
+	mutex_unlock(&cscfg_mutex);
 }
 EXPORT_SYMBOL_GPL(cscfg_config_sysfs_get_active_cfg);
 
@@ -1075,7 +1072,7 @@ int cscfg_csdev_enable_active_config(struct coresight_device *csdev,
 	 * Look for matching configuration - set the active configuration
 	 * context if found.
 	 */
-	raw_spin_lock_irqsave(&csdev->cscfg_csdev_lock, flags);
+	spin_lock_irqsave(&csdev->cscfg_csdev_lock, flags);
 	list_for_each_entry(config_csdev_item, &csdev->config_csdev_list, node) {
 		config_desc = config_csdev_item->config_desc;
 		if (((unsigned long)config_desc->event_ea->var == cfg_hash) &&
@@ -1085,7 +1082,7 @@ int cscfg_csdev_enable_active_config(struct coresight_device *csdev,
 			break;
 		}
 	}
-	raw_spin_unlock_irqrestore(&csdev->cscfg_csdev_lock, flags);
+	spin_unlock_irqrestore(&csdev->cscfg_csdev_lock, flags);
 
 	/*
 	 * If found, attempt to enable
@@ -1106,12 +1103,12 @@ int cscfg_csdev_enable_active_config(struct coresight_device *csdev,
 			 *
 			 * Set enabled if OK, err if not.
 			 */
-			raw_spin_lock_irqsave(&csdev->cscfg_csdev_lock, flags);
+			spin_lock_irqsave(&csdev->cscfg_csdev_lock, flags);
 			if (csdev->active_cscfg_ctxt)
 				config_csdev_active->enabled = true;
 			else
 				err = -EBUSY;
-			raw_spin_unlock_irqrestore(&csdev->cscfg_csdev_lock, flags);
+			spin_unlock_irqrestore(&csdev->cscfg_csdev_lock, flags);
 		}
 
 		if (err)
@@ -1144,7 +1141,7 @@ void cscfg_csdev_disable_active_config(struct coresight_device *csdev)
 	 * If it was not enabled, we have no work to do, otherwise mark as disabled.
 	 * Clear the active config pointer.
 	 */
-	raw_spin_lock_irqsave(&csdev->cscfg_csdev_lock, flags);
+	spin_lock_irqsave(&csdev->cscfg_csdev_lock, flags);
 	config_csdev = (struct cscfg_config_csdev *)csdev->active_cscfg_ctxt;
 	if (config_csdev) {
 		if (!config_csdev->enabled)
@@ -1153,7 +1150,7 @@ void cscfg_csdev_disable_active_config(struct coresight_device *csdev)
 			config_csdev->enabled = false;
 	}
 	csdev->active_cscfg_ctxt = NULL;
-	raw_spin_unlock_irqrestore(&csdev->cscfg_csdev_lock, flags);
+	spin_unlock_irqrestore(&csdev->cscfg_csdev_lock, flags);
 
 	/* true if there was an enabled active config */
 	if (config_csdev) {
@@ -1191,7 +1188,7 @@ static int cscfg_create_device(void)
 		goto create_dev_exit_unlock;
 	}
 
-	cscfg_mgr = kzalloc_obj(struct cscfg_manager);
+	cscfg_mgr = kzalloc(sizeof(struct cscfg_manager), GFP_KERNEL);
 	if (!cscfg_mgr)
 		goto create_dev_exit_unlock;
 
@@ -1202,7 +1199,6 @@ static int cscfg_create_device(void)
 	INIT_LIST_HEAD(&cscfg_mgr->load_order_list);
 	atomic_set(&cscfg_mgr->sys_active_cnt, 0);
 	cscfg_mgr->load_state = CSCFG_NONE;
-	raw_spin_lock_init(&cscfg_mgr->sysfs_store_lock);
 
 	/* setup the device */
 	dev = cscfg_device();

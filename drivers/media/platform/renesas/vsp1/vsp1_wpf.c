@@ -47,6 +47,7 @@ static int vsp1_wpf_set_rotation(struct vsp1_rwpf *wpf, unsigned int rotation)
 	struct v4l2_mbus_framefmt *sink_format;
 	struct v4l2_mbus_framefmt *source_format;
 	bool rotate;
+	int ret = 0;
 
 	/*
 	 * Only consider the 0°/180° from/to 90°/270° modifications, the rest
@@ -57,17 +58,19 @@ static int vsp1_wpf_set_rotation(struct vsp1_rwpf *wpf, unsigned int rotation)
 		return 0;
 
 	/* Changing rotation isn't allowed when buffers are allocated. */
-	guard(mutex)(&video->lock);
+	mutex_lock(&video->lock);
 
-	if (vb2_is_busy(&video->queue))
-		return -EBUSY;
+	if (vb2_is_busy(&video->queue)) {
+		ret = -EBUSY;
+		goto done;
+	}
 
 	sink_format = v4l2_subdev_state_get_format(wpf->entity.state,
 						   RWPF_PAD_SINK);
 	source_format = v4l2_subdev_state_get_format(wpf->entity.state,
 						     RWPF_PAD_SOURCE);
 
-	guard(mutex)(&wpf->entity.lock);
+	mutex_lock(&wpf->entity.lock);
 
 	if (rotate) {
 		source_format->width = sink_format->height;
@@ -79,7 +82,11 @@ static int vsp1_wpf_set_rotation(struct vsp1_rwpf *wpf, unsigned int rotation)
 
 	wpf->flip.rotate = rotate;
 
-	return 0;
+	mutex_unlock(&wpf->entity.lock);
+
+done:
+	mutex_unlock(&video->lock);
+	return ret;
 }
 
 static int vsp1_wpf_s_ctrl(struct v4l2_ctrl *ctrl)
@@ -111,9 +118,9 @@ static int vsp1_wpf_s_ctrl(struct v4l2_ctrl *ctrl)
 	if (rotation == 180 || rotation == 270)
 		flip ^= BIT(WPF_CTRL_VFLIP) | BIT(WPF_CTRL_HFLIP);
 
-	guard(spinlock_irq)(&wpf->flip.lock);
-
+	spin_lock_irq(&wpf->flip.lock);
 	wpf->flip.pending = flip;
+	spin_unlock_irq(&wpf->flip.lock);
 
 	return 0;
 }
@@ -126,7 +133,6 @@ static int wpf_init_controls(struct vsp1_rwpf *wpf)
 {
 	struct vsp1_device *vsp1 = wpf->entity.vsp1;
 	unsigned int num_flip_ctrls;
-	int ret;
 
 	spin_lock_init(&wpf->flip.lock);
 
@@ -150,9 +156,7 @@ static int wpf_init_controls(struct vsp1_rwpf *wpf)
 		num_flip_ctrls = 0;
 	}
 
-	ret = vsp1_rwpf_init_ctrls(wpf, num_flip_ctrls);
-	if (ret < 0)
-		return ret;
+	vsp1_rwpf_init_ctrls(wpf, num_flip_ctrls);
 
 	if (num_flip_ctrls >= 1) {
 		wpf->flip.ctrls.vflip =
@@ -170,8 +174,11 @@ static int wpf_init_controls(struct vsp1_rwpf *wpf)
 		v4l2_ctrl_cluster(3, &wpf->flip.ctrls.vflip);
 	}
 
-	if (wpf->ctrls.error)
+	if (wpf->ctrls.error) {
+		dev_err(vsp1->dev, "wpf%u: failed to initialize controls\n",
+			wpf->entity.index);
 		return wpf->ctrls.error;
+	}
 
 	return 0;
 }
@@ -240,11 +247,8 @@ static void wpf_configure_stream(struct vsp1_entity *entity,
 	sink_format = v4l2_subdev_state_get_format(state, RWPF_PAD_SINK);
 	source_format = v4l2_subdev_state_get_format(state, RWPF_PAD_SOURCE);
 
-	/*
-	 * Format configuration. Skip for IIF (VSPX) or if the pipe doesn't
-	 * write to memory.
-	 */
-	if (!pipe->iif && (!pipe->lif || wpf->writeback)) {
+	/* Format */
+	if (!pipe->lif || wpf->writeback) {
 		const struct v4l2_pix_format_mplane *format = &wpf->format;
 		const struct vsp1_format_info *fmtinfo = wpf->fmtinfo;
 
@@ -275,33 +279,8 @@ static void wpf_configure_stream(struct vsp1_entity *entity,
 				       (256 << VI6_WPF_ROT_CTRL_LMEM_WD_SHIFT));
 	}
 
-	if (sink_format->code != source_format->code) {
-		u16 ycbcr_enc;
-		u16 quantization;
-		u32 wrtm;
-
-		if (sink_format->code == MEDIA_BUS_FMT_AYUV8_1X32) {
-			ycbcr_enc = sink_format->ycbcr_enc;
-			quantization = sink_format->quantization;
-		} else {
-			ycbcr_enc = source_format->ycbcr_enc;
-			quantization = source_format->quantization;
-		}
-
-		if (ycbcr_enc == V4L2_YCBCR_ENC_601 &&
-		    quantization == V4L2_QUANTIZATION_LIM_RANGE)
-			wrtm = VI6_WPF_OUTFMT_WRTM_BT601;
-		else if (ycbcr_enc == V4L2_YCBCR_ENC_601 &&
-			 quantization == V4L2_QUANTIZATION_FULL_RANGE)
-			wrtm = VI6_WPF_OUTFMT_WRTM_BT601_EXT;
-		else if (ycbcr_enc == V4L2_YCBCR_ENC_709 &&
-			 quantization == V4L2_QUANTIZATION_LIM_RANGE)
-			wrtm = VI6_WPF_OUTFMT_WRTM_BT709;
-		else
-			wrtm = VI6_WPF_OUTFMT_WRTM_BT709_EXT;
-
-		outfmt |= VI6_WPF_OUTFMT_CSC | wrtm;
-	}
+	if (sink_format->code != source_format->code)
+		outfmt |= VI6_WPF_OUTFMT_CSC;
 
 	wpf->outfmt = outfmt;
 
@@ -312,7 +291,7 @@ static void wpf_configure_stream(struct vsp1_entity *entity,
 	 * Sources. If the pipeline has a single input and BRx is not used,
 	 * configure it as the master layer. Otherwise configure all
 	 * inputs as sub-layers and select the virtual RPF as the master
-	 * layer. For VSPX configure the enabled sources as masters.
+	 * layer.
 	 */
 	for (i = 0; i < vsp1->info->rpf_count; ++i) {
 		struct vsp1_rwpf *input = pipe->inputs[i];
@@ -320,7 +299,7 @@ static void wpf_configure_stream(struct vsp1_entity *entity,
 		if (!input)
 			continue;
 
-		srcrpf |= (pipe->iif || (!pipe->brx && pipe->num_inputs == 1))
+		srcrpf |= (!pipe->brx && pipe->num_inputs == 1)
 			? VI6_WPF_SRCRPF_RPF_ACT_MST(input->entity.index)
 			: VI6_WPF_SRCRPF_RPF_ACT_SUB(input->entity.index);
 	}
@@ -336,9 +315,6 @@ static void wpf_configure_stream(struct vsp1_entity *entity,
 	vsp1_dl_body_write(dlb, VI6_WPF_IRQ_STA(index), 0);
 	vsp1_dl_body_write(dlb, VI6_WPF_IRQ_ENB(index),
 			   VI6_WPF_IRQ_ENB_DFEE);
-
-	if (pipe->iif)
-		return;
 
 	/*
 	 * Configure writeback for display pipelines (the wpf writeback flag is
@@ -366,12 +342,13 @@ static void wpf_configure_frame(struct vsp1_entity *entity,
 	const unsigned int mask = BIT(WPF_CTRL_VFLIP)
 				| BIT(WPF_CTRL_HFLIP);
 	struct vsp1_rwpf *wpf = to_rwpf(&entity->subdev);
+	unsigned long flags;
 	u32 outfmt;
 
-	scoped_guard(spinlock_irqsave, &wpf->flip.lock) {
-		wpf->flip.active = (wpf->flip.active & ~mask)
-				 | (wpf->flip.pending & mask);
-	}
+	spin_lock_irqsave(&wpf->flip.lock, flags);
+	wpf->flip.active = (wpf->flip.active & ~mask)
+			 | (wpf->flip.pending & mask);
+	spin_unlock_irqrestore(&wpf->flip.lock, flags);
 
 	outfmt = (wpf->alpha << VI6_WPF_OUTFMT_PDV_SHIFT) | wpf->outfmt;
 
@@ -523,7 +500,7 @@ static unsigned int wpf_max_width(struct vsp1_entity *entity,
 {
 	struct vsp1_rwpf *wpf = to_rwpf(&entity->subdev);
 
-	return wpf->flip.rotate ? 256 : wpf->entity.max_width;
+	return wpf->flip.rotate ? 256 : wpf->max_width;
 }
 
 static void wpf_partition(struct vsp1_entity *entity,
@@ -559,15 +536,12 @@ struct vsp1_rwpf *vsp1_wpf_create(struct vsp1_device *vsp1, unsigned int index)
 	if (wpf == NULL)
 		return ERR_PTR(-ENOMEM);
 
-	wpf->entity.min_width = RWPF_MIN_WIDTH;
-	wpf->entity.min_height = RWPF_MIN_HEIGHT;
-
 	if (vsp1->info->gen == 2) {
-		wpf->entity.max_width = WPF_GEN2_MAX_WIDTH;
-		wpf->entity.max_height = WPF_GEN2_MAX_HEIGHT;
+		wpf->max_width = WPF_GEN2_MAX_WIDTH;
+		wpf->max_height = WPF_GEN2_MAX_HEIGHT;
 	} else {
-		wpf->entity.max_width = WPF_GEN3_MAX_WIDTH;
-		wpf->entity.max_height = WPF_GEN3_MAX_HEIGHT;
+		wpf->max_width = WPF_GEN3_MAX_WIDTH;
+		wpf->max_height = WPF_GEN3_MAX_HEIGHT;
 	}
 
 	wpf->entity.ops = &wpf_entity_ops;

@@ -12,6 +12,7 @@
 #include <linux/iopoll.h>
 #include <linux/kernel.h>
 #include <linux/kfifo.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
@@ -2080,7 +2081,7 @@ static struct usb_request *usbf_ep_alloc_request(struct usb_ep *_ep,
 	if (!_ep)
 		return NULL;
 
-	req = kzalloc_obj(*req, gfp_flags);
+	req = kzalloc(sizeof(*req), gfp_flags);
 	if (!req)
 		return NULL;
 
@@ -2481,7 +2482,7 @@ static int usbf_handle_ep0_setup(struct usbf_ep *ep0)
 	ep0->delayed_status = 0;
 
 	if ((crq.ctrlreq.bRequestType & USB_TYPE_MASK) != USB_TYPE_STANDARD) {
-		/* This is not a USB standard request -> delegate */
+		/* This is not a USB standard request -> delelate */
 		goto delegate;
 	}
 
@@ -3382,7 +3383,7 @@ static struct platform_driver udc_driver = {
 		.of_match_table = usbf_match,
 	},
 	.probe          = usbf_probe,
-	.remove         = usbf_remove,
+	.remove_new     = usbf_remove,
 };
 
 module_platform_driver(udc_driver);

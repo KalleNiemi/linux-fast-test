@@ -3,7 +3,7 @@
  * Copyright (c) 2000-2002,2005 Silicon Graphics, Inc.
  * All Rights Reserved.
  */
-#include "xfs_platform.h"
+#include "xfs.h"
 #include "xfs_fs.h"
 #include "xfs_shared.h"
 #include "xfs_format.h"
@@ -168,11 +168,12 @@ xfs_trans_get_buf_map(
 /*
  * Get and lock the superblock buffer for the given transaction.
  */
-static struct xfs_buf *
-__xfs_trans_getsb(
-	struct xfs_trans	*tp,
-	struct xfs_buf		*bp)
+struct xfs_buf *
+xfs_trans_getsb(
+	struct xfs_trans	*tp)
 {
+	struct xfs_buf		*bp = tp->t_mountp->m_sb_bp;
+
 	/*
 	 * Just increment the lock recursion count if the buffer is already
 	 * attached to this transaction.
@@ -194,22 +195,6 @@ __xfs_trans_getsb(
 	}
 
 	return bp;
-}
-
-struct xfs_buf *
-xfs_trans_getsb(
-	struct xfs_trans	*tp)
-{
-	return __xfs_trans_getsb(tp, tp->t_mountp->m_sb_bp);
-}
-
-struct xfs_buf *
-xfs_trans_getrtsb(
-	struct xfs_trans	*tp)
-{
-	if (!tp->t_mountp->m_rtsb_bp)
-		return NULL;
-	return __xfs_trans_getsb(tp, tp->t_mountp->m_rtsb_bp);
 }
 
 /*
@@ -234,6 +219,7 @@ xfs_trans_read_buf_map(
 	const struct xfs_buf_ops *ops)
 {
 	struct xfs_buf		*bp = NULL;
+	struct xfs_buf_log_item	*bip;
 	int			error;
 
 	*bpp = NULL;
@@ -250,10 +236,9 @@ xfs_trans_read_buf_map(
 	if (bp) {
 		ASSERT(xfs_buf_islocked(bp));
 		ASSERT(bp->b_transp == tp);
+		ASSERT(bp->b_log_item != NULL);
 		ASSERT(!bp->b_error);
 		ASSERT(bp->b_flags & XBF_DONE);
-		ASSERT(atomic_read(&bp->b_log_item->bli_refcount) > 0);
-		ASSERT(bp->b_ops);
 
 		/*
 		 * We never locked this buf ourselves, so we shouldn't
@@ -264,8 +249,39 @@ xfs_trans_read_buf_map(
 			return -EIO;
 		}
 
-		bp->b_log_item->bli_recur++;
-		trace_xfs_trans_read_buf_recur(bp->b_log_item);
+		/*
+		 * Check if the caller is trying to read a buffer that is
+		 * already attached to the transaction yet has no buffer ops
+		 * assigned.  Ops are usually attached when the buffer is
+		 * attached to the transaction, or by the read caller if
+		 * special circumstances.  That didn't happen, which is not
+		 * how this is supposed to go.
+		 *
+		 * If the buffer passes verification we'll let this go, but if
+		 * not we have to shut down.  Let the transaction cleanup code
+		 * release this buffer when it kills the tranaction.
+		 */
+		ASSERT(bp->b_ops != NULL);
+		error = xfs_buf_reverify(bp, ops);
+		if (error) {
+			xfs_buf_ioerror_alert(bp, __return_address);
+
+			if (tp->t_flags & XFS_TRANS_DIRTY)
+				xfs_force_shutdown(tp->t_mountp,
+						SHUTDOWN_META_IO_ERROR);
+
+			/* bad CRC means corrupted metadata */
+			if (error == -EFSBADCRC)
+				error = -EFSCORRUPTED;
+			return error;
+		}
+
+		bip = bp->b_log_item;
+		bip->bli_recur++;
+
+		ASSERT(atomic_read(&bip->bli_refcount) > 0);
+		trace_xfs_trans_read_buf_recur(bip);
+		ASSERT(bp->b_ops != NULL || ops == NULL);
 		*bpp = bp;
 		return 0;
 	}
@@ -628,7 +644,7 @@ xfs_trans_inode_buf(
 	ASSERT(atomic_read(&bip->bli_refcount) > 0);
 
 	bip->bli_flags |= XFS_BLI_INODE_BUF;
-	bp->b_iodone = xfs_buf_inode_iodone;
+	bp->b_flags |= _XBF_INODES;
 	xfs_trans_buf_set_type(tp, bp, XFS_BLFT_DINO_BUF);
 }
 
@@ -653,7 +669,7 @@ xfs_trans_stale_inode_buf(
 	ASSERT(atomic_read(&bip->bli_refcount) > 0);
 
 	bip->bli_flags |= XFS_BLI_STALE_INODE;
-	bp->b_iodone = xfs_buf_inode_iodone;
+	bp->b_flags |= _XBF_INODES;
 	xfs_trans_buf_set_type(tp, bp, XFS_BLFT_DINO_BUF);
 }
 
@@ -678,7 +694,7 @@ xfs_trans_inode_alloc_buf(
 	ASSERT(atomic_read(&bip->bli_refcount) > 0);
 
 	bip->bli_flags |= XFS_BLI_INODE_ALLOC_BUF;
-	bp->b_iodone = xfs_buf_inode_iodone;
+	bp->b_flags |= _XBF_INODES;
 	xfs_trans_buf_set_type(tp, bp, XFS_BLFT_DINO_BUF);
 }
 
@@ -789,6 +805,6 @@ xfs_trans_dquot_buf(
 		break;
 	}
 
-	bp->b_iodone = xfs_buf_dquot_iodone;
+	bp->b_flags |= _XBF_DQUOTS;
 	xfs_trans_buf_set_type(tp, bp, type);
 }

@@ -1282,6 +1282,7 @@ static void hix5hd2_dev_remove(struct platform_device *pdev)
 	struct net_device *ndev = platform_get_drvdata(pdev);
 	struct hix5hd2_priv *priv = netdev_priv(ndev);
 
+	netif_napi_del(&priv->napi);
 	unregister_netdev(ndev);
 	mdiobus_unregister(priv->bus);
 	mdiobus_free(priv->bus);
@@ -1311,7 +1312,7 @@ static struct platform_driver hix5hd2_dev_driver = {
 		.of_match_table = hix5hd2_of_match,
 	},
 	.probe = hix5hd2_dev_probe,
-	.remove = hix5hd2_dev_remove,
+	.remove_new = hix5hd2_dev_remove,
 };
 
 module_platform_driver(hix5hd2_dev_driver);

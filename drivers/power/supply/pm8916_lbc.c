@@ -13,6 +13,7 @@
 #include <linux/delay.h>
 #include <linux/interrupt.h>
 #include <linux/extcon-provider.h>
+#include <linux/mod_devicetable.h>
 
 /* Two bytes: type + subtype */
 #define PM8916_PERPH_TYPE 0x04
@@ -312,7 +313,7 @@ static int pm8916_lbc_charger_probe(struct platform_device *pdev)
 		dev_err_probe(dev, ret, "Error while parsing device tree\n");
 
 	psy_cfg.drv_data = chg;
-	psy_cfg.fwnode = dev_fwnode(dev);
+	psy_cfg.of_node = dev->of_node;
 
 	chg->charger = devm_power_supply_register(dev, &pm8916_lbc_charger_psy_desc, &psy_cfg);
 	if (IS_ERR(chg->charger))

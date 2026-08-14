@@ -12,6 +12,7 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/module.h>
+#include <linux/mod_devicetable.h>
 #include <linux/delay.h>
 #include <linux/i2c.h>
 #include <linux/mutex.h>
@@ -105,6 +106,7 @@
 #define JSA1212_PXS_DELAY_MS	100
 
 #define JSA1212_DRIVER_NAME	"jsa1212"
+#define JSA1212_REGMAP_NAME	"jsa1212_regmap"
 
 enum jsa1212_op_mode {
 	JSA1212_OPMODE_ALS_EN,
@@ -298,7 +300,7 @@ static bool jsa1212_is_volatile_reg(struct device *dev, unsigned int reg)
 }
 
 static const struct regmap_config jsa1212_regmap_config = {
-	.name = "jsa1212_regmap",
+	.name =  JSA1212_REGMAP_NAME,
 	.reg_bits = 8,
 	.val_bits = 8,
 	.max_register = JSA1212_MAX_REG,
@@ -422,12 +424,12 @@ static DEFINE_SIMPLE_DEV_PM_OPS(jsa1212_pm_ops, jsa1212_suspend,
 
 static const struct acpi_device_id jsa1212_acpi_match[] = {
 	{"JSA1212", 0},
-	{ }
+	{ },
 };
 MODULE_DEVICE_TABLE(acpi, jsa1212_acpi_match);
 
 static const struct i2c_device_id jsa1212_id[] = {
-	{ .name = JSA1212_DRIVER_NAME },
+	{ JSA1212_DRIVER_NAME },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, jsa1212_id);

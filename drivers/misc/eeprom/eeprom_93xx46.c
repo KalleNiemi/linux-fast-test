@@ -12,6 +12,7 @@
 #include <linux/gpio/consumer.h>
 #include <linux/kstrtox.h>
 #include <linux/log2.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/property.h>
@@ -226,7 +227,7 @@ static int eeprom_93xx46_ew(struct eeprom_93xx46_dev *edev, int is_on)
 
 static ssize_t
 eeprom_93xx46_write_word(struct eeprom_93xx46_dev *edev,
-			 const char *buf, unsigned int off)
+			 const char *buf, unsigned off)
 {
 	struct spi_message m;
 	struct spi_transfer t[2] = {};

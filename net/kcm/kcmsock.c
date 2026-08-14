@@ -19,12 +19,10 @@
 #include <linux/rculist.h>
 #include <linux/skbuff.h>
 #include <linux/socket.h>
-#include <linux/splice.h>
 #include <linux/uaccess.h>
 #include <linux/workqueue.h>
 #include <linux/syscalls.h>
 #include <linux/sched/signal.h>
-#include <linux/uio.h>
 
 #include <net/kcm.h>
 #include <net/netns/generic.h>
@@ -838,7 +836,8 @@ start:
 			if (!sk_wmem_schedule(sk, copy))
 				goto wait_for_memory;
 
-			err = skb_splice_from_iter(skb, &msg->msg_iter, copy);
+			err = skb_splice_from_iter(skb, &msg->msg_iter, copy,
+						   sk->sk_allocation);
 			if (err < 0) {
 				if (err == -EMSGSIZE)
 					goto wait_for_memory;
@@ -1048,11 +1047,6 @@ static ssize_t kcm_splice_read(struct socket *sock, loff_t *ppos,
 	ssize_t copied;
 	struct sk_buff *skb;
 
-	if (sock->file->f_flags & O_NONBLOCK || flags & SPLICE_F_NONBLOCK)
-		flags = MSG_DONTWAIT;
-	else
-		flags = 0;
-
 	/* Only support splice for SOCKSEQPACKET */
 
 	skb = skb_recv_datagram(sk, flags, &err);
@@ -1168,7 +1162,7 @@ static int kcm_setsockopt(struct socket *sock, int level, int optname,
 }
 
 static int kcm_getsockopt(struct socket *sock, int level, int optname,
-			  sockopt_t *opt)
+			  char __user *optval, int __user *optlen)
 {
 	struct kcm_sock *kcm = kcm_sk(sock->sk);
 	int val, len;
@@ -1176,7 +1170,9 @@ static int kcm_getsockopt(struct socket *sock, int level, int optname,
 	if (level != SOL_KCM)
 		return -ENOPROTOOPT;
 
-	len = opt->optlen;
+	if (get_user(len, optlen))
+		return -EFAULT;
+
 	if (len < 0)
 		return -EINVAL;
 
@@ -1190,8 +1186,9 @@ static int kcm_getsockopt(struct socket *sock, int level, int optname,
 		return -ENOPROTOOPT;
 	}
 
-	opt->optlen = len;
-	if (copy_to_iter(&val, len, &opt->iter_out) != len)
+	if (put_user(len, optlen))
+		return -EFAULT;
+	if (copy_to_user(optval, &val, len))
 		return -EFAULT;
 	return 0;
 }
@@ -1575,16 +1572,24 @@ static int kcm_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 	}
 	case SIOCKCMCLONE: {
 		struct kcm_clone info;
+		struct file *file;
 
-		FD_PREPARE(fdf, 0, kcm_clone(sock));
-		if (fdf.err)
-			return fdf.err;
+		info.fd = get_unused_fd_flags(0);
+		if (unlikely(info.fd < 0))
+			return info.fd;
 
-		info.fd = fd_prepare_fd(fdf);
-		if (copy_to_user((void __user *)arg, &info, sizeof(info)))
+		file = kcm_clone(sock);
+		if (IS_ERR(file)) {
+			put_unused_fd(info.fd);
+			return PTR_ERR(file);
+		}
+		if (copy_to_user((void __user *)arg, &info,
+				 sizeof(info))) {
+			put_unused_fd(info.fd);
+			fput(file);
 			return -EFAULT;
-
-		fd_publish(fdf);
+		}
+		fd_install(info.fd, file);
 		err = 0;
 		break;
 	}
@@ -1594,6 +1599,14 @@ static int kcm_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 	}
 
 	return err;
+}
+
+static void free_mux(struct rcu_head *rcu)
+{
+	struct kcm_mux *mux = container_of(rcu,
+	    struct kcm_mux, rcu);
+
+	kmem_cache_free(kcm_muxp, mux);
 }
 
 static void release_mux(struct kcm_mux *mux)
@@ -1623,7 +1636,7 @@ static void release_mux(struct kcm_mux *mux)
 	knet->count--;
 	mutex_unlock(&knet->mutex);
 
-	kfree_rcu(mux, rcu);
+	call_rcu(&mux->rcu, free_mux);
 }
 
 static void kcm_done(struct kcm_sock *kcm)
@@ -1753,7 +1766,7 @@ static const struct proto_ops kcm_dgram_ops = {
 	.listen =	sock_no_listen,
 	.shutdown =	sock_no_shutdown,
 	.setsockopt =	kcm_setsockopt,
-	.getsockopt_iter = kcm_getsockopt,
+	.getsockopt =	kcm_getsockopt,
 	.sendmsg =	kcm_sendmsg,
 	.recvmsg =	kcm_recvmsg,
 	.mmap =		sock_no_mmap,
@@ -1774,7 +1787,7 @@ static const struct proto_ops kcm_seqpacket_ops = {
 	.listen =	sock_no_listen,
 	.shutdown =	sock_no_shutdown,
 	.setsockopt =	kcm_setsockopt,
-	.getsockopt_iter = kcm_getsockopt,
+	.getsockopt =	kcm_getsockopt,
 	.sendmsg =	kcm_sendmsg,
 	.recvmsg =	kcm_recvmsg,
 	.mmap =		sock_no_mmap,

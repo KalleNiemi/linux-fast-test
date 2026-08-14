@@ -483,9 +483,9 @@ static int afs_fill_super(struct super_block *sb, struct afs_fs_context *ctx)
 		goto error;
 
 	if (as->dyn_root) {
-		set_default_d_op(sb, &afs_dynroot_dentry_operations);
+		sb->s_d_op = &afs_dynroot_dentry_operations;
 	} else {
-		set_default_d_op(sb, &afs_fs_dentry_operations);
+		sb->s_d_op = &afs_fs_dentry_operations;
 		rcu_assign_pointer(as->volume->sb, sb);
 	}
 
@@ -502,7 +502,7 @@ static struct afs_super_info *afs_alloc_sbi(struct fs_context *fc)
 	struct afs_fs_context *ctx = fc->fs_private;
 	struct afs_super_info *as;
 
-	as = kzalloc_obj(struct afs_super_info);
+	as = kzalloc(sizeof(struct afs_super_info), GFP_KERNEL);
 	if (as) {
 		as->net_ns = get_net(fc->net_ns);
 		as->flock_mode = ctx->flock_mode;
@@ -624,7 +624,7 @@ static int afs_init_fs_context(struct fs_context *fc)
 	struct afs_fs_context *ctx;
 	struct afs_cell *cell;
 
-	ctx = kzalloc_obj(struct afs_fs_context);
+	ctx = kzalloc(sizeof(struct afs_fs_context), GFP_KERNEL);
 	if (!ctx)
 		return -ENOMEM;
 
@@ -653,13 +653,14 @@ static void afs_i_init_once(void *_vnode)
 
 	memset(vnode, 0, sizeof(*vnode));
 	inode_init_once(&vnode->netfs.inode);
-	INIT_LIST_HEAD(&vnode->io_lock_waiters);
+	mutex_init(&vnode->io_lock);
 	init_rwsem(&vnode->validate_lock);
 	spin_lock_init(&vnode->wb_lock);
 	spin_lock_init(&vnode->lock);
 	INIT_LIST_HEAD(&vnode->wb_keys);
 	INIT_LIST_HEAD(&vnode->pending_locks);
 	INIT_LIST_HEAD(&vnode->granted_locks);
+	INIT_DELAYED_WORK(&vnode->lock_work, afs_lock_work);
 	INIT_LIST_HEAD(&vnode->cb_mmap_link);
 	seqlock_init(&vnode->cb_lock);
 }
@@ -685,15 +686,12 @@ static struct inode *afs_alloc_inode(struct super_block *sb)
 	vnode->volume		= NULL;
 	vnode->lock_key		= NULL;
 	vnode->permit_cache	= NULL;
-	vnode->directory	= NULL;
-	vnode->directory_size	= 0;
 
 	vnode->flags		= 1 << AFS_VNODE_UNSET;
 	vnode->lock_state	= AFS_VNODE_LOCK_NONE;
 
 	init_rwsem(&vnode->rmdir_lock);
 	INIT_WORK(&vnode->cb_work, afs_invalidate_mmap_work);
-	INIT_DELAYED_WORK(&vnode->lock_work, afs_lock_work);
 
 	_leave(" = %p", &vnode->netfs.inode);
 	return &vnode->netfs.inode;

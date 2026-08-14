@@ -6,7 +6,6 @@
 #include <linux/init.h>
 #include <linux/spi/spi.h>
 #include <linux/delay.h>
-#include <linux/string_choices.h>
 
 #include "fbtft.h"
 
@@ -163,7 +162,7 @@ static int set_gamma(struct fbtft_par *par, u32 *curves)
 static int blank(struct fbtft_par *par, bool on)
 {
 	fbtft_par_dbg(DEBUG_BLANK, par, "(%s=%s)\n",
-		      __func__, str_true_false(on));
+		      __func__, on ? "true" : "false");
 	if (on)
 		write_reg(par, 0xAE);
 	else
@@ -218,7 +217,8 @@ static void register_onboard_backlight(struct fbtft_par *par)
 				       &bl_props);
 	if (IS_ERR(bd)) {
 		dev_err(par->info->device,
-			"cannot register backlight device (%pe)\n", bd);
+			"cannot register backlight device (%ld)\n",
+			PTR_ERR(bd));
 		return;
 	}
 	par->info->bl_dev = bd;

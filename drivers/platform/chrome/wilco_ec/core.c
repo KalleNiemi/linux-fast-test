@@ -10,6 +10,7 @@
 #include <linux/acpi.h>
 #include <linux/device.h>
 #include <linux/ioport.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_data/wilco-ec.h>
 #include <linux/platform_device.h>
@@ -162,7 +163,7 @@ static struct platform_driver wilco_ec_driver = {
 		.acpi_match_table = wilco_ec_acpi_device_ids,
 	},
 	.probe = wilco_ec_probe,
-	.remove = wilco_ec_remove,
+	.remove_new = wilco_ec_remove,
 	.id_table = wilco_ec_id,
 };
 

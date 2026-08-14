@@ -32,12 +32,13 @@ struct udp_tunnel_nic_table_entry {
  * @lock:	protects all fields
  * @need_sync:	at least one port start changed
  * @need_replay: space was freed, we need a replay of all ports
+ * @work_pending: @work is currently scheduled
  * @n_tables:	number of tables under @entries
  * @missed:	bitmap of tables which overflown
  * @entries:	table of tables of ports currently offloaded
  */
 struct udp_tunnel_nic {
-	struct delayed_work work;
+	struct work_struct work;
 
 	struct net_device *dev;
 
@@ -45,6 +46,7 @@ struct udp_tunnel_nic {
 
 	u8 need_sync:1;
 	u8 need_replay:1;
+	u8 work_pending:1;
 
 	unsigned int n_tables;
 	unsigned long missed;
@@ -299,10 +301,11 @@ __udp_tunnel_nic_device_sync(struct net_device *dev, struct udp_tunnel_nic *utn)
 static void
 udp_tunnel_nic_device_sync(struct net_device *dev, struct udp_tunnel_nic *utn)
 {
-	if (!utn->need_sync)
+	if (!utn->need_sync || utn->work_pending)
 		return;
 
-	queue_delayed_work(udp_tunnel_nic_workqueue, &utn->work, 0);
+	queue_work(udp_tunnel_nic_workqueue, &utn->work);
+	utn->work_pending = 1;
 }
 
 static bool
@@ -728,17 +731,12 @@ udp_tunnel_nic_replay(struct net_device *dev, struct udp_tunnel_nic *utn)
 static void udp_tunnel_nic_device_sync_work(struct work_struct *work)
 {
 	struct udp_tunnel_nic *utn =
-		container_of(work, struct udp_tunnel_nic, work.work);
+		container_of(work, struct udp_tunnel_nic, work);
 
-	/* We cannot block on RTNL here, otherwise we would deadlock with
-	 * udp_tunnel_nic_unregister() calling cancel_delayed_work_sync()
-	 * while holding RTNL. Requeue with 1 jiffy delay if RTNL is contended.
-	 */
-	if (!rtnl_trylock()) {
-		queue_delayed_work(udp_tunnel_nic_workqueue, &utn->work, 1);
-		return;
-	}
+	rtnl_lock();
 	mutex_lock(&utn->lock);
+
+	utn->work_pending = 0;
 	__udp_tunnel_nic_device_sync(utn->dev, utn);
 
 	if (utn->need_replay)
@@ -755,16 +753,16 @@ udp_tunnel_nic_alloc(const struct udp_tunnel_nic_info *info,
 	struct udp_tunnel_nic *utn;
 	unsigned int i;
 
-	utn = kzalloc_flex(*utn, entries, n_tables);
+	utn = kzalloc(struct_size(utn, entries, n_tables), GFP_KERNEL);
 	if (!utn)
 		return NULL;
 	utn->n_tables = n_tables;
-	INIT_DELAYED_WORK(&utn->work, udp_tunnel_nic_device_sync_work);
+	INIT_WORK(&utn->work, udp_tunnel_nic_device_sync_work);
 	mutex_init(&utn->lock);
 
 	for (i = 0; i < n_tables; i++) {
-		utn->entries[i] = kzalloc_objs(*utn->entries[i],
-					       info->tables[i].n_entries);
+		utn->entries[i] = kcalloc(info->tables[i].n_entries,
+					  sizeof(*utn->entries[i]), GFP_KERNEL);
 		if (!utn->entries[i])
 			goto err_free_prev_entries;
 	}
@@ -822,7 +820,7 @@ static int udp_tunnel_nic_register(struct net_device *dev)
 
 	/* Create UDP tunnel state structures */
 	if (info->shared) {
-		node = kzalloc_obj(*node);
+		node = kzalloc(sizeof(*node), GFP_KERNEL);
 		if (!node)
 			return -ENOMEM;
 
@@ -903,11 +901,11 @@ udp_tunnel_nic_unregister(struct net_device *dev, struct udp_tunnel_nic *utn)
 	udp_tunnel_nic_flush(dev, utn);
 	udp_tunnel_nic_unlock(dev);
 
-	/* Make sure no work is running or queued before freeing @utn.
-	 * The work handler uses rtnl_trylock(), so it will not deadlock
-	 * against the RTNL we are holding here.
+	/* Wait for the work to be done using the state, netdev core will
+	 * retry unregister until we give up our reference on this device.
 	 */
-	cancel_delayed_work_sync(&utn->work);
+	if (utn->work_pending)
+		return;
 
 	udp_tunnel_nic_free(utn);
 release_dev:

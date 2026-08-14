@@ -3,8 +3,8 @@
  * CAN driver for PEAK System PCAN-USB Pro adapter
  * Derived from the PCAN project file driver/src/pcan_usbpro.c
  *
- * Copyright (C) 2003-2025 PEAK System-Technik GmbH
- * Author: Stéphane Grosjean <s.grosjean@peak-system.fr>
+ * Copyright (C) 2003-2011 PEAK System-Technik GmbH
+ * Copyright (C) 2011-2012 Stephane Grosjean <s.grosjean@peak-system.com>
  */
 #include <linux/ethtool.h>
 #include <linux/module.h>
@@ -534,17 +534,11 @@ static int pcan_usb_pro_handle_canmsg(struct pcan_usb_pro_interface *usb_if,
 				      struct pcan_usb_pro_rxmsg *rx)
 {
 	const unsigned int ctrl_idx = (rx->len >> 4) & 0x0f;
-	struct peak_usb_device *dev;
-	struct net_device *netdev;
+	struct peak_usb_device *dev = usb_if->dev[ctrl_idx];
+	struct net_device *netdev = dev->netdev;
 	struct can_frame *can_frame;
 	struct sk_buff *skb;
 	struct skb_shared_hwtstamps *hwts;
-
-	if (ctrl_idx >= ARRAY_SIZE(usb_if->dev))
-		return -EINVAL;
-
-	dev = usb_if->dev[ctrl_idx];
-	netdev = dev->netdev;
 
 	skb = alloc_can_skb(netdev, &can_frame);
 	if (!skb)
@@ -579,19 +573,13 @@ static int pcan_usb_pro_handle_error(struct pcan_usb_pro_interface *usb_if,
 {
 	const u16 raw_status = le16_to_cpu(er->status);
 	const unsigned int ctrl_idx = (er->channel >> 4) & 0x0f;
-	struct peak_usb_device *dev;
-	struct net_device *netdev;
+	struct peak_usb_device *dev = usb_if->dev[ctrl_idx];
+	struct net_device *netdev = dev->netdev;
 	struct can_frame *can_frame;
 	enum can_state new_state = CAN_STATE_ERROR_ACTIVE;
 	u8 err_mask = 0;
 	struct sk_buff *skb;
 	struct skb_shared_hwtstamps *hwts;
-
-	if (ctrl_idx >= ARRAY_SIZE(usb_if->dev))
-		return -EINVAL;
-
-	dev = usb_if->dev[ctrl_idx];
-	netdev = dev->netdev;
 
 	/* nothing should be sent while in BUS_OFF state */
 	if (dev->can.state == CAN_STATE_BUS_OFF)
@@ -882,9 +870,10 @@ static int pcan_usb_pro_init(struct peak_usb_device *dev)
 	/* do this for 1st channel only */
 	if (!dev->prev_siblings) {
 		/* allocate netdevices common structure attached to first one */
-		usb_if = kzalloc_obj(struct pcan_usb_pro_interface);
-		fi = kmalloc_obj(struct pcan_usb_pro_fwinfo);
-		bi = kmalloc_obj(struct pcan_usb_pro_blinfo);
+		usb_if = kzalloc(sizeof(struct pcan_usb_pro_interface),
+				 GFP_KERNEL);
+		fi = kmalloc(sizeof(struct pcan_usb_pro_fwinfo), GFP_KERNEL);
+		bi = kmalloc(sizeof(struct pcan_usb_pro_blinfo), GFP_KERNEL);
 		if (!usb_if || !fi || !bi) {
 			err = -ENOMEM;
 			goto err_out;

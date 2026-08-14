@@ -13,7 +13,7 @@
 #include <linux/iopoll.h>
 #include <linux/irq.h>
 #include <linux/irqchip/chained_irq.h>
-#include <linux/irqchip/irq-msi-lib.h>
+#include "../../irqchip/irq-msi-lib.h"
 #include <linux/irqdomain.h>
 #include <linux/kernel.h>
 #include <linux/mfd/syscon.h>
@@ -112,6 +112,10 @@
 #define APP_CFG_REQ		BIT(0)
 #define APP_CPL_STATUS		GENMASK(7, 5)
 
+#define CFG_WRRD_TYPE_0		4
+#define CFG_WR_FMT		2
+#define CFG_RD_FMT		0
+
 #define CFG_DW0_LENGTH(length)	((length) & GENMASK(9, 0))
 #define CFG_DW0_TYPE(type)	(((type) << 24) & GENMASK(28, 24))
 #define CFG_DW0_FMT(fmt)	(((fmt) << 29) & GENMASK(31, 29))
@@ -144,13 +148,11 @@ struct mtk_pcie_port;
  * @MTK_PCIE_FIX_CLASS_ID: host's class ID needed to be fixed
  * @MTK_PCIE_FIX_DEVICE_ID: host's device ID needed to be fixed
  * @MTK_PCIE_NO_MSI: Bridge has no MSI support, and relies on an external block
- * @MTK_PCIE_SKIP_RSTB: Skip calling RSTB bits on PCIe probe
  */
 enum mtk_pcie_quirks {
 	MTK_PCIE_FIX_CLASS_ID = BIT(0),
 	MTK_PCIE_FIX_DEVICE_ID = BIT(1),
 	MTK_PCIE_NO_MSI = BIT(2),
-	MTK_PCIE_SKIP_RSTB = BIT(3),
 };
 
 /**
@@ -294,7 +296,7 @@ static int mtk_pcie_hw_rd_cfg(struct mtk_pcie_port *port, u32 bus, u32 devfn,
 	u32 tmp;
 
 	/* Write PCIe configuration transaction header for Cfgrd */
-	writel(CFG_HEADER_DW0(PCIE_TLP_TYPE_CFG0_RDWR, PCIE_TLP_FMT_3DW_NO_DATA),
+	writel(CFG_HEADER_DW0(CFG_WRRD_TYPE_0, CFG_RD_FMT),
 	       port->base + PCIE_CFG_HEADER0);
 	writel(CFG_HEADER_DW1(where, size), port->base + PCIE_CFG_HEADER1);
 	writel(CFG_HEADER_DW2(where, PCI_FUNC(devfn), PCI_SLOT(devfn), bus),
@@ -324,7 +326,7 @@ static int mtk_pcie_hw_wr_cfg(struct mtk_pcie_port *port, u32 bus, u32 devfn,
 			      int where, int size, u32 val)
 {
 	/* Write PCIe configuration transaction header for Cfgwr */
-	writel(CFG_HEADER_DW0(PCIE_TLP_TYPE_CFG0_RDWR, PCIE_TLP_FMT_3DW_DATA),
+	writel(CFG_HEADER_DW0(CFG_WRRD_TYPE_0, CFG_WR_FMT),
 	       port->base + PCIE_CFG_HEADER0);
 	writel(CFG_HEADER_DW1(where, size), port->base + PCIE_CFG_HEADER1);
 	writel(CFG_HEADER_DW2(where, PCI_FUNC(devfn), PCI_SLOT(devfn), bus),
@@ -489,7 +491,6 @@ static const struct msi_parent_ops mtk_msi_parent_ops = {
 	.required_flags		= MTK_MSI_FLAGS_REQUIRED,
 	.supported_flags	= MTK_MSI_FLAGS_SUPPORTED,
 	.bus_select_token	= DOMAIN_BUS_PCI_MSI,
-	.chip_flags		= MSI_CHIP_FLAG_SET_ACK,
 	.prefix			= "MTK-",
 	.init_dev_msi_info	= msi_lib_init_dev_msi_info,
 };
@@ -503,13 +504,18 @@ static int mtk_pcie_allocate_msi_domains(struct mtk_pcie_port *port)
 		.ops		= &msi_domain_ops,
 		.host_data	= port,
 		.size		= MTK_MSI_IRQS_NUM,
+		.hwirq_max	= MTK_MSI_IRQS_NUM,
+		.bus_token	= DOMAIN_BUS_PCI_MSI,
+		.domain_flags	= IRQ_DOMAIN_FLAG_MSI_PARENT,
 	};
 
-	port->inner_domain = msi_create_parent_irq_domain(&info, &mtk_msi_parent_ops);
-	if (!port->inner_domain) {
+	port->inner_domain = irq_domain_instantiate(&info);
+	if (IS_ERR(port->inner_domain)) {
 		dev_err(port->pcie->dev, "failed to create IRQ domain\n");
+		port->inner_domain = NULL;
 		return -ENOMEM;
 	}
+	port->inner_domain->msi_parent_ops = &mtk_msi_parent_ops;
 
 	return 0;
 }
@@ -578,8 +584,8 @@ static int mtk_pcie_init_irq_domain(struct mtk_pcie_port *port,
 		return -ENODEV;
 	}
 
-	port->irq_domain = irq_domain_create_linear(of_fwnode_handle(pcie_intc_node), PCI_NUM_INTX,
-						    &intx_domain_ops, port);
+	port->irq_domain = irq_domain_add_linear(pcie_intc_node, PCI_NUM_INTX,
+						 &intx_domain_ops, port);
 	of_node_put(pcie_intc_node);
 	if (!port->irq_domain) {
 		dev_err(dev, "failed to get INTx IRQ domain\n");
@@ -694,25 +700,23 @@ static int mtk_pcie_startup_port_v2(struct mtk_pcie_port *port)
 		regmap_update_bits(pcie->cfg, PCIE_SYS_CFG_V2, val, val);
 	}
 
-	if (!(soc->quirks & MTK_PCIE_SKIP_RSTB)) {
-		/* Assert all reset signals */
-		writel(0, port->base + PCIE_RST_CTRL);
+	/* Assert all reset signals */
+	writel(0, port->base + PCIE_RST_CTRL);
 
-		/*
-		 * Enable PCIe link down reset, if link status changed from
-		 * link up to link down, this will reset MAC control registers
-		 * and configuration space.
-		 */
-		writel(PCIE_LINKDOWN_RST_EN, port->base + PCIE_RST_CTRL);
+	/*
+	 * Enable PCIe link down reset, if link status changed from link up to
+	 * link down, this will reset MAC control registers and configuration
+	 * space.
+	 */
+	writel(PCIE_LINKDOWN_RST_EN, port->base + PCIE_RST_CTRL);
 
-		msleep(PCIE_T_PVPERL_MS);
+	msleep(PCIE_T_PVPERL_MS);
 
-		/* De-assert PHY, PE, PIPE, MAC and configuration reset	*/
-		val = readl(port->base + PCIE_RST_CTRL);
-		val |= PCIE_PHY_RSTB | PCIE_PERSTB | PCIE_PIPE_SRSTB |
-		       PCIE_MAC_SRSTB | PCIE_CRSTB;
-		writel(val, port->base + PCIE_RST_CTRL);
-	}
+	/* De-assert PHY, PE, PIPE, MAC and configuration reset	*/
+	val = readl(port->base + PCIE_RST_CTRL);
+	val |= PCIE_PHY_RSTB | PCIE_PERSTB | PCIE_PIPE_SRSTB |
+	       PCIE_MAC_SRSTB | PCIE_CRSTB;
+	writel(val, port->base + PCIE_RST_CTRL);
 
 	/* Set up vendor ID and class code */
 	if (soc->quirks & MTK_PCIE_FIX_CLASS_ID) {
@@ -831,41 +835,6 @@ static int mtk_pcie_startup_port(struct mtk_pcie_port *port)
 	writel(val, pcie->base + PCIE_CFG_DATA);
 
 	return 0;
-}
-
-static int mtk_pcie_startup_port_an7583(struct mtk_pcie_port *port)
-{
-	struct mtk_pcie *pcie = port->pcie;
-	struct device *dev = pcie->dev;
-	struct pci_host_bridge *host;
-	struct resource_entry *entry;
-	struct regmap *pbus_regmap;
-	resource_size_t addr;
-	u32 args[2], size;
-
-	/*
-	 * Configure PBus base address and base address mask to allow
-	 * the hw to detect if a given address is accessible on PCIe
-	 * controller.
-	 */
-	pbus_regmap = syscon_regmap_lookup_by_phandle_args(dev->of_node,
-							   "mediatek,pbus-csr",
-							   ARRAY_SIZE(args),
-							   args);
-	if (IS_ERR(pbus_regmap))
-		return PTR_ERR(pbus_regmap);
-
-	host = pci_host_bridge_from_priv(pcie);
-	entry = resource_list_first_type(&host->windows, IORESOURCE_MEM);
-	if (!entry)
-		return -ENODEV;
-
-	addr = entry->res->start - entry->offset;
-	regmap_write(pbus_regmap, args[0], lower_32_bits(addr));
-	size = lower_32_bits(resource_size(entry->res));
-	regmap_write(pbus_regmap, args[1], GENMASK(31, __fls(size)));
-
-	return mtk_pcie_startup_port_v2(port);
 }
 
 static int mtk_pcie_enable_port(struct mtk_pcie_port *port)
@@ -1096,22 +1065,24 @@ err_free_ck:
 static int mtk_pcie_setup(struct mtk_pcie *pcie)
 {
 	struct device *dev = pcie->dev;
-	struct device_node *node = dev->of_node;
+	struct device_node *node = dev->of_node, *child;
 	struct mtk_pcie_port *port, *tmp;
 	int err, slot;
 
 	slot = of_get_pci_domain_nr(dev->of_node);
 	if (slot < 0) {
-		for_each_available_child_of_node_scoped(node, child) {
+		for_each_available_child_of_node(node, child) {
 			err = of_pci_get_devfn(child);
-			if (err < 0)
-				return dev_err_probe(dev, err, "failed to get devfn\n");
+			if (err < 0) {
+				dev_err(dev, "failed to get devfn: %d\n", err);
+				goto error_put_node;
+			}
 
 			slot = PCI_SLOT(err);
 
 			err = mtk_pcie_parse_port(pcie, child, slot);
 			if (err)
-				return err;
+				goto error_put_node;
 		}
 	} else {
 		err = mtk_pcie_parse_port(pcie, node, slot);
@@ -1137,6 +1108,9 @@ static int mtk_pcie_setup(struct mtk_pcie *pcie)
 		mtk_pcie_subsys_powerdown(pcie);
 
 	return 0;
+error_put_node:
+	of_node_put(child);
+	return err;
 }
 
 static int mtk_pcie_probe(struct platform_device *pdev)
@@ -1192,10 +1166,8 @@ static void mtk_pcie_remove(struct platform_device *pdev)
 	struct mtk_pcie *pcie = platform_get_drvdata(pdev);
 	struct pci_host_bridge *host = pci_host_bridge_from_priv(pcie);
 
-	pci_lock_rescan_remove();
 	pci_stop_root_bus(host->bus);
 	pci_remove_root_bus(host->bus);
-	pci_unlock_rescan_remove();
 	mtk_pcie_free_resources(pcie);
 
 	mtk_pcie_irq_teardown(pcie);
@@ -1275,13 +1247,6 @@ static const struct mtk_pcie_soc mtk_pcie_soc_mt7622 = {
 	.quirks = MTK_PCIE_FIX_CLASS_ID,
 };
 
-static const struct mtk_pcie_soc mtk_pcie_soc_an7583 = {
-	.ops = &mtk_pcie_ops_v2,
-	.startup = mtk_pcie_startup_port_an7583,
-	.setup_irq = mtk_pcie_setup_irq,
-	.quirks = MTK_PCIE_FIX_CLASS_ID | MTK_PCIE_SKIP_RSTB,
-};
-
 static const struct mtk_pcie_soc mtk_pcie_soc_mt7629 = {
 	.device_id = PCI_DEVICE_ID_MEDIATEK_7629,
 	.ops = &mtk_pcie_ops_v2,
@@ -1291,7 +1256,6 @@ static const struct mtk_pcie_soc mtk_pcie_soc_mt7629 = {
 };
 
 static const struct of_device_id mtk_pcie_ids[] = {
-	{ .compatible = "airoha,an7583-pcie", .data = &mtk_pcie_soc_an7583 },
 	{ .compatible = "mediatek,mt2701-pcie", .data = &mtk_pcie_soc_v1 },
 	{ .compatible = "mediatek,mt7623-pcie", .data = &mtk_pcie_soc_v1 },
 	{ .compatible = "mediatek,mt2712-pcie", .data = &mtk_pcie_soc_mt2712 },
@@ -1303,7 +1267,7 @@ MODULE_DEVICE_TABLE(of, mtk_pcie_ids);
 
 static struct platform_driver mtk_pcie_driver = {
 	.probe = mtk_pcie_probe,
-	.remove = mtk_pcie_remove,
+	.remove_new = mtk_pcie_remove,
 	.driver = {
 		.name = "mtk-pcie",
 		.of_match_table = mtk_pcie_ids,

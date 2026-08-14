@@ -4,7 +4,7 @@
  *
  * Copyright (C) 2005 T. Adachi <tadachi@tadachi-net.com>
  *
- * Copyright (C) 2005 Hans Verkuil <hverkuil@kernel.org>
+ * Copyright (C) 2005 Hans Verkuil <hverkuil@xs4all.nl>
  * - Cleanup
  */
 
@@ -243,7 +243,7 @@ static void wm8739_remove(struct i2c_client *client)
 }
 
 static const struct i2c_device_id wm8739_id[] = {
-	{ .name = "wm8739" },
+	{ "wm8739" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, wm8739_id);

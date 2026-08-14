@@ -71,7 +71,7 @@ static void sva_arch_invalidate_secondary_tlbs(struct mmu_notifier *mn,
 	for_each_pdom_dev_data(pdom_dev_data, sva_pdom) {
 		amd_iommu_dev_flush_pasid_pages(pdom_dev_data->dev_data,
 						pdom_dev_data->pasid,
-						start, end - 1);
+						start, end - start);
 	}
 
 	spin_unlock_irqrestore(&sva_pdom->lock, flags);
@@ -109,9 +109,6 @@ int iommu_sva_set_dev_pasid(struct iommu_domain *domain,
 	unsigned long flags;
 	int ret = -EINVAL;
 
-	if (old)
-		return -EOPNOTSUPP;
-
 	/* PASID zero is used for requests from the I/O device without PASID */
 	if (!is_pasid_valid(dev_data, pasid))
 		return ret;
@@ -121,7 +118,7 @@ int iommu_sva_set_dev_pasid(struct iommu_domain *domain,
 		return ret;
 
 	/* Add PASID to protection domain pasid list */
-	pdom_dev_data = kzalloc_obj(*pdom_dev_data);
+	pdom_dev_data = kzalloc(sizeof(*pdom_dev_data), GFP_KERNEL);
 	if (pdom_dev_data == NULL)
 		return ret;
 
@@ -185,17 +182,16 @@ struct iommu_domain *amd_iommu_domain_alloc_sva(struct device *dev,
 	struct protection_domain *pdom;
 	int ret;
 
-	pdom = protection_domain_alloc();
+	pdom = protection_domain_alloc(IOMMU_DOMAIN_SVA, dev_to_node(dev));
 	if (!pdom)
 		return ERR_PTR(-ENOMEM);
 
 	pdom->domain.ops = &amd_sva_domain_ops;
 	pdom->mn.ops = &sva_mn;
-	pdom->domain.type = IOMMU_DOMAIN_SVA;
 
 	ret = mmu_notifier_register(&pdom->mn, mm);
 	if (ret) {
-		amd_iommu_domain_free(&pdom->domain);
+		protection_domain_free(pdom);
 		return ERR_PTR(ret);
 	}
 

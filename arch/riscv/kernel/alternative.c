@@ -18,7 +18,7 @@
 #include <asm/sbi.h>
 #include <asm/csr.h>
 #include <asm/insn.h>
-#include <asm/text-patching.h>
+#include <asm/patch.h>
 
 struct cpu_manufacturer_info_t {
 	unsigned long vendor_id;
@@ -45,11 +45,6 @@ static void riscv_fill_cpu_mfr_info(struct cpu_manufacturer_info_t *cpu_mfr_info
 #ifdef CONFIG_ERRATA_ANDES
 	case ANDES_VENDOR_ID:
 		cpu_mfr_info->patch_func = andes_errata_patch_func;
-		break;
-#endif
-#ifdef CONFIG_ERRATA_MIPS
-	case MIPS_VENDOR_ID:
-		cpu_mfr_info->patch_func = mips_errata_patch_func;
 		break;
 #endif
 #ifdef CONFIG_ERRATA_SIFIVE
@@ -173,14 +168,15 @@ static void __init_or_module _apply_alternatives(struct alt_entry *begin,
 				stage);
 }
 
-static void __init apply_vdso_alternatives(void *start)
+#ifdef CONFIG_MMU
+static void __init apply_vdso_alternatives(void)
 {
 	const Elf_Ehdr *hdr;
 	const Elf_Shdr *shdr;
 	const Elf_Shdr *alt;
 	struct alt_entry *begin, *end;
 
-	hdr = (Elf_Ehdr *)start;
+	hdr = (Elf_Ehdr *)vdso_start;
 	shdr = (void *)hdr + hdr->e_shoff;
 	alt = find_section(hdr, shdr, ".alternative");
 	if (!alt)
@@ -193,6 +189,9 @@ static void __init apply_vdso_alternatives(void *start)
 			    (struct alt_entry *)end,
 			    RISCV_ALTERNATIVES_BOOT);
 }
+#else
+static void __init apply_vdso_alternatives(void) { }
+#endif
 
 void __init apply_boot_alternatives(void)
 {
@@ -203,11 +202,7 @@ void __init apply_boot_alternatives(void)
 			    (struct alt_entry *)__alt_end,
 			    RISCV_ALTERNATIVES_BOOT);
 
-	if (IS_ENABLED(CONFIG_MMU))
-		apply_vdso_alternatives(vdso_start);
-
-	if (IS_ENABLED(CONFIG_RISCV_USER_CFI))
-		apply_vdso_alternatives(vdso_cfi_start);
+	apply_vdso_alternatives();
 }
 
 /*

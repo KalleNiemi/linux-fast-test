@@ -27,6 +27,7 @@
 #include <linux/tty_flip.h>
 #include <linux/module.h>
 #include <linux/bitops.h>
+#include <linux/uaccess.h>
 #include <linux/usb.h>
 #include <linux/usb/cdc.h>
 #include <linux/usb/serial.h>
@@ -448,7 +449,7 @@ int usb_wwan_port_probe(struct usb_serial_port *port)
 	if (!port->bulk_in_size || !port->bulk_out_size)
 		return -ENODEV;
 
-	portdata = kzalloc_obj(*portdata);
+	portdata = kzalloc(sizeof(*portdata), GFP_KERNEL);
 	if (!portdata)
 		return -ENOMEM;
 

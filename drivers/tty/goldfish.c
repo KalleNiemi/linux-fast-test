@@ -13,6 +13,7 @@
 #include <linux/slab.h>
 #include <linux/io.h>
 #include <linux/module.h>
+#include <linux/mod_devicetable.h>
 #include <linux/goldfish.h>
 #include <linux/mm.h>
 #include <linux/dma-mapping.h>
@@ -237,7 +238,9 @@ static int goldfish_tty_create_driver(void)
 	int ret;
 	struct tty_driver *tty;
 
-	goldfish_ttys = kzalloc_objs(*goldfish_ttys, goldfish_tty_line_count);
+	goldfish_ttys = kcalloc(goldfish_tty_line_count,
+				sizeof(*goldfish_ttys),
+				GFP_KERNEL);
 	if (goldfish_ttys == NULL) {
 		ret = -ENOMEM;
 		goto err_alloc_goldfish_ttys_failed;
@@ -458,7 +461,7 @@ MODULE_DEVICE_TABLE(of, goldfish_tty_of_match);
 
 static struct platform_driver goldfish_tty_platform_driver = {
 	.probe = goldfish_tty_probe,
-	.remove = goldfish_tty_remove,
+	.remove_new = goldfish_tty_remove,
 	.driver = {
 		.name = "goldfish_tty",
 		.of_match_table = goldfish_tty_of_match,

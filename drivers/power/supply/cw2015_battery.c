@@ -13,6 +13,7 @@
 #include <linux/delay.h>
 #include <linux/i2c.h>
 #include <linux/gfp.h>
+#include <linux/gpio/consumer.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/power_supply.h>
@@ -505,7 +506,10 @@ static int cw_battery_get_property(struct power_supply *psy,
 
 	case POWER_SUPPLY_PROP_CHARGE_FULL:
 	case POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN:
-		val->intval = max(cw_bat->battery->charge_full_design_uah, 0);
+		if (cw_bat->battery->charge_full_design_uah > 0)
+			val->intval = cw_bat->battery->charge_full_design_uah;
+		else
+			val->intval = 0;
 		break;
 
 	case POWER_SUPPLY_PROP_CHARGE_NOW:
@@ -694,8 +698,7 @@ static int cw_bat_probe(struct i2c_client *client)
 			 "No monitored battery, some properties will be missing\n");
 	}
 
-	cw_bat->battery_workqueue = devm_alloc_ordered_workqueue(&client->dev,
-								 "rk_battery", 0);
+	cw_bat->battery_workqueue = create_singlethread_workqueue("rk_battery");
 	if (!cw_bat->battery_workqueue)
 		return -ENOMEM;
 
@@ -733,7 +736,7 @@ static int __maybe_unused cw_bat_resume(struct device *dev)
 static SIMPLE_DEV_PM_OPS(cw_bat_pm_ops, cw_bat_suspend, cw_bat_resume);
 
 static const struct i2c_device_id cw_bat_id_table[] = {
-	{ .name = "cw2015" },
+	{ "cw2015" },
 	{ }
 };
 

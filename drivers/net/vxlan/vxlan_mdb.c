@@ -285,7 +285,7 @@ int vxlan_mdb_dump(struct net_device *dev, struct sk_buff *skb,
 
 	ASSERT_RTNL();
 
-	NL_ASSERT_CTX_FITS(struct vxlan_mdb_dump_ctx);
+	NL_ASSERT_DUMP_CTX_FITS(struct vxlan_mdb_dump_ctx);
 
 	nlh = nlmsg_put(skb, NETLINK_CB(cb->skb).portid,
 			cb->nlh->nlmsg_seq, RTM_NEWMDB, sizeof(*bpm),
@@ -431,7 +431,7 @@ static int vxlan_mdb_config_src_entry_init(struct vxlan_mdb_config *cfg,
 				       extack))
 		return -EINVAL;
 
-	src = kzalloc_obj(*src);
+	src = kzalloc(sizeof(*src), GFP_KERNEL);
 	if (!src)
 		return -ENOMEM;
 
@@ -698,7 +698,7 @@ static int vxlan_mdb_remote_rdst_init(const struct vxlan_mdb_config *cfg,
 	struct vxlan_rdst *rd;
 	int err;
 
-	rd = kzalloc_obj(*rd);
+	rd = kzalloc(sizeof(*rd), GFP_KERNEL);
 	if (!rd)
 		return -ENOMEM;
 
@@ -768,7 +768,7 @@ vxlan_mdb_remote_src_entry_add(struct vxlan_mdb_remote *remote,
 {
 	struct vxlan_mdb_src_entry *ent;
 
-	ent = kzalloc_obj(*ent);
+	ent = kzalloc(sizeof(*ent), GFP_KERNEL);
 	if (!ent)
 		return NULL;
 
@@ -1145,7 +1145,7 @@ static int vxlan_mdb_remote_add(const struct vxlan_mdb_config *cfg,
 		return -ENOENT;
 	}
 
-	remote = kzalloc_obj(*remote);
+	remote = kzalloc(sizeof(*remote), GFP_KERNEL);
 	if (!remote)
 		return -ENOMEM;
 
@@ -1193,7 +1193,7 @@ vxlan_mdb_entry_get(struct vxlan_dev *vxlan,
 	if (mdb_entry)
 		return mdb_entry;
 
-	mdb_entry = kzalloc_obj(*mdb_entry);
+	mdb_entry = kzalloc(sizeof(*mdb_entry), GFP_KERNEL);
 	if (!mdb_entry)
 		return ERR_PTR(-ENOMEM);
 
@@ -1631,7 +1631,7 @@ struct vxlan_mdb_entry *vxlan_mdb_entry_skb_get(struct vxlan_dev *vxlan,
 
 	switch (skb->protocol) {
 	case htons(ETH_P_IP):
-		if (!pskb_network_may_pull(skb, sizeof(struct iphdr)))
+		if (!pskb_may_pull(skb, sizeof(struct iphdr)))
 			return NULL;
 		group.dst.sa.sa_family = AF_INET;
 		group.dst.sin.sin_addr.s_addr = ip_hdr(skb)->daddr;
@@ -1640,7 +1640,7 @@ struct vxlan_mdb_entry *vxlan_mdb_entry_skb_get(struct vxlan_dev *vxlan,
 		break;
 #if IS_ENABLED(CONFIG_IPV6)
 	case htons(ETH_P_IPV6):
-		if (!pskb_network_may_pull(skb, sizeof(struct ipv6hdr)))
+		if (!pskb_may_pull(skb, sizeof(struct ipv6hdr)))
 			return NULL;
 		group.dst.sa.sa_family = AF_INET6;
 		group.dst.sin6.sin6_addr = ipv6_hdr(skb)->daddr;

@@ -7,6 +7,7 @@
  * https://edit.wpgdadawant.com/uploads/news_file/program/2019/30184/tech_files/program_30184_suggest_other_file.pdf
  */
 
+#include <linux/acpi.h>
 #include <linux/bits.h>
 #include <linux/bitfield.h>
 #include <linux/delay.h>
@@ -14,6 +15,7 @@
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/log2.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/pm.h>
 #include <linux/property.h>
@@ -320,23 +322,16 @@ static int sx9360_read_raw(struct iio_dev *indio_dev,
 			   int *val, int *val2, long mask)
 {
 	struct sx_common_data *data = iio_priv(indio_dev);
-	int ret;
 
 	switch (mask) {
 	case IIO_CHAN_INFO_RAW:
-		if (!iio_device_claim_direct(indio_dev))
-			return -EBUSY;
-
-		ret = sx_common_read_proximity(data, chan, val);
-		iio_device_release_direct(indio_dev);
-		return ret;
+		iio_device_claim_direct_scoped(return -EBUSY, indio_dev)
+			return sx_common_read_proximity(data, chan, val);
+		unreachable();
 	case IIO_CHAN_INFO_HARDWAREGAIN:
-		if (!iio_device_claim_direct(indio_dev))
-			return -EBUSY;
-
-		ret = sx9360_read_gain(data, chan, val);
-		iio_device_release_direct(indio_dev);
-		return ret;
+		iio_device_claim_direct_scoped(return -EBUSY, indio_dev)
+			return sx9360_read_gain(data, chan, val);
+		unreachable();
 	case IIO_CHAN_INFO_SAMP_FREQ:
 		return sx9360_read_samp_freq(data, val, val2);
 	default:
@@ -831,20 +826,20 @@ static int sx9360_resume(struct device *dev)
 static DEFINE_SIMPLE_DEV_PM_OPS(sx9360_pm_ops, sx9360_suspend, sx9360_resume);
 
 static const struct acpi_device_id sx9360_acpi_match[] = {
-	{ .id = "STH9360" },
-	{ .id = "SAMM0208" },
+	{ "STH9360", SX9360_WHOAMI_VALUE },
+	{ "SAMM0208", SX9360_WHOAMI_VALUE },
 	{ }
 };
 MODULE_DEVICE_TABLE(acpi, sx9360_acpi_match);
 
 static const struct of_device_id sx9360_of_match[] = {
-	{ .compatible = "semtech,sx9360" },
+	{ .compatible = "semtech,sx9360", (void *)SX9360_WHOAMI_VALUE },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, sx9360_of_match);
 
 static const struct i2c_device_id sx9360_id[] = {
-	{ .name = "sx9360" },
+	{"sx9360", SX9360_WHOAMI_VALUE },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, sx9360_id);
@@ -871,4 +866,4 @@ module_i2c_driver(sx9360_driver);
 MODULE_AUTHOR("Gwendal Grignou <gwendal@chromium.org>");
 MODULE_DESCRIPTION("Driver for Semtech SX9360 proximity sensor");
 MODULE_LICENSE("GPL v2");
-MODULE_IMPORT_NS("SEMTECH_PROX");
+MODULE_IMPORT_NS(SEMTECH_PROX);

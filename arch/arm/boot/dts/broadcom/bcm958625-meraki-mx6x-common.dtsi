@@ -17,21 +17,21 @@
 		led-1 {
 			function = LED_FUNCTION_INDICATOR;
 			color = <LED_COLOR_ID_RED>;
-			pwms = <&pwm 1 50000 0>;
+			pwms = <&pwm 1 50000>;
 			max-brightness = <255>;
 		};
 
 		led-2 {
 			function = LED_FUNCTION_POWER;
 			color = <LED_COLOR_ID_GREEN>;
-			pwms = <&pwm 2 50000 0>;
+			pwms = <&pwm 2 50000>;
 			max-brightness = <255>;
 		};
 
 		led-3 {
 			function = LED_FUNCTION_INDICATOR;
 			color = <LED_COLOR_ID_BLUE>;
-			pwms = <&pwm 3 50000 0>;
+			pwms = <&pwm 3 50000>;
 			max-brightness = <255>;
 		};
 	};
@@ -121,6 +121,9 @@
 };
 
 &pinctrl {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pwm_leds>;
+
 	pwm_leds: pwm_leds {
 		function = "pwm";
 		groups = "pwm1_grp", "pwm2_grp", "pwm3_grp";
@@ -128,10 +131,8 @@
 };
 
 &pwm {
-	pinctrl-names = "default";
-	pinctrl-0 = <&pwm_leds>;
-
 	status = "okay";
+	#pwm-cells = <2>;
 };
 
 &uart0 {

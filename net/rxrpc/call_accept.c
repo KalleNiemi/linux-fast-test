@@ -164,7 +164,7 @@ int rxrpc_service_prealloc(struct rxrpc_sock *rx, gfp_t gfp)
 	struct rxrpc_backlog *b = rx->backlog;
 
 	if (!b) {
-		b = kzalloc_obj(struct rxrpc_backlog, gfp);
+		b = kzalloc(sizeof(struct rxrpc_backlog), gfp);
 		if (!b)
 			return -ENOMEM;
 		rx->backlog = b;
@@ -374,8 +374,8 @@ bool rxrpc_new_incoming_call(struct rxrpc_local *local,
 	spin_lock(&rx->incoming_lock);
 	if (rx->sk.sk_state == RXRPC_SERVER_LISTEN_DISABLED ||
 	    rx->sk.sk_state == RXRPC_CLOSE) {
-		rxrpc_direct_conn_abort(skb, rxrpc_abort_shut_down,
-					RX_INVALID_OPERATION, -ESHUTDOWN);
+		rxrpc_direct_abort(skb, rxrpc_abort_shut_down,
+				   RX_INVALID_OPERATION, -ESHUTDOWN);
 		goto no_call;
 	}
 
@@ -407,7 +407,6 @@ bool rxrpc_new_incoming_call(struct rxrpc_local *local,
 
 	spin_unlock(&rx->incoming_lock);
 	read_unlock_irq(&local->services_lock);
-	rxrpc_assess_MTU_size(local, call->peer);
 
 	if (hlist_unhashed(&call->error_link)) {
 		spin_lock_irq(&call->peer->lock);
@@ -422,12 +421,12 @@ bool rxrpc_new_incoming_call(struct rxrpc_local *local,
 
 unsupported_service:
 	read_unlock_irq(&local->services_lock);
-	return rxrpc_direct_conn_abort(skb, rxrpc_abort_service_not_offered,
-				       RX_INVALID_OPERATION, -EOPNOTSUPP);
+	return rxrpc_direct_abort(skb, rxrpc_abort_service_not_offered,
+				  RX_INVALID_OPERATION, -EOPNOTSUPP);
 unsupported_security:
 	read_unlock_irq(&local->services_lock);
-	return rxrpc_direct_conn_abort(skb, rxrpc_abort_service_not_offered,
-				       RX_INVALID_OPERATION, -EKEYREJECTED);
+	return rxrpc_direct_abort(skb, rxrpc_abort_service_not_offered,
+				  RX_INVALID_OPERATION, -EKEYREJECTED);
 no_call:
 	spin_unlock(&rx->incoming_lock);
 	read_unlock_irq(&local->services_lock);

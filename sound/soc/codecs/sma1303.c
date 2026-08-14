@@ -7,6 +7,7 @@
 // Auther: Gyuhwa Park <gyuhwa.park@irondevice.com>
 //         Kiseok Jo <kiseok.jo@irondevice.com>
 
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/kernel.h>
@@ -308,7 +309,8 @@ static const struct soc_enum sma1303_tdm_slot_enum =
 static int sma1303_force_mute_get(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_component *component =
+		snd_soc_kcontrol_component(kcontrol);
 	struct sma1303_priv *sma1303 = snd_soc_component_get_drvdata(component);
 
 	ucontrol->value.integer.value[0] = (int)sma1303->force_mute_status;
@@ -321,7 +323,8 @@ static int sma1303_force_mute_get(struct snd_kcontrol *kcontrol,
 static int sma1303_force_mute_put(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_component *component =
+		snd_soc_kcontrol_component(kcontrol);
 	struct sma1303_priv *sma1303 = snd_soc_component_get_drvdata(component);
 	bool change = false, val = (bool)ucontrol->value.integer.value[0];
 
@@ -340,7 +343,8 @@ static int sma1303_force_mute_put(struct snd_kcontrol *kcontrol,
 static int sma1303_postscaler_get(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_component *component =
+		snd_soc_kcontrol_component(kcontrol);
 	struct sma1303_priv *sma1303 = snd_soc_component_get_drvdata(component);
 	int val, ret;
 
@@ -356,7 +360,8 @@ static int sma1303_postscaler_get(struct snd_kcontrol *kcontrol,
 static int sma1303_postscaler_put(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_component *component =
+		snd_soc_kcontrol_component(kcontrol);
 	struct sma1303_priv *sma1303 = snd_soc_component_get_drvdata(component);
 	int ret, val = (int)ucontrol->value.integer.value[0];
 	bool change;
@@ -372,7 +377,8 @@ static int sma1303_postscaler_put(struct snd_kcontrol *kcontrol,
 static int sma1303_tdm_slot_rx_get(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_component *component =
+		snd_soc_kcontrol_component(kcontrol);
 	struct sma1303_priv *sma1303 = snd_soc_component_get_drvdata(component);
 	int val, ret;
 
@@ -389,7 +395,8 @@ static int sma1303_tdm_slot_rx_get(struct snd_kcontrol *kcontrol,
 static int sma1303_tdm_slot_rx_put(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_component *component =
+		snd_soc_kcontrol_component(kcontrol);
 	struct sma1303_priv *sma1303 = snd_soc_component_get_drvdata(component);
 	int ret, val = (int)ucontrol->value.integer.value[0];
 	bool change;
@@ -405,7 +412,8 @@ static int sma1303_tdm_slot_rx_put(struct snd_kcontrol *kcontrol,
 static int sma1303_tdm_slot_tx_get(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_component *component =
+		snd_soc_kcontrol_component(kcontrol);
 	struct sma1303_priv *sma1303 = snd_soc_component_get_drvdata(component);
 	int val, ret;
 
@@ -422,7 +430,8 @@ static int sma1303_tdm_slot_tx_get(struct snd_kcontrol *kcontrol,
 static int sma1303_tdm_slot_tx_put(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_component *component =
+		snd_soc_kcontrol_component(kcontrol);
 	struct sma1303_priv *sma1303 = snd_soc_component_get_drvdata(component);
 	int ret, val = (int)ucontrol->value.integer.value[0];
 	bool change;
@@ -517,7 +526,7 @@ static int sma1303_aif_in_event(struct snd_soc_dapm_widget *w,
 	struct snd_soc_component *component =
 			snd_soc_dapm_to_component(w->dapm);
 	struct sma1303_priv *sma1303 = snd_soc_component_get_drvdata(component);
-	unsigned int mux = snd_soc_dapm_kcontrol_get_value(w->kcontrols[0]);
+	unsigned int mux = dapm_kcontrol_get_value(w->kcontrols[0]);
 	int ret = 0;
 	bool change = false, temp = false;
 
@@ -587,7 +596,7 @@ static int sma1303_aif_out_event(struct snd_soc_dapm_widget *w,
 	struct snd_soc_component *component =
 			snd_soc_dapm_to_component(w->dapm);
 	struct sma1303_priv *sma1303 = snd_soc_component_get_drvdata(component);
-	unsigned int mux = snd_soc_dapm_kcontrol_get_value(w->kcontrols[0]);
+	unsigned int mux = dapm_kcontrol_get_value(w->kcontrols[0]);
 	int ret = 0;
 	bool change = false, temp = false;
 
@@ -1556,7 +1565,8 @@ static void sma1303_check_fault_worker(struct work_struct *work)
 
 static int sma1303_probe(struct snd_soc_component *component)
 {
-	struct snd_soc_dapm_context *dapm = snd_soc_component_to_dapm(component);
+	struct snd_soc_dapm_context *dapm =
+		snd_soc_component_get_dapm(component);
 
 	snd_soc_dapm_sync(dapm);
 
@@ -1781,8 +1791,8 @@ static void sma1303_i2c_remove(struct i2c_client *client)
 }
 
 static const struct i2c_device_id sma1303_i2c_id[] = {
-	{ .name = "sma1303" },
-	{ }
+	{"sma1303"},
+	{}
 };
 MODULE_DEVICE_TABLE(i2c, sma1303_i2c_id);
 

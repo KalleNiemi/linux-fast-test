@@ -2,7 +2,7 @@
 /*
  * Copyright (C) 2013-2015 Intel Mobile Communications GmbH
  * Copyright (C) 2016-2017 Intel Deutschland GmbH
- * Copyright (C) 2018-2022, 2024-2026 Intel Corporation
+ * Copyright (C) 2018-2022, 2024 Intel Corporation
  */
 #ifndef __iwl_fw_api_commands_h__
 #define __iwl_fw_api_commands_h__
@@ -22,6 +22,7 @@
  *	&enum iwl_data_path_subcmd_ids
  * @SCAN_GROUP: scan group, uses command IDs from
  *	&enum iwl_scan_subcmd_ids
+ * @NAN_GROUP: NAN group, uses command IDs from &enum iwl_nan_subcmd_ids
  * @LOCATION_GROUP: location group, uses command IDs from
  *	&enum iwl_location_subcmd_ids
  * @BT_COEX_GROUP: bt coex group, uses command IDs from
@@ -42,6 +43,7 @@ enum iwl_mvm_command_groups {
 	PHY_OPS_GROUP = 0x4,
 	DATA_PATH_GROUP = 0x5,
 	SCAN_GROUP = 0x6,
+	NAN_GROUP = 0x7,
 	LOCATION_GROUP = 0x8,
 	BT_COEX_GROUP = 0x9,
 	PROT_OFFLOAD_GROUP = 0xb,
@@ -57,7 +59,8 @@ enum iwl_legacy_cmds {
 	/**
 	 * @UCODE_ALIVE_NTFY:
 	 * Alive data from the firmware, as described in
-	 * &struct iwl_alive_ntf_v3 or &struct iwl_alive_ntf_v7.
+	 * &struct iwl_alive_ntf_v3 or &struct iwl_alive_ntf_v4 or
+	 * &struct iwl_alive_ntf_v5 or &struct iwl_alive_ntf_v6.
 	 */
 	UCODE_ALIVE_NTFY = 0x1,
 
@@ -142,8 +145,8 @@ enum iwl_legacy_cmds {
 	REMOVE_STA = 0x19,
 
 	/**
-	 * @TX_CMD: uses &struct iwl_tx_cmd_v6 or &struct iwl_tx_cmd_v9 or
-	 *	&struct iwl_tx_cmd,
+	 * @TX_CMD: uses &struct iwl_tx_cmd or &struct iwl_tx_cmd_gen2 or
+	 *	&struct iwl_tx_cmd_gen3,
 	 *	response in &struct iwl_tx_resp or
 	 *	&struct iwl_tx_resp_v3
 	 */
@@ -294,11 +297,6 @@ enum iwl_legacy_cmds {
 	SCAN_OFFLOAD_UPDATE_PROFILES_CMD = 0x6E,
 
 	/**
-	 * @SCAN_START_NOTIFICATION_UMAC: uses &struct iwl_umac_scan_start
-	 */
-	SCAN_START_NOTIFICATION_UMAC = 0xb2,
-
-	/**
 	 * @MATCH_FOUND_NOTIFICATION: scan match found
 	 */
 	MATCH_FOUND_NOTIFICATION = 0xd9,
@@ -383,7 +381,7 @@ enum iwl_legacy_cmds {
 	 * @STATISTICS_NOTIFICATION:
 	 * one of &struct iwl_notif_statistics_v10,
 	 * &struct iwl_notif_statistics_v11,
-	 * &struct iwl_notif_statistics,
+	 * &struct iwl_notif_statistic,
 	 * &struct iwl_statistics_operational_ntfy_ver_14
 	 * &struct iwl_statistics_operational_ntfy
 	 */
@@ -449,7 +447,7 @@ enum iwl_legacy_cmds {
 
 	/**
 	 * @BA_NOTIF:
-	 * BlockAck notification, uses &struct iwl_compressed_ba_notif
+	 * BlockAck notification, uses &struct iwl_mvm_compressed_ba_notif
 	 * or &struct iwl_mvm_ba_notif depending on the HW
 	 */
 	BA_NOTIF = 0xc5,
@@ -466,8 +464,8 @@ enum iwl_legacy_cmds {
 	MCC_CHUB_UPDATE_CMD = 0xc9,
 
 	/**
-	 * @MARKER_CMD: trace marker command, uses &struct iwl_marker
-	 * with &struct iwl_marker_rsp
+	 * @MARKER_CMD: trace marker command, uses &struct iwl_mvm_marker
+	 * with &struct iwl_mvm_marker_rsp
 	 */
 	MARKER_CMD = 0xcb,
 
@@ -504,14 +502,9 @@ enum iwl_legacy_cmds {
 	/**
 	 * @DTS_MEASUREMENT_NOTIFICATION:
 	 * &struct iwl_dts_measurement_notif_v1 or
-	 * &struct iwl_dts_measurement_notif
+	 * &struct iwl_dts_measurement_notif_v2
 	 */
 	DTS_MEASUREMENT_NOTIFICATION = 0xdd,
-
-	/**
-	 * @DEBUG_HOST_COMMAND: &struct iwl_dhc_cmd
-	 */
-	DEBUG_HOST_COMMAND = 0xf1,
 
 	/**
 	 * @LDBG_CONFIG_CMD: configure continuous trace recording
@@ -557,7 +550,7 @@ enum iwl_legacy_cmds {
 	WOWLAN_CONFIGURATION = 0xe1,
 
 	/**
-	 * @WOWLAN_TSC_RSC_PARAM: &struct iwl_wowlan_rsc_tsc_params_cmd_ver_2,
+	 * @WOWLAN_TSC_RSC_PARAM: &struct iwl_wowlan_rsc_tsc_params_cmd_v4,
 	 *	&struct iwl_wowlan_rsc_tsc_params_cmd
 	 */
 	WOWLAN_TSC_RSC_PARAM = 0xe2,
@@ -575,8 +568,9 @@ enum iwl_legacy_cmds {
 	WOWLAN_KEK_KCK_MATERIAL = 0xe4,
 
 	/**
-	 * @WOWLAN_GET_STATUSES: response in &struct iwl_wowlan_status_v6 or
-	 *	&struct iwl_wowlan_status_v7
+	 * @WOWLAN_GET_STATUSES: response in &struct iwl_wowlan_status_v6,
+	 *	&struct iwl_wowlan_status_v7, &struct iwl_wowlan_status_v9 or
+	 *	&struct iwl_wowlan_status_v12
 	 */
 	WOWLAN_GET_STATUSES = 0xe5,
 
@@ -650,7 +644,7 @@ enum iwl_system_subcmd_ids {
 enum iwl_statistics_subcmd_ids {
 	/**
 	 * @STATISTICS_OPER_NOTIF: Notification about operational
-	 *	statistics &struct iwl_system_statistics_notif_oper_v3
+	 *	statistics &struct iwl_system_statistics_notif_oper
 	 */
 	STATISTICS_OPER_NOTIF = 0x0,
 

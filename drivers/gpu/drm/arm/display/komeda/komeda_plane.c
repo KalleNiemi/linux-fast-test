@@ -69,7 +69,7 @@ komeda_plane_init_data_flow(struct drm_plane_state *st,
  */
 static int
 komeda_plane_atomic_check(struct drm_plane *plane,
-			  struct drm_atomic_commit *state)
+			  struct drm_atomic_state *state)
 {
 	struct drm_plane_state *new_plane_state = drm_atomic_get_new_plane_state(state,
 										 plane);
@@ -116,7 +116,7 @@ komeda_plane_atomic_check(struct drm_plane *plane,
  */
 static void
 komeda_plane_atomic_update(struct drm_plane *plane,
-			   struct drm_atomic_commit *state)
+			   struct drm_atomic_state *state)
 {
 }
 
@@ -142,7 +142,7 @@ static void komeda_plane_reset(struct drm_plane *plane)
 	kfree(plane->state);
 	plane->state = NULL;
 
-	state = kzalloc_obj(*state);
+	state = kzalloc(sizeof(*state), GFP_KERNEL);
 	if (state)
 		__drm_atomic_helper_plane_reset(plane, &state->base);
 }
@@ -155,7 +155,7 @@ komeda_plane_atomic_duplicate_state(struct drm_plane *plane)
 	if (WARN_ON(!plane->state))
 		return NULL;
 
-	new = kzalloc_obj(*new);
+	new = kzalloc(sizeof(*new), GFP_KERNEL);
 	if (!new)
 		return NULL;
 
@@ -247,7 +247,7 @@ static int komeda_plane_add(struct komeda_kms_dev *kms,
 	u32 *formats, n_formats = 0;
 	int err;
 
-	kplane = kzalloc_obj(*kplane);
+	kplane = kzalloc(sizeof(*kplane), GFP_KERNEL);
 	if (!kplane)
 		return -ENOMEM;
 

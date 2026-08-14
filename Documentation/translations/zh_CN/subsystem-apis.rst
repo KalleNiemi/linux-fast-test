@@ -71,11 +71,12 @@ TODOList:
    :maxdepth: 1
 
    filesystems/index
-   scsi/index
 
 TODOList:
 
+* block/index
 * cdrom/index
+* scsi/index
 * target/index
 
 **Fixme**: 这里还需要更多的分类组织工作。
@@ -87,10 +88,8 @@ TODOList:
    cpu-freq/index
    iio/index
    virt/index
-   security/index
    PCI/index
    peci/index
-   usb/index
 
 TODOList:
 
@@ -103,7 +102,9 @@ TODOList:
 * watchdog/index
 * hwmon/index
 * accel/index
+* security/index
 * crypto/index
 * bpf/index
+* usb/index
 * misc-devices/index
 * wmi/index

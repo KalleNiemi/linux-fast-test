@@ -35,8 +35,6 @@ int pinctrl_gpio_direction_output(struct gpio_chip *gc,
 				  unsigned int offset);
 int pinctrl_gpio_set_config(struct gpio_chip *gc, unsigned int offset,
 				unsigned long config);
-int pinctrl_gpio_get_config(struct gpio_chip *gc, unsigned int offset,
-			    unsigned long *config);
 
 struct pinctrl * __must_check pinctrl_get(struct device *dev);
 void pinctrl_put(struct pinctrl *p);
@@ -50,15 +48,10 @@ int pinctrl_select_default_state(struct device *dev);
 
 #ifdef CONFIG_PM
 int pinctrl_pm_select_default_state(struct device *dev);
-int pinctrl_pm_select_init_state(struct device *dev);
 int pinctrl_pm_select_sleep_state(struct device *dev);
 int pinctrl_pm_select_idle_state(struct device *dev);
 #else
 static inline int pinctrl_pm_select_default_state(struct device *dev)
-{
-	return 0;
-}
-static inline int pinctrl_pm_select_init_state(struct device *dev)
 {
 	return 0;
 }
@@ -99,13 +92,6 @@ pinctrl_gpio_direction_input(struct gpio_chip *gc, unsigned int offset)
 
 static inline int
 pinctrl_gpio_direction_output(struct gpio_chip *gc, unsigned int offset)
-{
-	return 0;
-}
-
-static inline int
-pinctrl_gpio_get_config(struct gpio_chip *gc, unsigned int offset,
-			unsigned long *config)
 {
 	return 0;
 }
@@ -153,11 +139,6 @@ static inline int pinctrl_select_default_state(struct device *dev)
 }
 
 static inline int pinctrl_pm_select_default_state(struct device *dev)
-{
-	return 0;
-}
-
-static inline int pinctrl_pm_select_init_state(struct device *dev)
 {
 	return 0;
 }

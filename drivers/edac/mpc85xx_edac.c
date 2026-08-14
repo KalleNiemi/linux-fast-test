@@ -16,6 +16,7 @@
 #include <linux/interrupt.h>
 #include <linux/ctype.h>
 #include <linux/io.h>
+#include <linux/mod_devicetable.h>
 #include <linux/edac.h>
 #include <linux/smp.h>
 #include <linux/gfp.h>
@@ -322,7 +323,7 @@ static const struct platform_device_id mpc85xx_pci_err_match[] = {
 
 static struct platform_driver mpc85xx_pci_err_driver = {
 	.probe = mpc85xx_pci_err_probe,
-	.remove = mpc85xx_pci_err_remove,
+	.remove_new = mpc85xx_pci_err_remove,
 	.id_table = mpc85xx_pci_err_match,
 	.driver = {
 		.name = "mpc85xx_pci_err",
@@ -398,7 +399,7 @@ static ssize_t mpc85xx_l2_inject_ctrl_store(struct edac_device_ctl_info
 	return 0;
 }
 
-static const struct edac_dev_sysfs_attribute mpc85xx_l2_sysfs_attributes[] = {
+static struct edac_dev_sysfs_attribute mpc85xx_l2_sysfs_attributes[] = {
 	{
 	 .attr = {
 		  .name = "inject_data_hi",
@@ -626,7 +627,7 @@ MODULE_DEVICE_TABLE(of, mpc85xx_l2_err_of_match);
 
 static struct platform_driver mpc85xx_l2_err_driver = {
 	.probe = mpc85xx_l2_err_probe,
-	.remove = mpc85xx_l2_err_remove,
+	.remove_new = mpc85xx_l2_err_remove,
 	.driver = {
 		.name = "mpc85xx_l2_err",
 		.of_match_table = mpc85xx_l2_err_of_match,
@@ -655,7 +656,7 @@ MODULE_DEVICE_TABLE(of, mpc85xx_mc_err_of_match);
 
 static struct platform_driver mpc85xx_mc_err_driver = {
 	.probe = fsl_mc_err_probe,
-	.remove = fsl_mc_err_remove,
+	.remove_new = fsl_mc_err_remove,
 	.driver = {
 		.name = "mpc85xx_mc_err",
 		.of_match_table = mpc85xx_mc_err_of_match,

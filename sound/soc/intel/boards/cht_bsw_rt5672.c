@@ -14,7 +14,6 @@
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include <linux/clk.h>
-#include <linux/string.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
 #include <sound/soc.h>
@@ -51,7 +50,8 @@ static struct snd_soc_jack_pin cht_bsw_headset_pins[] = {
 static int platform_clock_control(struct snd_soc_dapm_widget *w,
 		struct snd_kcontrol *k, int  event)
 {
-	struct snd_soc_card *card = snd_soc_dapm_to_card(w->dapm);
+	struct snd_soc_dapm_context *dapm = w->dapm;
+	struct snd_soc_card *card = dapm->card;
 	struct snd_soc_dai *codec_dai;
 	struct cht_mc_private *ctx = snd_soc_card_get_drvdata(card);
 	int ret;
@@ -63,11 +63,13 @@ static int platform_clock_control(struct snd_soc_dapm_widget *w,
 	}
 
 	if (SND_SOC_DAPM_EVENT_ON(event)) {
-		ret = clk_prepare_enable(ctx->mclk);
-		if (ret < 0) {
-			dev_err(card->dev,
-				"could not configure MCLK state: %d\n", ret);
-			return ret;
+		if (ctx->mclk) {
+			ret = clk_prepare_enable(ctx->mclk);
+			if (ret < 0) {
+				dev_err(card->dev,
+					"could not configure MCLK state");
+				return ret;
+			}
 		}
 
 		/* set codec PLL source to the 19.2MHz platform clock (MCLK) */
@@ -75,7 +77,6 @@ static int platform_clock_control(struct snd_soc_dapm_widget *w,
 				CHT_PLAT_CLK_3_HZ, 48000 * 512);
 		if (ret < 0) {
 			dev_err(card->dev, "can't set codec pll: %d\n", ret);
-			clk_disable_unprepare(ctx->mclk);
 			return ret;
 		}
 
@@ -84,7 +85,6 @@ static int platform_clock_control(struct snd_soc_dapm_widget *w,
 			48000 * 512, SND_SOC_CLOCK_IN);
 		if (ret < 0) {
 			dev_err(card->dev, "can't set codec sysclk: %d\n", ret);
-			clk_disable_unprepare(ctx->mclk);
 			return ret;
 		}
 	} else {
@@ -100,7 +100,8 @@ static int platform_clock_control(struct snd_soc_dapm_widget *w,
 			return ret;
 		}
 
-		clk_disable_unprepare(ctx->mclk);
+		if (ctx->mclk)
+			clk_disable_unprepare(ctx->mclk);
 	}
 	return 0;
 }
@@ -191,7 +192,6 @@ static const struct acpi_gpio_mapping cht_rt5672_gpios[] = {
 static int cht_codec_init(struct snd_soc_pcm_runtime *runtime)
 {
 	int ret;
-	struct snd_soc_dapm_context *dapm = snd_soc_card_to_dapm(runtime->card);
 	struct snd_soc_dai *codec_dai = snd_soc_rtd_to_codec(runtime, 0);
 	struct snd_soc_component *component = codec_dai->component;
 	struct cht_mc_private *ctx = snd_soc_card_get_drvdata(runtime->card);
@@ -214,11 +214,11 @@ static int cht_codec_init(struct snd_soc_pcm_runtime *runtime)
 				RT5670_CLK_SEL_I2S1_ASRC);
 
 	if (ctx->use_ssp0) {
-		ret = snd_soc_dapm_add_routes(dapm,
+		ret = snd_soc_dapm_add_routes(&runtime->card->dapm,
 					      cht_audio_ssp0_map,
 					      ARRAY_SIZE(cht_audio_ssp0_map));
 	} else {
-		ret = snd_soc_dapm_add_routes(dapm,
+		ret = snd_soc_dapm_add_routes(&runtime->card->dapm,
 					      cht_audio_ssp2_map,
 					      ARRAY_SIZE(cht_audio_ssp2_map));
 	}
@@ -239,25 +239,28 @@ static int cht_codec_init(struct snd_soc_pcm_runtime *runtime)
 	snd_jack_set_key(ctx->headset.jack, SND_JACK_BTN_2, KEY_VOLUMEDOWN);
 
 	rt5670_set_jack_detect(component, &ctx->headset);
+	if (ctx->mclk) {
+		/*
+		 * The firmware might enable the clock at
+		 * boot (this information may or may not
+		 * be reflected in the enable clock register).
+		 * To change the rate we must disable the clock
+		 * first to cover these cases. Due to common
+		 * clock framework restrictions that do not allow
+		 * to disable a clock that has not been enabled,
+		 * we need to enable the clock first.
+		 */
+		ret = clk_prepare_enable(ctx->mclk);
+		if (!ret)
+			clk_disable_unprepare(ctx->mclk);
 
-	/*
-	 * The firmware might enable the clock at boot (this information
-	 * may or may not be reflected in the enable clock register).
-	 * To change the rate we must disable the clock first to cover
-	 * these cases. Due to Common Clock Framework restrictions that
-	 * do not allow to disable a clock that has not been enabled, we
-	 * need to enable the clock first.
-	 */
-	ret = clk_prepare_enable(ctx->mclk);
-	if (!ret)
-		clk_disable_unprepare(ctx->mclk);
+		ret = clk_set_rate(ctx->mclk, CHT_PLAT_CLK_3_HZ);
 
-	ret = clk_set_rate(ctx->mclk, CHT_PLAT_CLK_3_HZ);
-	if (ret) {
-		dev_err(runtime->dev, "unable to set MCLK rate\n");
-		return ret;
+		if (ret) {
+			dev_err(runtime->dev, "unable to set MCLK rate\n");
+			return ret;
+		}
 	}
-
 	return 0;
 }
 
@@ -355,6 +358,8 @@ static struct snd_soc_dai_link cht_dailink[] = {
 		.stream_name = "Audio",
 		.nonatomic = true,
 		.dynamic = 1,
+		.dpcm_playback = 1,
+		.dpcm_capture = 1,
 		.ops = &cht_aif1_ops,
 		SND_SOC_DAILINK_REG(media, dummy, platform),
 	},
@@ -363,7 +368,7 @@ static struct snd_soc_dai_link cht_dailink[] = {
 		.stream_name = "Deep-Buffer Audio",
 		.nonatomic = true,
 		.dynamic = 1,
-		.playback_only = 1,
+		.dpcm_playback = 1,
 		.ops = &cht_aif1_ops,
 		SND_SOC_DAILINK_REG(deepbuffer, dummy, platform),
 	},
@@ -376,6 +381,8 @@ static struct snd_soc_dai_link cht_dailink[] = {
 		.no_pcm = 1,
 		.init = cht_codec_init,
 		.be_hw_params_fixup = cht_codec_fixup,
+		.dpcm_playback = 1,
+		.dpcm_capture = 1,
 		.ops = &cht_be_ssp2_ops,
 		SND_SOC_DAILINK_REG(ssp2_port, ssp2_codec, platform),
 	},
@@ -446,17 +453,16 @@ static int snd_cht_mc_probe(struct platform_device *pdev)
 	struct cht_mc_private *drv;
 	struct snd_soc_acpi_mach *mach = pdev->dev.platform_data;
 	const char *platform_name;
-	struct device *dev = &pdev->dev;
 	struct acpi_device *adev;
 	bool sof_parent;
 	int dai_index = 0;
 	int i;
 
-	drv = devm_kzalloc(dev, sizeof(*drv), GFP_KERNEL);
+	drv = devm_kzalloc(&pdev->dev, sizeof(*drv), GFP_KERNEL);
 	if (!drv)
 		return -ENOMEM;
 
-	strscpy(drv->codec_name, RT5672_I2C_DEFAULT, sizeof(drv->codec_name));
+	strcpy(drv->codec_name, RT5672_I2C_DEFAULT);
 
 	/* find index of codec dai */
 	for (i = 0; i < ARRAY_SIZE(cht_dailink); i++) {
@@ -474,7 +480,7 @@ static int snd_cht_mc_probe(struct platform_device *pdev)
 			 "i2c-%s", acpi_dev_name(adev));
 		cht_dailink[dai_index].codecs->name = drv->codec_name;
 	}  else {
-		dev_err(dev, "Error cannot find '%s' dev\n", mach->id);
+		dev_err(&pdev->dev, "Error cannot find '%s' dev\n", mach->id);
 		return -ENOENT;
 	}
 
@@ -487,7 +493,7 @@ static int snd_cht_mc_probe(struct platform_device *pdev)
 	}
 
 	/* override platform name, if required */
-	snd_soc_card_cht.dev = dev;
+	snd_soc_card_cht.dev = &pdev->dev;
 	platform_name = mach->mach_params.platform;
 
 	ret_val = snd_soc_fixup_dai_links_platform_name(&snd_soc_card_cht,
@@ -497,16 +503,16 @@ static int snd_cht_mc_probe(struct platform_device *pdev)
 
 	snd_soc_card_cht.components = rt5670_components();
 
-	drv->mclk = devm_clk_get(dev, "pmc_plt_clk_3");
+	drv->mclk = devm_clk_get(&pdev->dev, "pmc_plt_clk_3");
 	if (IS_ERR(drv->mclk)) {
-		dev_err(dev,
+		dev_err(&pdev->dev,
 			"Failed to get MCLK from pmc_plt_clk_3: %ld\n",
 			PTR_ERR(drv->mclk));
 		return PTR_ERR(drv->mclk);
 	}
 	snd_soc_card_set_drvdata(&snd_soc_card_cht, drv);
 
-	sof_parent = snd_soc_acpi_sof_parent(dev);
+	sof_parent = snd_soc_acpi_sof_parent(&pdev->dev);
 
 	/* set card and driver name */
 	if (sof_parent) {
@@ -522,9 +528,9 @@ static int snd_cht_mc_probe(struct platform_device *pdev)
 		pdev->dev.driver->pm = &snd_soc_pm_ops;
 
 	/* register the soc card */
-	ret_val = devm_snd_soc_register_card(dev, &snd_soc_card_cht);
+	ret_val = devm_snd_soc_register_card(&pdev->dev, &snd_soc_card_cht);
 	if (ret_val) {
-		dev_err(dev,
+		dev_err(&pdev->dev,
 			"snd_soc_register_card failed %d\n", ret_val);
 		return ret_val;
 	}

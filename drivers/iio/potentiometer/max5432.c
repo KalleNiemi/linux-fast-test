@@ -11,6 +11,7 @@
 #include <linux/iio/iio.h>
 #include <linux/limits.h>
 #include <linux/module.h>
+#include <linux/mod_devicetable.h>
 #include <linux/property.h>
 
 /* All chip variants have 32 wiper positions. */
@@ -113,7 +114,7 @@ static const struct of_device_id max5432_dt_ids[] = {
 	{ .compatible = "maxim,max5433", .data = (void *)MAX5432_OHM_100K },
 	{ .compatible = "maxim,max5434", .data = (void *)MAX5432_OHM_50K  },
 	{ .compatible = "maxim,max5435", .data = (void *)MAX5432_OHM_100K },
-	{ }
+	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, max5432_dt_ids);
 

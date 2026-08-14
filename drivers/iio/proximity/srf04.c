@@ -37,6 +37,7 @@
 #include <linux/err.h>
 #include <linux/gpio/consumer.h>
 #include <linux/kernel.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/property.h>
@@ -116,8 +117,10 @@ static int srf04_read(struct srf04_data *data)
 	udelay(data->cfg->trigger_pulse_us);
 	gpiod_set_value(data->gpiod_trig, 0);
 
-	if (data->gpiod_power)
+	if (data->gpiod_power) {
+		pm_runtime_mark_last_busy(data->dev);
 		pm_runtime_put_autosuspend(data->dev);
+	}
 
 	/* it should not take more than 20 ms until echo is rising */
 	ret = wait_for_completion_killable_timeout(&data->rising, HZ/50);
@@ -237,7 +240,7 @@ static const struct of_device_id of_srf04_match[] = {
 	{ .compatible = "maxbotix,mb1020", .data = &mb_lv_cfg },
 	{ .compatible = "maxbotix,mb1030", .data = &mb_lv_cfg },
 	{ .compatible = "maxbotix,mb1040", .data = &mb_lv_cfg },
-	{ }
+	{},
 };
 
 MODULE_DEVICE_TABLE(of, of_srf04_match);
@@ -250,8 +253,10 @@ static int srf04_probe(struct platform_device *pdev)
 	int ret;
 
 	indio_dev = devm_iio_device_alloc(dev, sizeof(struct srf04_data));
-	if (!indio_dev)
+	if (!indio_dev) {
+		dev_err(dev, "failed to allocate IIO device\n");
 		return -ENOMEM;
+	}
 
 	data = iio_priv(indio_dev);
 	data->dev = dev;
@@ -384,7 +389,7 @@ static const struct dev_pm_ops srf04_pm_ops = {
 
 static struct platform_driver srf04_driver = {
 	.probe		= srf04_probe,
-	.remove		= srf04_remove,
+	.remove_new	= srf04_remove,
 	.driver		= {
 		.name		= "srf04-gpio",
 		.of_match_table	= of_srf04_match,

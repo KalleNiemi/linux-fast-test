@@ -21,7 +21,7 @@
 #define MAX_BIDS_PER_BGID (1 << 16)
 
 /* Mapped buffer ring, return io_uring_buf from head */
-#define io_ring_head_to_buf(br, head, mask)	(&(br)->bufs[(head) & (mask)])
+#define io_ring_head_to_buf(br, head, mask)	&(br)->bufs[(head) & (mask)]
 
 struct io_provide_buf {
 	struct file			*file;
@@ -89,10 +89,10 @@ static int io_buffer_add_list(struct io_ring_ctx *ctx,
 	/*
 	 * Store buffer group ID and finally mark the list as visible.
 	 * The normal lookup doesn't care about the visibility as we're
-	 * always under the ->uring_lock, but lookups from mmap do.
+	 * always under the ->uring_lock, but the RCU lookup from mmap does.
 	 */
 	bl->bgid = bgid;
-	guard(mutex)(&ctx->mmap_lock);
+	atomic_set(&bl->refs, 1);
 	return xa_err(xa_store(&ctx->io_bl_xa, bgid, bl, GFP_KERNEL));
 }
 
@@ -100,6 +100,7 @@ void io_kbuf_drop_legacy(struct io_kiocb *req)
 {
 	if (WARN_ON_ONCE(!(req->flags & REQ_F_BUFFER_SELECTED)))
 		return;
+	req->buf_index = req->kbuf->bgid;
 	req->flags &= ~REQ_F_BUFFER_SELECTED;
 	kfree(req->kbuf);
 	req->kbuf = NULL;
@@ -119,12 +120,11 @@ bool io_kbuf_recycle_legacy(struct io_kiocb *req, unsigned issue_flags)
 	 * If the buffer list was upgraded to a ring-based one, or removed,
 	 * while the request was in-flight in io-wq, drop it.
 	 */
-	if (bl && !(bl->flags & IOBL_BUF_RING)) {
+	req->buf_index = buf->bgid;
+	if (bl && !(bl->flags & IOBL_BUF_RING))
 		list_add(&buf->list, &bl->buf_list);
-		bl->nbufs++;
-	} else {
+	else
 		kfree(buf);
-	}
 	req->flags &= ~REQ_F_BUFFER_SELECTED;
 	req->kbuf = NULL;
 
@@ -140,7 +140,6 @@ static void __user *io_provided_buffer_select(struct io_kiocb *req, size_t *len,
 
 		kbuf = list_first_entry(&bl->buf_list, struct io_buffer, list);
 		list_del(&kbuf->list);
-		bl->nbufs--;
 		if (*len == 0 || *len > kbuf->len)
 			*len = kbuf->len;
 		if (list_empty(&bl->buf_list))
@@ -168,27 +167,6 @@ static int io_provided_buffers_select(struct io_kiocb *req, size_t *len,
 	return 1;
 }
 
-static bool io_should_commit(struct io_kiocb *req, unsigned int issue_flags)
-{
-	/*
-	* If we came in unlocked, we have no choice but to consume the
-	* buffer here, otherwise nothing ensures that the buffer won't
-	* get used by others. This does mean it'll be pinned until the
-	* IO completes, coming in unlocked means we're being called from
-	* io-wq context and there may be further retries in async hybrid
-	* mode. For the locked case, the caller must call commit when
-	* the transfer completes (or if we get -EAGAIN and must poll of
-	* retry).
-	*/
-	if (issue_flags & IO_URING_F_UNLOCKED)
-		return true;
-
-	/* uring_cmd commits kbuf upfront, no need to auto-commit */
-	if (!io_file_can_poll(req) && !io_is_uring_cmd(req))
-		return true;
-	return false;
-}
-
 static struct io_br_sel io_ring_buffer_select(struct io_kiocb *req, size_t *len,
 					      struct io_buffer_list *bl,
 					      unsigned int issue_flags)
@@ -210,16 +188,22 @@ static struct io_br_sel io_ring_buffer_select(struct io_kiocb *req, size_t *len,
 	buf_len = READ_ONCE(buf->len);
 	if (*len == 0 || *len > buf_len)
 		*len = buf_len;
-	sel.addr = u64_to_user_ptr(READ_ONCE(buf->addr));
-	if (unlikely(!access_ok(sel.addr, *len))) {
-		sel.addr = NULL;
-		return sel;
-	}
 	req->flags |= REQ_F_BUFFER_RING | REQ_F_BUFFERS_COMMIT;
 	req->buf_index = READ_ONCE(buf->bid);
 	sel.buf_list = bl;
+	sel.addr = u64_to_user_ptr(READ_ONCE(buf->addr));
 
-	if (io_should_commit(req, issue_flags)) {
+	if (issue_flags & IO_URING_F_UNLOCKED || !io_file_can_poll(req)) {
+		/*
+		 * If we came in unlocked, we have no choice but to consume the
+		 * buffer here, otherwise nothing ensures that the buffer won't
+		 * get used by others. This does mean it'll be pinned until the
+		 * IO completes, coming in unlocked means we're being called from
+		 * io-wq context and there may be further retries in async hybrid
+		 * mode. For the locked case, the caller must call commit when
+		 * the transfer completes (or if we get -EAGAIN and must poll of
+		 * retry).
+		 */
 		if (!io_kbuf_commit(req, sel.buf_list, *len, 1))
 			req->flags |= REQ_F_BUF_MORE;
 		sel.buf_list = NULL;
@@ -228,22 +212,22 @@ static struct io_br_sel io_ring_buffer_select(struct io_kiocb *req, size_t *len,
 }
 
 struct io_br_sel io_buffer_select(struct io_kiocb *req, size_t *len,
-				  unsigned buf_group, unsigned int issue_flags)
+				  unsigned int issue_flags)
 {
 	struct io_ring_ctx *ctx = req->ctx;
 	struct io_br_sel sel = { };
 	struct io_buffer_list *bl;
 
-	io_ring_submit_lock(ctx, issue_flags);
+	io_ring_submit_lock(req->ctx, issue_flags);
 
-	bl = io_buffer_get_list(ctx, buf_group);
+	bl = io_buffer_get_list(ctx, req->buf_index);
 	if (likely(bl)) {
 		if (bl->flags & IOBL_BUF_RING)
 			sel = io_ring_buffer_select(req, len, bl, issue_flags);
 		else
 			sel.addr = io_provided_buffer_select(req, len, bl);
 	}
-	io_ring_submit_unlock(ctx, issue_flags);
+	io_ring_submit_unlock(req->ctx, issue_flags);
 	return sel;
 }
 
@@ -254,7 +238,6 @@ static int io_ring_buffers_peek(struct io_kiocb *req, struct buf_sel_arg *arg,
 				struct io_buffer_list *bl)
 {
 	struct io_uring_buf_ring *br = bl->buf_ring;
-	struct iovec *org_iovs = arg->iovs;
 	struct iovec *iov = arg->iovs;
 	int nr_iovs = arg->nr_iovs;
 	__u16 nr_avail, tail, head;
@@ -265,9 +248,6 @@ static int io_ring_buffers_peek(struct io_kiocb *req, struct buf_sel_arg *arg,
 	nr_avail = min_t(__u16, tail - head, UIO_MAXIOV);
 	if (unlikely(!nr_avail))
 		return -ENOBUFS;
-
-	/* MAX_RW_COUNT is the universal Linux per-call IO maximum */
-	arg->max_len = min_t(size_t, arg->max_len, MAX_RW_COUNT);
 
 	buf = io_ring_head_to_buf(br, head, bl->mask);
 	if (arg->max_len) {
@@ -287,9 +267,11 @@ static int io_ring_buffers_peek(struct io_kiocb *req, struct buf_sel_arg *arg,
 	 * a speculative peek operation.
 	 */
 	if (arg->mode & KBUF_MODE_EXPAND && nr_avail > nr_iovs && arg->max_len) {
-		iov = kmalloc_objs(struct iovec, nr_avail);
+		iov = kmalloc_array(nr_avail, sizeof(struct iovec), GFP_KERNEL);
 		if (unlikely(!iov))
 			return -ENOMEM;
+		if (arg->mode & KBUF_MODE_FREE)
+			kfree(arg->iovs);
 		arg->iovs = iov;
 		nr_iovs = nr_avail;
 	} else if (nr_avail < nr_iovs) {
@@ -298,7 +280,7 @@ static int io_ring_buffers_peek(struct io_kiocb *req, struct buf_sel_arg *arg,
 
 	/* set it to max, if not set, so we can use it unconditionally */
 	if (!arg->max_len)
-		arg->max_len = MAX_RW_COUNT;
+		arg->max_len = INT_MAX;
 
 	req->buf_index = READ_ONCE(buf->bid);
 	do {
@@ -316,11 +298,6 @@ static int io_ring_buffers_peek(struct io_kiocb *req, struct buf_sel_arg *arg,
 
 		iov->iov_base = u64_to_user_ptr(READ_ONCE(buf->addr));
 		iov->iov_len = len;
-		if (unlikely(!access_ok(iov->iov_base, len))) {
-			if (arg->iovs != org_iovs)
-				kfree(arg->iovs);
-			return -EFAULT;
-		}
 		iov++;
 
 		arg->out_len += len;
@@ -330,9 +307,6 @@ static int io_ring_buffers_peek(struct io_kiocb *req, struct buf_sel_arg *arg,
 
 		buf = io_ring_head_to_buf(br, ++head, bl->mask);
 	} while (--nr_iovs);
-
-	if (arg->iovs != org_iovs && (arg->mode & KBUF_MODE_FREE))
-		kfree(org_iovs);
 
 	if (head == tail)
 		req->flags |= REQ_F_BL_EMPTY;
@@ -348,7 +322,7 @@ int io_buffers_select(struct io_kiocb *req, struct buf_sel_arg *arg,
 	int ret = -ENOENT;
 
 	io_ring_submit_lock(ctx, issue_flags);
-	sel->buf_list = io_buffer_get_list(ctx, arg->buf_group);
+	sel->buf_list = io_buffer_get_list(ctx, req->buf_index);
 	if (unlikely(!sel->buf_list))
 		goto out_unlock;
 
@@ -386,7 +360,7 @@ int io_buffers_peek(struct io_kiocb *req, struct buf_sel_arg *arg,
 
 	lockdep_assert_held(&ctx->uring_lock);
 
-	bl = io_buffer_get_list(ctx, arg->buf_group);
+	bl = io_buffer_get_list(ctx, req->buf_index);
 	if (unlikely(!bl))
 		return -ENOENT;
 
@@ -408,8 +382,10 @@ static inline bool __io_put_kbuf_ring(struct io_kiocb *req,
 {
 	bool ret = true;
 
-	if (bl)
+	if (bl) {
 		ret = io_kbuf_commit(req, bl, len, nr);
+		req->buf_index = bl->bgid;
+	}
 	if (ret && (req->flags & REQ_F_BUF_MORE))
 		ret = false;
 
@@ -434,59 +410,73 @@ unsigned int __io_put_kbufs(struct io_kiocb *req, struct io_buffer_list *bl,
 	return ret;
 }
 
-static int io_remove_buffers_legacy(struct io_ring_ctx *ctx,
-				    struct io_buffer_list *bl,
-				    unsigned long nbufs)
+static int __io_remove_buffers(struct io_ring_ctx *ctx,
+			       struct io_buffer_list *bl, unsigned nbufs)
 {
-	unsigned long i = 0;
-	struct io_buffer *nxt;
+	unsigned i = 0;
 
-	/* protects io_buffers_cache */
+	/* shouldn't happen */
+	if (!nbufs)
+		return 0;
+
+	if (bl->flags & IOBL_BUF_RING) {
+		i = bl->buf_ring->tail - bl->head;
+		if (bl->buf_nr_pages) {
+			int j;
+
+			if (!(bl->flags & IOBL_MMAP)) {
+				for (j = 0; j < bl->buf_nr_pages; j++)
+					unpin_user_page(bl->buf_pages[j]);
+			}
+			io_pages_unmap(bl->buf_ring, &bl->buf_pages,
+					&bl->buf_nr_pages, bl->flags & IOBL_MMAP);
+			bl->flags &= ~IOBL_MMAP;
+		}
+		/* make sure it's seen as empty */
+		INIT_LIST_HEAD(&bl->buf_list);
+		bl->flags &= ~IOBL_BUF_RING;
+		return i;
+	}
+
 	lockdep_assert_held(&ctx->uring_lock);
-	WARN_ON_ONCE(bl->flags & IOBL_BUF_RING);
 
-	for (i = 0; i < nbufs && !list_empty(&bl->buf_list); i++) {
+	while (!list_empty(&bl->buf_list)) {
+		struct io_buffer *nxt;
+
 		nxt = list_first_entry(&bl->buf_list, struct io_buffer, list);
 		list_del(&nxt->list);
-		bl->nbufs--;
 		kfree(nxt);
+
+		if (++i == nbufs)
+			return i;
 		cond_resched();
 	}
+
 	return i;
 }
 
-static void io_put_bl(struct io_ring_ctx *ctx, struct io_buffer_list *bl)
+void io_put_bl(struct io_ring_ctx *ctx, struct io_buffer_list *bl)
 {
-	if (bl->flags & IOBL_BUF_RING)
-		io_free_region(ctx->user, &bl->region);
-	else
-		io_remove_buffers_legacy(ctx, bl, -1U);
-
-	kfree(bl);
+	if (atomic_dec_and_test(&bl->refs)) {
+		__io_remove_buffers(ctx, bl, -1U);
+		kfree_rcu(bl, rcu);
+	}
 }
 
 void io_destroy_buffers(struct io_ring_ctx *ctx)
 {
 	struct io_buffer_list *bl;
+	unsigned long index;
 
-	while (1) {
-		unsigned long index = 0;
-
-		scoped_guard(mutex, &ctx->mmap_lock) {
-			bl = xa_find(&ctx->io_bl_xa, &index, ULONG_MAX, XA_PRESENT);
-			if (bl)
-				xa_erase(&ctx->io_bl_xa, bl->bgid);
-		}
-		if (!bl)
-			break;
+	xa_for_each(&ctx->io_bl_xa, index, bl) {
+		xa_erase(&ctx->io_bl_xa, bl->bgid);
 		io_put_bl(ctx, bl);
 	}
 }
 
 static void io_destroy_bl(struct io_ring_ctx *ctx, struct io_buffer_list *bl)
 {
-	scoped_guard(mutex, &ctx->mmap_lock)
-		WARN_ON_ONCE(xa_erase(&ctx->io_bl_xa, bl->bgid) != bl);
+	xa_erase(&ctx->io_bl_xa, bl->bgid);
 	io_put_bl(ctx, bl);
 }
 
@@ -507,6 +497,30 @@ int io_remove_buffers_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 	p->nbufs = tmp;
 	p->bgid = READ_ONCE(sqe->buf_group);
 	return 0;
+}
+
+int io_remove_buffers(struct io_kiocb *req, unsigned int issue_flags)
+{
+	struct io_provide_buf *p = io_kiocb_to_cmd(req, struct io_provide_buf);
+	struct io_ring_ctx *ctx = req->ctx;
+	struct io_buffer_list *bl;
+	int ret = 0;
+
+	io_ring_submit_lock(ctx, issue_flags);
+
+	ret = -ENOENT;
+	bl = io_buffer_get_list(ctx, p->bgid);
+	if (bl) {
+		ret = -EINVAL;
+		/* can't use provide/remove buffers command on mapped buffers */
+		if (!(bl->flags & IOBL_BUF_RING))
+			ret = __io_remove_buffers(ctx, bl, p->nbufs);
+	}
+	io_ring_submit_unlock(ctx, issue_flags);
+	if (ret < 0)
+		req_set_fail(req);
+	io_req_set_res(req, ret, 0);
+	return IOU_OK;
 }
 
 int io_provide_buffers_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
@@ -532,6 +546,8 @@ int io_provide_buffers_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe
 		return -EOVERFLOW;
 	if (check_add_overflow((unsigned long)p->addr, size, &tmp_check))
 		return -EOVERFLOW;
+
+	size = (unsigned long)p->len * p->nbufs;
 	if (!access_ok(u64_to_user_ptr(p->addr), size))
 		return -EFAULT;
 
@@ -550,24 +566,14 @@ static int io_add_buffers(struct io_ring_ctx *ctx, struct io_provide_buf *pbuf,
 {
 	struct io_buffer *buf;
 	u64 addr = pbuf->addr;
-	int ret = -ENOMEM, i, bid = pbuf->bid;
+	int i, bid = pbuf->bid;
 
 	for (i = 0; i < pbuf->nbufs; i++) {
-		/*
-		 * Nonsensical to have more than MAX_BIDS_PER_BGID buffers in a
-		 * buffer list, as the application then has no way of knowing
-		 * which duplicate bid refers to what buffer.
-		 */
-		if (bl->nbufs == MAX_BIDS_PER_BGID) {
-			ret = -EOVERFLOW;
-			break;
-		}
-		buf = kmalloc_obj(*buf, GFP_KERNEL_ACCOUNT);
+		buf = kmalloc(sizeof(*buf), GFP_KERNEL_ACCOUNT);
 		if (!buf)
 			break;
 
 		list_add_tail(&buf->list, &bl->buf_list);
-		bl->nbufs++;
 		buf->addr = addr;
 		buf->len = min_t(__u32, pbuf->len, MAX_RW_COUNT);
 		buf->bid = bid;
@@ -577,63 +583,121 @@ static int io_add_buffers(struct io_ring_ctx *ctx, struct io_provide_buf *pbuf,
 		cond_resched();
 	}
 
-	return i ? 0 : ret;
+	return i ? 0 : -ENOMEM;
 }
 
-static int __io_manage_buffers_legacy(struct io_kiocb *req,
-					struct io_buffer_list *bl)
-{
-	struct io_provide_buf *p = io_kiocb_to_cmd(req, struct io_provide_buf);
-	int ret;
-
-	if (!bl) {
-		if (req->opcode != IORING_OP_PROVIDE_BUFFERS)
-			return -ENOENT;
-		bl = kzalloc_obj(*bl, GFP_KERNEL_ACCOUNT);
-		if (!bl)
-			return -ENOMEM;
-
-		INIT_LIST_HEAD(&bl->buf_list);
-		ret = io_buffer_add_list(req->ctx, bl, p->bgid);
-		if (ret) {
-			kfree(bl);
-			return ret;
-		}
-	}
-	/* can't use provide/remove buffers command on mapped buffers */
-	if (bl->flags & IOBL_BUF_RING)
-		return -EINVAL;
-	if (req->opcode == IORING_OP_PROVIDE_BUFFERS)
-		return io_add_buffers(req->ctx, p, bl);
-	return io_remove_buffers_legacy(req->ctx, bl, p->nbufs);
-}
-
-int io_manage_buffers_legacy(struct io_kiocb *req, unsigned int issue_flags)
+int io_provide_buffers(struct io_kiocb *req, unsigned int issue_flags)
 {
 	struct io_provide_buf *p = io_kiocb_to_cmd(req, struct io_provide_buf);
 	struct io_ring_ctx *ctx = req->ctx;
 	struct io_buffer_list *bl;
-	int ret;
+	int ret = 0;
 
 	io_ring_submit_lock(ctx, issue_flags);
+
 	bl = io_buffer_get_list(ctx, p->bgid);
-	ret = __io_manage_buffers_legacy(req, bl);
+	if (unlikely(!bl)) {
+		bl = kzalloc(sizeof(*bl), GFP_KERNEL_ACCOUNT);
+		if (!bl) {
+			ret = -ENOMEM;
+			goto err;
+		}
+		INIT_LIST_HEAD(&bl->buf_list);
+		ret = io_buffer_add_list(ctx, bl, p->bgid);
+		if (ret) {
+			/*
+			 * Doesn't need rcu free as it was never visible, but
+			 * let's keep it consistent throughout.
+			 */
+			kfree_rcu(bl, rcu);
+			goto err;
+		}
+	}
+	/* can't add buffers via this command for a mapped buffer ring */
+	if (bl->flags & IOBL_BUF_RING) {
+		ret = -EINVAL;
+		goto err;
+	}
+
+	ret = io_add_buffers(ctx, p, bl);
+err:
 	io_ring_submit_unlock(ctx, issue_flags);
 
 	if (ret < 0)
 		req_set_fail(req);
 	io_req_set_res(req, ret, 0);
-	return IOU_COMPLETE;
+	return IOU_OK;
+}
+
+static int io_pin_pbuf_ring(struct io_uring_buf_reg *reg,
+			    struct io_buffer_list *bl)
+{
+	struct io_uring_buf_ring *br = NULL;
+	struct page **pages;
+	int nr_pages, ret;
+
+	pages = io_pin_pages(reg->ring_addr,
+			     flex_array_size(br, bufs, reg->ring_entries),
+			     &nr_pages);
+	if (IS_ERR(pages))
+		return PTR_ERR(pages);
+
+	br = vmap(pages, nr_pages, VM_MAP, PAGE_KERNEL);
+	if (!br) {
+		ret = -ENOMEM;
+		goto error_unpin;
+	}
+
+#ifdef SHM_COLOUR
+	/*
+	 * On platforms that have specific aliasing requirements, SHM_COLOUR
+	 * is set and we must guarantee that the kernel and user side align
+	 * nicely. We cannot do that if IOU_PBUF_RING_MMAP isn't set and
+	 * the application mmap's the provided ring buffer. Fail the request
+	 * if we, by chance, don't end up with aligned addresses. The app
+	 * should use IOU_PBUF_RING_MMAP instead, and liburing will handle
+	 * this transparently.
+	 */
+	if ((reg->ring_addr | (unsigned long) br) & (SHM_COLOUR - 1)) {
+		ret = -EINVAL;
+		goto error_unpin;
+	}
+#endif
+	bl->buf_pages = pages;
+	bl->buf_nr_pages = nr_pages;
+	bl->buf_ring = br;
+	bl->flags |= IOBL_BUF_RING;
+	bl->flags &= ~IOBL_MMAP;
+	return 0;
+error_unpin:
+	unpin_user_pages(pages, nr_pages);
+	kvfree(pages);
+	vunmap(br);
+	return ret;
+}
+
+static int io_alloc_pbuf_ring(struct io_ring_ctx *ctx,
+			      struct io_uring_buf_reg *reg,
+			      struct io_buffer_list *bl)
+{
+	size_t ring_size;
+
+	ring_size = reg->ring_entries * sizeof(struct io_uring_buf_ring);
+
+	bl->buf_ring = io_pages_map(&bl->buf_pages, &bl->buf_nr_pages, ring_size);
+	if (IS_ERR(bl->buf_ring)) {
+		bl->buf_ring = NULL;
+		return -ENOMEM;
+	}
+
+	bl->flags |= (IOBL_BUF_RING | IOBL_MMAP);
+	return 0;
 }
 
 int io_register_pbuf_ring(struct io_ring_ctx *ctx, void __user *arg)
 {
 	struct io_uring_buf_reg reg;
-	struct io_buffer_list *bl;
-	struct io_uring_region_desc rd;
-	struct io_uring_buf_ring *br;
-	unsigned long mmap_offset;
-	unsigned long ring_size;
+	struct io_buffer_list *bl, *free_bl = NULL;
 	int ret;
 
 	lockdep_assert_held(&ctx->uring_lock);
@@ -644,8 +708,19 @@ int io_register_pbuf_ring(struct io_ring_ctx *ctx, void __user *arg)
 		return -EINVAL;
 	if (reg.flags & ~(IOU_PBUF_RING_MMAP | IOU_PBUF_RING_INC))
 		return -EINVAL;
+	if (!(reg.flags & IOU_PBUF_RING_MMAP)) {
+		if (!reg.ring_addr)
+			return -EFAULT;
+		if (reg.ring_addr & ~PAGE_MASK)
+			return -EINVAL;
+	} else {
+		if (reg.ring_addr)
+			return -EINVAL;
+	}
+
 	if (!is_power_of_2(reg.ring_entries))
 		return -EINVAL;
+
 	/* cannot disambiguate full vs empty due to head/tail size */
 	if (reg.ring_entries >= 65536)
 		return -EINVAL;
@@ -662,54 +737,28 @@ int io_register_pbuf_ring(struct io_ring_ctx *ctx, void __user *arg)
 		io_destroy_bl(ctx, bl);
 	}
 
-	bl = kzalloc_obj(*bl, GFP_KERNEL_ACCOUNT);
+	free_bl = bl = kzalloc(sizeof(*bl), GFP_KERNEL_ACCOUNT);
 	if (!bl)
 		return -ENOMEM;
 
-	mmap_offset = (unsigned long)reg.bgid << IORING_OFF_PBUF_SHIFT;
-	ring_size = flex_array_size(br, bufs, reg.ring_entries);
+	if (!(reg.flags & IOU_PBUF_RING_MMAP))
+		ret = io_pin_pbuf_ring(&reg, bl);
+	else
+		ret = io_alloc_pbuf_ring(ctx, &reg, bl);
 
-	memset(&rd, 0, sizeof(rd));
-	rd.size = PAGE_ALIGN(ring_size);
-	if (!(reg.flags & IOU_PBUF_RING_MMAP)) {
-		rd.user_addr = reg.ring_addr;
-		rd.flags |= IORING_MEM_REGION_TYPE_USER;
-	}
-	ret = io_create_region(ctx, &bl->region, &rd, mmap_offset);
-	if (ret)
-		goto fail;
-	br = io_region_get_ptr(&bl->region);
+	if (!ret) {
+		bl->nr_entries = reg.ring_entries;
+		bl->mask = reg.ring_entries - 1;
+		if (reg.min_left)
+			bl->min_left_sub_one = reg.min_left - 1;
+		if (reg.flags & IOU_PBUF_RING_INC)
+			bl->flags |= IOBL_INC;
 
-#ifdef SHM_COLOUR
-	/*
-	 * On platforms that have specific aliasing requirements, SHM_COLOUR
-	 * is set and we must guarantee that the kernel and user side align
-	 * nicely. We cannot do that if IOU_PBUF_RING_MMAP isn't set and
-	 * the application mmap's the provided ring buffer. Fail the request
-	 * if we, by chance, don't end up with aligned addresses. The app
-	 * should use IOU_PBUF_RING_MMAP instead, and liburing will handle
-	 * this transparently.
-	 */
-	if (!(reg.flags & IOU_PBUF_RING_MMAP) &&
-	    ((reg.ring_addr | (unsigned long)br) & (SHM_COLOUR - 1))) {
-		ret = -EINVAL;
-		goto fail;
-	}
-#endif
-
-	bl->mask = reg.ring_entries - 1;
-	bl->flags |= IOBL_BUF_RING;
-	bl->buf_ring = br;
-	if (reg.min_left)
-		bl->min_left_sub_one = reg.min_left - 1;
-	if (reg.flags & IOU_PBUF_RING_INC)
-		bl->flags |= IOBL_INC;
-	ret = io_buffer_add_list(ctx, bl, reg.bgid);
-	if (!ret)
+		io_buffer_add_list(ctx, bl, reg.bgid);
 		return 0;
-fail:
-	io_free_region(ctx->user, &bl->region);
-	kfree(bl);
+	}
+
+	kfree_rcu(free_bl, rcu);
 	return ret;
 }
 
@@ -731,9 +780,7 @@ int io_unregister_pbuf_ring(struct io_ring_ctx *ctx, void __user *arg)
 	if (!(bl->flags & IOBL_BUF_RING))
 		return -EINVAL;
 
-	scoped_guard(mutex, &ctx->mmap_lock)
-		xa_erase(&ctx->io_bl_xa, bl->bgid);
-
+	xa_erase(&ctx->io_bl_xa, bl->bgid);
 	io_put_bl(ctx, bl);
 	return 0;
 }
@@ -761,15 +808,50 @@ int io_register_pbuf_status(struct io_ring_ctx *ctx, void __user *arg)
 	return 0;
 }
 
-struct io_mapped_region *io_pbuf_get_region(struct io_ring_ctx *ctx,
-					    unsigned int bgid)
+struct io_buffer_list *io_pbuf_get_bl(struct io_ring_ctx *ctx,
+				      unsigned long bgid)
 {
 	struct io_buffer_list *bl;
+	bool ret;
 
-	lockdep_assert_held(&ctx->mmap_lock);
-
+	/*
+	 * We have to be a bit careful here - we're inside mmap and cannot grab
+	 * the uring_lock. This means the buffer_list could be simultaneously
+	 * going away, if someone is trying to be sneaky. Look it up under rcu
+	 * so we know it's not going away, and attempt to grab a reference to
+	 * it. If the ref is already zero, then fail the mapping. If successful,
+	 * the caller will call io_put_bl() to drop the the reference at at the
+	 * end. This may then safely free the buffer_list (and drop the pages)
+	 * at that point, vm_insert_pages() would've already grabbed the
+	 * necessary vma references.
+	 */
+	rcu_read_lock();
 	bl = xa_load(&ctx->io_bl_xa, bgid);
-	if (!bl || !(bl->flags & IOBL_BUF_RING))
-		return NULL;
-	return &bl->region;
+	/* must be a mmap'able buffer ring and have pages */
+	ret = false;
+	if (bl && bl->flags & IOBL_MMAP)
+		ret = atomic_inc_not_zero(&bl->refs);
+	rcu_read_unlock();
+
+	if (ret)
+		return bl;
+
+	return ERR_PTR(-EINVAL);
+}
+
+int io_pbuf_mmap(struct file *file, struct vm_area_struct *vma)
+{
+	struct io_ring_ctx *ctx = file->private_data;
+	loff_t pgoff = vma->vm_pgoff << PAGE_SHIFT;
+	struct io_buffer_list *bl;
+	int bgid, ret;
+
+	bgid = (pgoff & ~IORING_OFF_MMAP_MASK) >> IORING_OFF_PBUF_SHIFT;
+	bl = io_pbuf_get_bl(ctx, bgid);
+	if (IS_ERR(bl))
+		return PTR_ERR(bl);
+
+	ret = io_uring_mmap_pages(ctx, vma, bl->buf_pages, bl->buf_nr_pages);
+	io_put_bl(ctx, bl);
+	return ret;
 }

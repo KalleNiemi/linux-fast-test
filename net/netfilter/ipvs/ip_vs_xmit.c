@@ -21,7 +21,8 @@
  * - the only place where we can see skb->sk != NULL
  */
 
-#define pr_fmt(fmt) "IPVS: " fmt
+#define KMSG_COMPONENT "IPVS"
+#define pr_fmt(fmt) KMSG_COMPONENT ": " fmt
 
 #include <linux/kernel.h>
 #include <linux/slab.h>
@@ -57,7 +58,7 @@ enum {
 
 static inline struct ip_vs_dest_dst *ip_vs_dest_dst_alloc(void)
 {
-	return kmalloc_obj(struct ip_vs_dest_dst, GFP_ATOMIC);
+	return kmalloc(sizeof(struct ip_vs_dest_dst), GFP_ATOMIC);
 }
 
 static inline void ip_vs_dest_dst_free(struct ip_vs_dest_dst *dest_dst)
@@ -96,7 +97,7 @@ __ip_vs_dst_check(struct ip_vs_dest *dest)
 	if (!dest_dst)
 		return NULL;
 	dst = dest_dst->dst_cache;
-	if (READ_ONCE(dst->obsolete) &&
+	if (dst->obsolete &&
 	    dst->ops->check(dst, dest_dst->dst_cookie) == NULL)
 		return NULL;
 	return dest_dst;
@@ -347,11 +348,9 @@ __ip_vs_get_out_rt(struct netns_ipvs *ipvs, int skb_af, struct sk_buff *skb,
 				goto err_unreach;
 			}
 			/* It is forbidden to attach dest->dest_dst if
-			 * device is going down or if server is removed and
-			 * stored in dest_trash.
+			 * device is going down.
 			 */
-			if (!rt_dev_is_down(dst_dev_rcu(&rt->dst)) &&
-			    dest->flags & IP_VS_DEST_F_AVAILABLE)
+			if (!rt_dev_is_down(dst_dev_rcu(&rt->dst)))
 				__ip_vs_dst_set(dest, dest_dst, &rt->dst, 0);
 			else
 				noref = 0;
@@ -526,11 +525,9 @@ __ip_vs_get_out_rt_v6(struct netns_ipvs *ipvs, int skb_af, struct sk_buff *skb,
 			rt = dst_rt6_info(dst);
 			cookie = rt6_get_cookie(rt);
 			/* It is forbidden to attach dest->dest_dst if
-			 * device is going down or if server is removed and
-			 * stored in dest_trash.
+			 * device is going down.
 			 */
-			if (!rt_dev_is_down(dst_dev_rcu(&rt->dst)) &&
-			    dest->flags & IP_VS_DEST_F_AVAILABLE)
+			if (!rt_dev_is_down(dst_dev_rcu(&rt->dst)))
 				__ip_vs_dst_set(dest, dest_dst, &rt->dst, cookie);
 			else
 				noref = 0;
@@ -988,7 +985,7 @@ ip_vs_prepare_tunneled_skb(struct sk_buff *skb, int skb_af,
 		*next_protocol = IPPROTO_IPV6;
 		if (payload_len)
 			*payload_len =
-				ipv6_payload_len(skb, old_ipv6h) +
+				ntohs(old_ipv6h->payload_len) +
 				sizeof(*old_ipv6h);
 		old_dsfield = ipv6_get_dsfield(old_ipv6h);
 		*ttl = old_ipv6h->hop_limit;
@@ -1502,22 +1499,20 @@ tx_error:
  */
 int
 ip_vs_icmp_xmit(struct sk_buff *skb, struct ip_vs_conn *cp,
-		struct ip_vs_protocol *pp, unsigned int toff,
-		unsigned int hooknum, struct ip_vs_iphdr *ciph)
+		struct ip_vs_protocol *pp, int offset, unsigned int hooknum,
+		struct ip_vs_iphdr *iph)
 {
 	struct rtable	*rt;	/* Route to the other host */
 	int rc;
 	int local;
 	int rt_mode, was_input;
-	bool has_ports = false;
-	unsigned int wlen;
 
 	/* The ICMP packet for VS/TUN, VS/DR and LOCALNODE will be
 	   forwarded directly here, because there is no need to
 	   translate address/port back */
 	if (IP_VS_FWD_METHOD(cp) != IP_VS_CONN_F_MASQ) {
 		if (cp->packet_xmit)
-			rc = cp->packet_xmit(skb, cp, pp, ciph);
+			rc = cp->packet_xmit(skb, cp, pp, iph);
 		else
 			rc = NF_ACCEPT;
 		/* do not touch skb anymore */
@@ -1535,7 +1530,7 @@ ip_vs_icmp_xmit(struct sk_buff *skb, struct ip_vs_conn *cp,
 		  IP_VS_RT_MODE_LOCAL | IP_VS_RT_MODE_NON_LOCAL |
 		  IP_VS_RT_MODE_RDR : IP_VS_RT_MODE_NON_LOCAL;
 	local = __ip_vs_get_out_rt(cp->ipvs, cp->af, skb, cp->dest, cp->daddr.ip, rt_mode,
-				   NULL, ciph);
+				   NULL, iph);
 	if (local < 0)
 		goto tx_error;
 	rt = skb_rtable(skb);
@@ -1566,21 +1561,14 @@ ip_vs_icmp_xmit(struct sk_buff *skb, struct ip_vs_conn *cp,
 		goto tx_error;
 	}
 
-	wlen = ciph->len;
-	if (ciph->protocol == IPPROTO_TCP || ciph->protocol == IPPROTO_UDP ||
-	    ciph->protocol == IPPROTO_SCTP) {
-		wlen += 2 * sizeof(__u16); /* Also mangle ports */
-		has_ports = true;
-	}
-
 	/* copy-on-write the packet before mangling it */
-	if (skb_ensure_writable(skb, wlen))
+	if (skb_ensure_writable(skb, offset))
 		goto tx_error;
 
 	if (skb_cow(skb, rt->dst.dev->hard_header_len))
 		goto tx_error;
 
-	ip_vs_nat_icmp(skb, pp, cp, 0, toff, has_ports, ciph);
+	ip_vs_nat_icmp(skb, pp, cp, 0);
 
 	/* Another hack: avoid icmp_send in ip_fragment */
 	skb->ignore_df = 1;
@@ -1596,12 +1584,10 @@ ip_vs_icmp_xmit(struct sk_buff *skb, struct ip_vs_conn *cp,
 #ifdef CONFIG_IP_VS_IPV6
 int
 ip_vs_icmp_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
-		struct ip_vs_protocol *pp, unsigned int toff,
-		unsigned int hooknum, struct ip_vs_iphdr *ciph)
+		struct ip_vs_protocol *pp, int offset, unsigned int hooknum,
+		struct ip_vs_iphdr *ipvsh)
 {
-	bool has_ports = false;
 	struct rt6_info	*rt;	/* Route to the other host */
-	unsigned int wlen;
 	int rc;
 	int local;
 	int rt_mode;
@@ -1611,7 +1597,7 @@ ip_vs_icmp_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
 	   translate address/port back */
 	if (IP_VS_FWD_METHOD(cp) != IP_VS_CONN_F_MASQ) {
 		if (cp->packet_xmit)
-			rc = cp->packet_xmit(skb, cp, pp, ciph);
+			rc = cp->packet_xmit(skb, cp, pp, ipvsh);
 		else
 			rc = NF_ACCEPT;
 		/* do not touch skb anymore */
@@ -1628,7 +1614,7 @@ ip_vs_icmp_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
 		  IP_VS_RT_MODE_LOCAL | IP_VS_RT_MODE_NON_LOCAL |
 		  IP_VS_RT_MODE_RDR : IP_VS_RT_MODE_NON_LOCAL;
 	local = __ip_vs_get_out_rt_v6(cp->ipvs, cp->af, skb, cp->dest,
-				      &cp->daddr.in6, NULL, ciph, 0, rt_mode);
+				      &cp->daddr.in6, NULL, ipvsh, 0, rt_mode);
 	if (local < 0)
 		goto tx_error;
 	rt = dst_rt6_info(skb_dst(skb));
@@ -1659,21 +1645,14 @@ ip_vs_icmp_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
 		goto tx_error;
 	}
 
-	wlen = ciph->len;
-	if (ciph->protocol == IPPROTO_TCP || ciph->protocol == IPPROTO_UDP ||
-	    ciph->protocol == IPPROTO_SCTP) {
-		wlen += 2 * sizeof(__u16); /* Also mangle ports */
-		has_ports = true;
-	}
-
 	/* copy-on-write the packet before mangling it */
-	if (skb_ensure_writable(skb, wlen))
+	if (skb_ensure_writable(skb, offset))
 		goto tx_error;
 
 	if (skb_cow(skb, rt->dst.dev->hard_header_len))
 		goto tx_error;
 
-	ip_vs_nat_icmp_v6(skb, pp, cp, 0, toff, has_ports, ciph);
+	ip_vs_nat_icmp_v6(skb, pp, cp, 0);
 
 	/* Another hack: avoid icmp_send in ip_fragment */
 	skb->ignore_df = 1;

@@ -124,17 +124,12 @@ static inline void FNAME(protect_clean_gpte)(struct kvm_mmu *mmu, unsigned *acce
 	*access &= mask;
 }
 
-static inline int FNAME(is_present_gpte)(struct kvm_mmu *mmu,
-					 unsigned long pte)
+static inline int FNAME(is_present_gpte)(unsigned long pte)
 {
 #if PTTYPE != PTTYPE_EPT
 	return pte & PT_PRESENT_MASK;
 #else
-	/*
-	 * For EPT, an entry is present if any of bits 2:0 are set.
-	 * With mode-based execute control, bit 10 also indicates presence.
-	 */
-	return pte & (7 | (mmu_has_mbec(mmu) ? VMX_EPT_USER_EXECUTABLE_MASK : 0));
+	return pte & 7;
 #endif
 }
 
@@ -157,7 +152,7 @@ static bool FNAME(prefetch_invalid_gpte)(struct kvm_vcpu *vcpu,
 				  struct kvm_mmu_page *sp, u64 *spte,
 				  u64 gpte)
 {
-	if (!FNAME(is_present_gpte)(vcpu->arch.mmu, gpte))
+	if (!FNAME(is_present_gpte)(gpte))
 		goto no_present;
 
 	/* Prefetch only accessed entries (unless A/D bits are disabled). */
@@ -175,31 +170,25 @@ no_present:
 	return true;
 }
 
+/*
+ * For PTTYPE_EPT, a page table can be executable but not readable
+ * on supported processors. Therefore, set_spte does not automatically
+ * set bit 0 if execute only is supported. Here, we repurpose ACC_USER_MASK
+ * to signify readability since it isn't used in the EPT case
+ */
 static inline unsigned FNAME(gpte_access)(u64 gpte)
 {
 	unsigned access;
-	/*
-	 * Set bits in ACC_*_MASK even if they might not be used in the
-	 * actual checks.  For example, if EFER.NX is clear permission_fault()
-	 * will ignore ACC_EXEC_MASK, and if MBEC is disabled it will
-	 * ignore ACC_USER_EXEC_MASK.
-	 */
 #if PTTYPE == PTTYPE_EPT
 	access = ((gpte & VMX_EPT_WRITABLE_MASK) ? ACC_WRITE_MASK : 0) |
 		((gpte & VMX_EPT_EXECUTABLE_MASK) ? ACC_EXEC_MASK : 0) |
-		((gpte & VMX_EPT_READABLE_MASK) ? ACC_READ_MASK : 0) |
-		((gpte & VMX_EPT_USER_EXECUTABLE_MASK) ? ACC_USER_EXEC_MASK : 0);
+		((gpte & VMX_EPT_READABLE_MASK) ? ACC_USER_MASK : 0);
 #else
-	/*
-	 * P is set here, so the page is always readable and W/U/!NX represent
-	 * allowed accesses.
-	 */
-	BUILD_BUG_ON(ACC_READ_MASK != PT_PRESENT_MASK);
-	BUILD_BUG_ON(ACC_WRITE_MASK != PT_WRITABLE_MASK);
-	BUILD_BUG_ON(ACC_USER_MASK != PT_USER_MASK);
-	BUILD_BUG_ON(ACC_EXEC_MASK & (PT_WRITABLE_MASK | PT_USER_MASK | PT_PRESENT_MASK));
+	BUILD_BUG_ON(ACC_EXEC_MASK != PT_PRESENT_MASK);
+	BUILD_BUG_ON(ACC_EXEC_MASK != 1);
 	access = gpte & (PT_WRITABLE_MASK | PT_USER_MASK | PT_PRESENT_MASK);
-	access |= gpte & PT64_NX_MASK ? 0 : ACC_EXEC_MASK;
+	/* Combine NX with P (which is set here) to get ACC_EXEC_MASK.  */
+	access ^= (gpte >> PT64_NX_SHIFT);
 #endif
 
 	return access;
@@ -328,12 +317,6 @@ static int FNAME(walk_addr_generic)(struct guest_walker *walker,
 	const int write_fault = access & PFERR_WRITE_MASK;
 	const int user_fault  = access & PFERR_USER_MASK;
 	const int fetch_fault = access & PFERR_FETCH_MASK;
-	/*
-	 * Note! Track the error_code that's common to legacy shadow paging
-	 * and NPT shadow paging as a u16 to guard against unintentionally
-	 * setting any of bits 63:16.  Architecturally, the #PF error code is
-	 * 32 bits, and Intel CPUs don't support settings bits 31:16.
-	 */
 	u16 errcode = 0;
 	gpa_t real_gpa;
 	gfn_t gfn;
@@ -349,7 +332,7 @@ retry_walk:
 	if (walker->level == PT32E_ROOT_LEVEL) {
 		pte = mmu->get_pdptr(vcpu, (addr >> 30) & 3);
 		trace_kvm_mmu_paging_element(pte, walker->level);
-		if (!FNAME(is_present_gpte)(mmu, pte))
+		if (!FNAME(is_present_gpte)(pte))
 			goto error;
 		--walker->level;
 	}
@@ -394,9 +377,18 @@ retry_walk:
 		walker->pte_gpa[walker->level - 1] = pte_gpa;
 
 		real_gpa = kvm_translate_gpa(vcpu, mmu, gfn_to_gpa(table_gfn),
-					     nested_access | PFERR_GUEST_PAGE_MASK,
-					     &walker->fault, 0);
+					     nested_access, &walker->fault);
 
+		/*
+		 * FIXME: This can happen if emulation (for of an INS/OUTS
+		 * instruction) triggers a nested page fault.  The exit
+		 * qualification / exit info field will incorrectly have
+		 * "guest page access" as the nested page fault's cause,
+		 * instead of "guest page structure access".  To fix this,
+		 * the x86_exception struct should be augmented with enough
+		 * information to fix the exit_qualification or exit_info_1
+		 * fields.
+		 */
 		if (unlikely(real_gpa == INVALID_GPA))
 			return 0;
 
@@ -410,7 +402,7 @@ retry_walk:
 			goto error;
 
 		ptep_user = (pt_element_t __user *)((void *)host_addr + offset);
-		if (unlikely(get_user(pte, ptep_user)))
+		if (unlikely(__get_user(pte, ptep_user)))
 			goto error;
 		walker->ptep_user[walker->level - 1] = ptep_user;
 
@@ -422,7 +414,7 @@ retry_walk:
 		 */
 		pte_access = pt_access & (pte ^ walk_nx_mask);
 
-		if (unlikely(!FNAME(is_present_gpte)(mmu, pte)))
+		if (unlikely(!FNAME(is_present_gpte)(pte)))
 			goto error;
 
 		if (unlikely(FNAME(is_rsvd_bits_set)(mmu, pte, walker->level))) {
@@ -453,9 +445,7 @@ retry_walk:
 		gfn += pse36_gfn_delta(pte);
 #endif
 
-	real_gpa = kvm_translate_gpa(vcpu, mmu, gfn_to_gpa(gfn),
-				     access | PFERR_GUEST_FINAL_MASK,
-				     &walker->fault, walker->pte_access);
+	real_gpa = kvm_translate_gpa(vcpu, mmu, gfn_to_gpa(gfn), access, &walker->fault);
 	if (real_gpa == INVALID_GPA)
 		return 0;
 
@@ -485,7 +475,7 @@ retry_walk:
 
 error:
 	errcode |= write_fault | user_fault;
-	if (fetch_fault && has_pferr_fetch(mmu))
+	if (fetch_fault && (is_efer_nx(mmu) || is_cr4_smep(mmu)))
 		errcode |= PFERR_FETCH_MASK;
 
 	walker->fault.vector = PF_VECTOR;
@@ -502,8 +492,7 @@ error:
 	 * [2:0] - Derive from the access bits. The exit_qualification might be
 	 *         out of date if it is serving an EPT misconfiguration.
 	 * [5:3] - Calculated by the page walk of the guest EPT page tables
-	 * [7:8] - Derived from "fault stage" access bits
-	 * [9:11] - Derived from [9:11] of real exit_qualification
+	 * [7:8] - Derived from [7:8] of real exit_qualification
 	 *
 	 * The other bits are set to 0.
 	 */
@@ -512,47 +501,22 @@ error:
 
 		if (write_fault)
 			walker->fault.exit_qualification |= EPT_VIOLATION_ACC_WRITE;
-		else if (fetch_fault)
+		if (user_fault)
+			walker->fault.exit_qualification |= EPT_VIOLATION_ACC_READ;
+		if (fetch_fault)
 			walker->fault.exit_qualification |= EPT_VIOLATION_ACC_INSTR;
-		else
-			walker->fault.exit_qualification |= EPT_VIOLATION_ACC_READ;
-
-		/*
-		 * KVM doesn't emulate features that access GPAs directly, e.g.
-		 * Intel Processor Trace.  Assume the GVA is always valid; when
-		 * propagating faults from hardware, KVM will discard this info
-		 * and use the EXIT_QUALIFICATION bits from the VMCS.
-		 */
-		walker->fault.exit_qualification |= EPT_VIOLATION_GVA_IS_VALID;
-
-		/*
-		 * Accesses to guest paging structures are either "reads" or
-		 * "read+write" accesses, so consider them the latter if write_fault
-		 * is true.
-		 */
-		if (access & PFERR_GUEST_PAGE_MASK)
-			walker->fault.exit_qualification |= EPT_VIOLATION_ACC_READ;
-		else
-			walker->fault.exit_qualification |= EPT_VIOLATION_GVA_TRANSLATED;
 
 		/*
 		 * Note, pte_access holds the raw RWX bits from the EPTE, not
 		 * ACC_*_MASK flags!
 		 */
-		walker->fault.exit_qualification |= EPT_VIOLATION_RWX_TO_PROT(pte_access);
-		if (mmu_has_mbec(mmu))
-			walker->fault.exit_qualification |=
-				EPT_VIOLATION_USER_EXEC_TO_PROT(pte_access);
+		walker->fault.exit_qualification |= (pte_access & VMX_EPT_RWX_MASK) <<
+						     EPT_VIOLATION_RWX_SHIFT;
 	}
 #endif
 	walker->fault.address = addr;
 	walker->fault.nested_page_fault = mmu != vcpu->arch.walk_mmu;
 	walker->fault.async_page_fault = false;
-
-#if PTTYPE != PTTYPE_EPT
-	if (walker->fault.nested_page_fault)
-		walker->fault.error_code |= access & PFERR_GUEST_FAULT_STAGE_MASK;
-#endif
 
 	trace_kvm_mmu_walker_error(walker->fault.error_code);
 	return 0;
@@ -569,8 +533,10 @@ static bool
 FNAME(prefetch_gpte)(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp,
 		     u64 *spte, pt_element_t gpte)
 {
+	struct kvm_memory_slot *slot;
 	unsigned pte_access;
 	gfn_t gfn;
+	kvm_pfn_t pfn;
 
 	if (FNAME(prefetch_invalid_gpte)(vcpu, sp, spte, gpte))
 		return false;
@@ -579,7 +545,17 @@ FNAME(prefetch_gpte)(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp,
 	pte_access = sp->role.access & FNAME(gpte_access)(gpte);
 	FNAME(protect_clean_gpte)(vcpu->arch.mmu, &pte_access, gpte);
 
-	return kvm_mmu_prefetch_sptes(vcpu, gfn, spte, 1, pte_access);
+	slot = gfn_to_memslot_dirty_bitmap(vcpu, gfn, pte_access & ACC_WRITE_MASK);
+	if (!slot)
+		return false;
+
+	pfn = gfn_to_pfn_memslot_atomic(slot, gfn);
+	if (is_error_pfn(pfn))
+		return false;
+
+	mmu_set_spte(vcpu, slot, spte, pte_access, gfn, pfn, NULL);
+	kvm_release_pfn_clean(pfn);
+	return true;
 }
 
 static bool FNAME(gpte_changed)(struct kvm_vcpu *vcpu,
@@ -746,7 +722,7 @@ static int FNAME(fetch)(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault,
 	 */
 	kvm_mmu_hugepage_adjust(vcpu, fault);
 
-	trace_kvm_mmu_spte_requested(fault, gw->pte_access);
+	trace_kvm_mmu_spte_requested(fault);
 
 	for (; shadow_walk_okay(&it); shadow_walk_next(&it)) {
 		/*
@@ -802,6 +778,7 @@ static int FNAME(fetch)(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault,
 static int FNAME(page_fault)(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault)
 {
 	struct guest_walker walker;
+	kvm_pfn_t orig_pfn;
 	int r;
 
 	WARN_ON_ONCE(fault->is_tdp);
@@ -819,7 +796,7 @@ static int FNAME(page_fault)(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault
 	 */
 	if (!r) {
 		if (!fault->prefetch)
-			__kvm_inject_emulated_page_fault(vcpu, &walker.fault, true);
+			kvm_inject_emulated_page_fault(vcpu, &walker.fault);
 
 		return RET_PF_RETRY;
 	}
@@ -837,16 +814,13 @@ static int FNAME(page_fault)(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault
 	if (r)
 		return r;
 
-	r = kvm_mmu_faultin_pfn(vcpu, fault, walker.pte_access);
+	r = kvm_faultin_pfn(vcpu, fault, walker.pte_access);
 	if (r != RET_PF_CONTINUE)
 		return r;
 
-#if PTTYPE != PTTYPE_EPT
 	/*
-	 * Treat the guest PTE protections as writable, supervisor-only if this
-	 * is a supervisor write fault and CR0.WP=0 (supervisor accesses ignore
-	 * PTE.W if CR0.WP=0).  Don't change the access type for emulated MMIO,
-	 * otherwise KVM will cache incorrect access information in the SPTE.
+	 * Do not change pte_access if the pfn is a mmio page, otherwise
+	 * we will cache the incorrect access into mmio spte.
 	 */
 	if (fault->write && !(walker.pte_access & ACC_WRITE_MASK) &&
 	    !is_cr0_wp(vcpu->arch.mmu) && !fault->user && fault->slot) {
@@ -862,7 +836,8 @@ static int FNAME(page_fault)(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault
 		if (is_cr4_smep(vcpu->arch.mmu))
 			walker.pte_access &= ~ACC_EXEC_MASK;
 	}
-#endif
+
+	orig_pfn = fault->pfn;
 
 	write_lock(&vcpu->kvm->mmu_lock);
 
@@ -878,8 +853,8 @@ static int FNAME(page_fault)(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault
 	r = FNAME(fetch)(vcpu, fault, &walker);
 
 out_unlock:
-	kvm_mmu_finish_page_fault(vcpu, fault, r);
 	write_unlock(&vcpu->kvm->mmu_lock);
+	kvm_release_pfn_clean(orig_pfn);
 	return r;
 }
 
@@ -922,9 +897,9 @@ static gpa_t FNAME(gva_to_gpa)(struct kvm_vcpu *vcpu, struct kvm_mmu *mmu,
 
 /*
  * Using the information in sp->shadowed_translation (kvm_mmu_page_get_gfn()) is
- * safe because SPTEs are protected by mmu_notifiers and memslot generations, so
- * the pfn for a given gfn can't change unless all SPTEs pointing to the gfn are
- * nuked first.
+ * safe because:
+ * - The spte has a reference to the struct page, so the pfn for a given gfn
+ *   can't change unless all sptes pointing to it are nuked first.
  *
  * Returns
  * < 0: failed to sync spte
@@ -993,14 +968,9 @@ static int FNAME(sync_spte)(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp, int 
 	host_writable = spte & shadow_host_writable_mask;
 	slot = kvm_vcpu_gfn_to_memslot(vcpu, gfn);
 	make_spte(vcpu, sp, slot, pte_access, gfn,
-		  spte_to_pfn(spte), spte, true, true,
+		  spte_to_pfn(spte), spte, true, false,
 		  host_writable, &spte);
 
-	/*
-	 * There is no need to mark the pfn dirty, as the new protections must
-	 * be a subset of the old protections, i.e. synchronizing a SPTE cannot
-	 * change the SPTE from read-only to writable.
-	 */
 	return mmu_spte_update(sptep, spte);
 }
 

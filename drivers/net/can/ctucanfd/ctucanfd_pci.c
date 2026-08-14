@@ -22,6 +22,14 @@
 
 #include "ctucanfd.h"
 
+#ifndef PCI_DEVICE_DATA
+#define PCI_DEVICE_DATA(vend, dev, data) \
+.vendor = PCI_VENDOR_ID_##vend, \
+.device = PCI_DEVICE_ID_##vend##_##dev, \
+.subvendor = PCI_ANY_ID, .subdevice = PCI_ANY_ID, 0, 0, \
+.driver_data = (kernel_ulong_t)(data)
+#endif
+
 #ifndef PCI_VENDOR_ID_TEDIA
 #define PCI_VENDOR_ID_TEDIA 0x1760
 #endif
@@ -145,7 +153,7 @@ static int ctucan_pci_probe(struct pci_dev *pdev,
 
 	ntxbufs = 4;
 
-	bdata = kzalloc_obj(*bdata);
+	bdata = kzalloc(sizeof(*bdata), GFP_KERNEL);
 	if (!bdata) {
 		ret = -ENOMEM;
 		goto err_pci_iounmap_bar0;
@@ -194,7 +202,7 @@ err_free_board:
 	pci_set_drvdata(pdev, NULL);
 	kfree(bdata);
 err_pci_iounmap_bar0:
-	pci_iounmap(pdev, bar0_base);
+	pci_iounmap(pdev, cra_addr);
 err_pci_iounmap_bar1:
 	pci_iounmap(pdev, addr);
 err_release_regions:
@@ -266,7 +274,6 @@ static const struct pci_device_id ctucan_pci_tbl[] = {
 		CTUCAN_WITH_CTUCAN_ID)},
 	{},
 };
-MODULE_DEVICE_TABLE(pci, ctucan_pci_tbl);
 
 static struct pci_driver ctucan_pci_driver = {
 	.name = KBUILD_MODNAME,

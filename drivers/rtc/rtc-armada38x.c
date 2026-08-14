@@ -72,8 +72,8 @@ struct armada38x_rtc {
 	spinlock_t	    lock;
 	int		    irq;
 	bool		    initialized;
+	struct value_to_freq *val_to_freq;
 	const struct armada38x_rtc_data *data;
-	struct value_to_freq val_to_freq[];
 };
 
 #define ALARM1	0
@@ -490,12 +490,17 @@ static __init int armada38x_rtc_probe(struct platform_device *pdev)
 {
 	struct armada38x_rtc *rtc;
 
-	rtc = devm_kzalloc(&pdev->dev, struct_size(rtc, val_to_freq, SAMPLE_NR),
+	rtc = devm_kzalloc(&pdev->dev, sizeof(struct armada38x_rtc),
 			    GFP_KERNEL);
 	if (!rtc)
 		return -ENOMEM;
 
 	rtc->data = of_device_get_match_data(&pdev->dev);
+
+	rtc->val_to_freq = devm_kcalloc(&pdev->dev, SAMPLE_NR,
+				sizeof(struct value_to_freq), GFP_KERNEL);
+	if (!rtc->val_to_freq)
+		return -ENOMEM;
 
 	spin_lock_init(&rtc->lock);
 
@@ -522,7 +527,7 @@ static __init int armada38x_rtc_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, rtc);
 
 	if (rtc->irq != -1)
-		device_init_wakeup(&pdev->dev, true);
+		device_init_wakeup(&pdev->dev, 1);
 	else
 		clear_bit(RTC_FEATURE_ALARM, rtc->rtc_dev->features);
 

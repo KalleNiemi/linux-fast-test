@@ -741,7 +741,7 @@ struct sas_phy *sas_phy_alloc(struct device *parent, int number)
 	struct Scsi_Host *shost = dev_to_shost(parent);
 	struct sas_phy *phy;
 
-	phy = kzalloc_obj(*phy);
+	phy = kzalloc(sizeof(*phy), GFP_KERNEL);
 	if (!phy)
 		return NULL;
 
@@ -919,8 +919,7 @@ static void sas_port_delete_link(struct sas_port *port,
 	sysfs_remove_link(&phy->dev.kobj, "port");
 }
 
-/**
- * sas_port_alloc - allocate and initialize a SAS port structure
+/** sas_port_alloc - allocate and initialize a SAS port structure
  *
  * @parent:	parent device
  * @port_id:	port number
@@ -929,14 +928,14 @@ static void sas_port_delete_link(struct sas_port *port,
  * below the device specified by @parent which must be either a Scsi_Host
  * or a sas_expander_device.
  *
- * Returns: %NULL on error
+ * Returns %NULL on error
  */
 struct sas_port *sas_port_alloc(struct device *parent, int port_id)
 {
 	struct Scsi_Host *shost = dev_to_shost(parent);
 	struct sas_port *port;
 
-	port = kzalloc_obj(*port);
+	port = kzalloc(sizeof(*port), GFP_KERNEL);
 	if (!port)
 		return NULL;
 
@@ -964,8 +963,7 @@ struct sas_port *sas_port_alloc(struct device *parent, int port_id)
 }
 EXPORT_SYMBOL(sas_port_alloc);
 
-/**
- * sas_port_alloc_num - allocate and initialize a SAS port structure
+/** sas_port_alloc_num - allocate and initialize a SAS port structure
  *
  * @parent:	parent device
  *
@@ -975,7 +973,7 @@ EXPORT_SYMBOL(sas_port_alloc);
  * the device tree below the device specified by @parent which must be
  * either a Scsi_Host or a sas_expander_device.
  *
- * Returns: %NULL on error
+ * Returns %NULL on error
  */
 struct sas_port *sas_port_alloc_num(struct device *parent)
 {
@@ -1496,7 +1494,7 @@ struct sas_rphy *sas_end_device_alloc(struct sas_port *parent)
 	struct Scsi_Host *shost = dev_to_shost(&parent->dev);
 	struct sas_end_device *rdev;
 
-	rdev = kzalloc_obj(*rdev);
+	rdev = kzalloc(sizeof(*rdev), GFP_KERNEL);
 	if (!rdev) {
 		return NULL;
 	}
@@ -1540,7 +1538,7 @@ struct sas_rphy *sas_expander_alloc(struct sas_port *parent,
 	BUG_ON(type != SAS_EDGE_EXPANDER_DEVICE &&
 	       type != SAS_FANOUT_EXPANDER_DEVICE);
 
-	rdev = kzalloc_obj(*rdev);
+	rdev = kzalloc(sizeof(*rdev), GFP_KERNEL);
 	if (!rdev) {
 		return NULL;
 	}
@@ -1810,7 +1808,7 @@ sas_attach_transport(struct sas_function_template *ft)
 	struct sas_internal *i;
 	int count;
 
-	i = kzalloc_obj(struct sas_internal);
+	i = kzalloc(sizeof(struct sas_internal), GFP_KERNEL);
 	if (!i)
 		return NULL;
 

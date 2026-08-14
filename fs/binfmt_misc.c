@@ -12,7 +12,6 @@
 
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/hex.h>
 #include <linux/init.h>
 #include <linux/sched/mm.h>
 #include <linux/magic.h>
@@ -162,10 +161,8 @@ static Node *get_binfmt_handler(struct binfmt_misc *misc,
 static void put_binfmt_handler(Node *e)
 {
 	if (refcount_dec_and_test(&e->users)) {
-		if (e->flags & MISC_FMT_OPEN_FILE) {
-			exe_file_allow_write_access(e->interp_file);
+		if (e->flags & MISC_FMT_OPEN_FILE)
 			filp_close(e->interp_file, NULL);
-		}
 		kfree(e);
 	}
 }
@@ -249,14 +246,8 @@ static int load_misc_binary(struct linux_binprm *bprm)
 
 	if (fmt->flags & MISC_FMT_OPEN_FILE) {
 		interp_file = file_clone_open(fmt->interp_file);
-		if (!IS_ERR(interp_file)) {
-			int err = exe_file_deny_write_access(interp_file);
-
-			if (err) {
-				fput(interp_file);
-				interp_file = ERR_PTR(err);
-			}
-		}
+		if (!IS_ERR(interp_file))
+			deny_write_access(interp_file);
 	} else {
 		interp_file = open_exec(fmt->interpreter);
 	}
@@ -383,10 +374,6 @@ static Node *create_entry(const char __user *buffer, size_t count)
 	del = *p++;	/* delimeter */
 
 	pr_debug("register: delim: %#x {%c}\n", del, del);
-
-	/* A flag-char delimiter runs the flag scan off the buffer. */
-	if (del == 'P' || del == 'O' || del == 'C' || del == 'F')
-		goto einval;
 
 	/* Pad the buffer with the delim to simplify parsing below. */
 	memset(buf + count, del, 8);
@@ -687,6 +674,44 @@ static void bm_evict_inode(struct inode *inode)
 }
 
 /**
+ * unlink_binfmt_dentry - remove the dentry for the binary type handler
+ * @dentry: dentry associated with the binary type handler
+ *
+ * Do the actual filesystem work to remove a dentry for a registered binary
+ * type handler. Since binfmt_misc only allows simple files to be created
+ * directly under the root dentry of the filesystem we ensure that we are
+ * indeed passed a dentry directly beneath the root dentry, that the inode
+ * associated with the root dentry is locked, and that it is a regular file we
+ * are asked to remove.
+ */
+static void unlink_binfmt_dentry(struct dentry *dentry)
+{
+	struct dentry *parent = dentry->d_parent;
+	struct inode *inode, *parent_inode;
+
+	/* All entries are immediate descendants of the root dentry. */
+	if (WARN_ON_ONCE(dentry->d_sb->s_root != parent))
+		return;
+
+	/* We only expect to be called on regular files. */
+	inode = d_inode(dentry);
+	if (WARN_ON_ONCE(!S_ISREG(inode->i_mode)))
+		return;
+
+	/* The parent inode must be locked. */
+	parent_inode = d_inode(parent);
+	if (WARN_ON_ONCE(!inode_is_locked(parent_inode)))
+		return;
+
+	if (simple_positive(dentry)) {
+		dget(dentry);
+		simple_unlink(parent_inode, dentry);
+		d_delete(dentry);
+		dput(dentry);
+	}
+}
+
+/**
  * remove_binfmt_handler - remove a binary type handler
  * @misc: handle to binfmt_misc instance
  * @e: binary type handler to remove
@@ -703,7 +728,7 @@ static void remove_binfmt_handler(struct binfmt_misc *misc, Node *e)
 	write_lock(&misc->entries_lock);
 	list_del_init(&e->list);
 	write_unlock(&misc->entries_lock);
-	locked_recursive_removal(e->dentry, NULL);
+	unlink_binfmt_dentry(e->dentry);
 }
 
 /* /<entry> */
@@ -715,7 +740,7 @@ bm_entry_read(struct file *file, char __user *buf, size_t nbytes, loff_t *ppos)
 	ssize_t res;
 	char *page;
 
-	page = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	page = (char *) __get_free_page(GFP_KERNEL);
 	if (!page)
 		return -ENOMEM;
 
@@ -723,7 +748,7 @@ bm_entry_read(struct file *file, char __user *buf, size_t nbytes, loff_t *ppos)
 
 	res = simple_read_from_buffer(buf, nbytes, ppos, page, strlen(page));
 
-	kfree(page);
+	free_page((unsigned long) page);
 	return res;
 }
 
@@ -746,7 +771,7 @@ static ssize_t bm_entry_write(struct file *file, const char __user *buffer,
 	case 3:
 		/* Delete this handler. */
 		inode = d_inode(inode->i_sb->s_root);
-		inode_lock_nested(inode, I_MUTEX_PARENT);
+		inode_lock(inode);
 
 		/*
 		 * In order to add new element or remove elements from the list
@@ -777,41 +802,14 @@ static const struct file_operations bm_entry_operations = {
 
 /* /register */
 
-/* add to filesystem */
-static int add_entry(Node *e, struct super_block *sb)
-{
-	struct dentry *dentry = simple_start_creating(sb->s_root, e->name);
-	struct inode *inode;
-	struct binfmt_misc *misc;
-
-	if (IS_ERR(dentry))
-		return PTR_ERR(dentry);
-
-	inode = bm_get_inode(sb, S_IFREG | 0644);
-	if (unlikely(!inode)) {
-		simple_done_creating(dentry);
-		return -ENOMEM;
-	}
-
-	refcount_set(&e->users, 1);
-	e->dentry = dentry;
-	inode->i_private = e;
-	inode->i_fop = &bm_entry_operations;
-
-	d_make_persistent(dentry, inode);
-	misc = i_binfmt_misc(inode);
-	write_lock(&misc->entries_lock);
-	list_add(&e->list, &misc->entries);
-	write_unlock(&misc->entries_lock);
-	simple_done_creating(dentry);
-	return 0;
-}
-
 static ssize_t bm_register_write(struct file *file, const char __user *buffer,
 			       size_t count, loff_t *ppos)
 {
 	Node *e;
+	struct inode *inode;
 	struct super_block *sb = file_inode(file)->i_sb;
+	struct dentry *root = sb->s_root, *dentry;
+	struct binfmt_misc *misc;
 	int err = 0;
 	struct file *f = NULL;
 
@@ -821,6 +819,8 @@ static ssize_t bm_register_write(struct file *file, const char __user *buffer,
 		return PTR_ERR(e);
 
 	if (e->flags & MISC_FMT_OPEN_FILE) {
+		const struct cred *old_cred;
+
 		/*
 		 * Now that we support unprivileged binfmt_misc mounts make
 		 * sure we use the credentials that the register @file was
@@ -828,8 +828,9 @@ static ssize_t bm_register_write(struct file *file, const char __user *buffer,
 		 * didn't matter much as only a privileged process could open
 		 * the register file.
 		 */
-		scoped_with_creds(file->f_cred)
-			f = open_exec(e->interpreter);
+		old_cred = override_creds(file->f_cred);
+		f = open_exec(e->interpreter);
+		revert_creds(old_cred);
 		if (IS_ERR(f)) {
 			pr_notice("register: failed to install interpreter file %s\n",
 				 e->interpreter);
@@ -839,10 +840,42 @@ static ssize_t bm_register_write(struct file *file, const char __user *buffer,
 		e->interp_file = f;
 	}
 
-	err = add_entry(e, sb);
+	inode_lock(d_inode(root));
+	dentry = lookup_one_len(e->name, root, strlen(e->name));
+	err = PTR_ERR(dentry);
+	if (IS_ERR(dentry))
+		goto out;
+
+	err = -EEXIST;
+	if (d_really_is_positive(dentry))
+		goto out2;
+
+	inode = bm_get_inode(sb, S_IFREG | 0644);
+
+	err = -ENOMEM;
+	if (!inode)
+		goto out2;
+
+	refcount_set(&e->users, 1);
+	e->dentry = dget(dentry);
+	inode->i_private = e;
+	inode->i_fop = &bm_entry_operations;
+
+	d_instantiate(dentry, inode);
+	misc = i_binfmt_misc(inode);
+	write_lock(&misc->entries_lock);
+	list_add(&e->list, &misc->entries);
+	write_unlock(&misc->entries_lock);
+
+	err = 0;
+out2:
+	dput(dentry);
+out:
+	inode_unlock(d_inode(root));
+
 	if (err) {
 		if (f) {
-			exe_file_allow_write_access(f);
+			allow_write_access(f);
 			filp_close(f, NULL);
 		}
 		kfree(e);
@@ -890,7 +923,7 @@ static ssize_t bm_status_write(struct file *file, const char __user *buffer,
 	case 3:
 		/* Delete all handlers. */
 		inode = d_inode(file_inode(file)->i_sb->s_root);
-		inode_lock_nested(inode, I_MUTEX_PARENT);
+		inode_lock(inode);
 
 		/*
 		 * In order to add new element or remove elements from the list
@@ -921,9 +954,18 @@ static const struct file_operations bm_status_operations = {
 
 /* Superblock handling */
 
+static void bm_put_super(struct super_block *sb)
+{
+	struct user_namespace *user_ns = sb->s_fs_info;
+
+	sb->s_fs_info = NULL;
+	put_user_ns(user_ns);
+}
+
 static const struct super_operations s_ops = {
 	.statfs		= simple_statfs,
 	.evict_inode	= bm_evict_inode,
+	.put_super	= bm_put_super,
 };
 
 static int bm_fill_super(struct super_block *sb, struct fs_context *fc)
@@ -939,10 +981,6 @@ static int bm_fill_super(struct super_block *sb, struct fs_context *fc)
 
 	if (WARN_ON(user_ns != current_user_ns()))
 		return -EINVAL;
-
-	/* Never exec off this instance and never let anything stack on it. */
-	sb->s_iflags |= SB_I_NOEXEC | SB_I_NODEV;
-	sb->s_stack_depth = FILESYSTEM_MAX_STACK_DEPTH;
 
 	/*
 	 * Lazily allocate a new binfmt_misc instance for this namespace, i.e.
@@ -964,10 +1002,10 @@ static int bm_fill_super(struct super_block *sb, struct fs_context *fc)
 		/*
 		 * If it turns out that most user namespaces actually want to
 		 * register their own binary type handler and therefore all
-		 * create their own separate binfmt_misc mounts we should
+		 * create their own separate binfm_misc mounts we should
 		 * consider turning this into a kmem cache.
 		 */
-		misc = kzalloc_obj(struct binfmt_misc);
+		misc = kzalloc(sizeof(struct binfmt_misc), GFP_KERNEL);
 		if (!misc)
 			return -ENOMEM;
 
@@ -981,12 +1019,13 @@ static int bm_fill_super(struct super_block *sb, struct fs_context *fc)
 	/*
 	 * When the binfmt_misc superblock for this userns is shutdown
 	 * ->enabled might have been set to false and we don't reinitialize
-	 * ->enabled again during shutdown as someone might already be mounting
-	 * binfmt_misc again. It also would be pointless since by then we know
-	 * that the binary type list for this binfmt_misc mount is empty making
-	 * load_misc_binary() return -ENOEXEC independent of whether ->enabled
-	 * is true. Instead, if someone mounts binfmt_misc for the first time or
-	 * again we simply reset ->enabled to true.
+	 * ->enabled again in put_super() as someone might already be mounting
+	 * binfmt_misc again. It also would be pointless since by the time
+	 * ->put_super() is called we know that the binary type list for this
+	 * bintfmt_misc mount is empty making load_misc_binary() return
+	 * -ENOEXEC independent of whether ->enabled is true. Instead, if
+	 * someone mounts binfmt_misc for the first time or again we simply
+	 * reset ->enabled to true.
 	 */
 	misc->enabled = true;
 
@@ -1012,14 +1051,6 @@ static const struct fs_context_operations bm_context_ops = {
 	.get_tree	= bm_get_tree,
 };
 
-static void bm_kill_sb(struct super_block *sb)
-{
-	struct user_namespace *user_ns = sb->s_fs_info;
-
-	kill_anon_super(sb);
-	put_user_ns(user_ns);
-}
-
 static int bm_init_fs_context(struct fs_context *fc)
 {
 	fc->ops = &bm_context_ops;
@@ -1036,7 +1067,7 @@ static struct file_system_type bm_fs_type = {
 	.name		= "binfmt_misc",
 	.init_fs_context = bm_init_fs_context,
 	.fs_flags	= FS_USERNS_MOUNT,
-	.kill_sb	= bm_kill_sb,
+	.kill_sb	= kill_litter_super,
 };
 MODULE_ALIAS_FS("binfmt_misc");
 

@@ -2,10 +2,7 @@
 #ifndef __SAMPLE_RAW_H
 #define __SAMPLE_RAW_H 1
 
-#include <stdbool.h>
-
 struct evlist;
-struct perf_env;
 union perf_event;
 struct perf_sample;
 
@@ -14,6 +11,5 @@ void evlist__s390_sample_raw(struct evlist *evlist, union perf_event *event,
 bool evlist__has_amd_ibs(struct evlist *evlist);
 void evlist__amd_sample_raw(struct evlist *evlist, union perf_event *event,
 			    struct perf_sample *sample);
-void evlist__init_trace_event_sample_raw(struct evlist *evlist, struct perf_env *env);
-
-#endif /* __SAMPLE_RAW_H */
+void evlist__init_trace_event_sample_raw(struct evlist *evlist);
+#endif /* __PERF_EVLIST_H */

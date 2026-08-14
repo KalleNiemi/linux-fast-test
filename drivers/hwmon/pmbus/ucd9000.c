@@ -8,7 +8,6 @@
 
 #include <linux/debugfs.h>
 #include <linux/delay.h>
-#include <linux/hex.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -143,14 +142,14 @@ static int ucd9000_read_byte_data(struct i2c_client *client, int page, int reg)
 }
 
 static const struct i2c_device_id ucd9000_id[] = {
-	{ .name = "ucd9000", .driver_data = ucd9000 },
-	{ .name = "ucd90120", .driver_data = ucd90120 },
-	{ .name = "ucd90124", .driver_data = ucd90124 },
-	{ .name = "ucd90160", .driver_data = ucd90160 },
-	{ .name = "ucd90320", .driver_data = ucd90320 },
-	{ .name = "ucd9090", .driver_data = ucd9090 },
-	{ .name = "ucd90910", .driver_data = ucd90910 },
-	{ }
+	{"ucd9000", ucd9000},
+	{"ucd90120", ucd90120},
+	{"ucd90124", ucd90124},
+	{"ucd90160", ucd90160},
+	{"ucd90320", ucd90320},
+	{"ucd9090", ucd9090},
+	{"ucd90910", ucd90910},
+	{}
 };
 MODULE_DEVICE_TABLE(i2c, ucd9000_id);
 
@@ -213,8 +212,8 @@ static int ucd9000_gpio_get(struct gpio_chip *gc, unsigned int offset)
 	return !!(ret & UCD9000_GPIO_CONFIG_STATUS);
 }
 
-static int ucd9000_gpio_set(struct gpio_chip *gc, unsigned int offset,
-			    int value)
+static void ucd9000_gpio_set(struct gpio_chip *gc, unsigned int offset,
+			     int value)
 {
 	struct i2c_client *client = gpiochip_get_data(gc);
 	int ret;
@@ -223,19 +222,19 @@ static int ucd9000_gpio_set(struct gpio_chip *gc, unsigned int offset,
 	if (ret < 0) {
 		dev_dbg(&client->dev, "failed to read GPIO %d config: %d\n",
 			offset, ret);
-		return ret;
+		return;
 	}
 
 	if (value) {
-		if (ret & UCD9000_GPIO_CONFIG_OUT_VALUE)
-			return 0;
+		if (ret & UCD9000_GPIO_CONFIG_STATUS)
+			return;
 
-		ret |= UCD9000_GPIO_CONFIG_OUT_VALUE;
+		ret |= UCD9000_GPIO_CONFIG_STATUS;
 	} else {
-		if (!(ret & UCD9000_GPIO_CONFIG_OUT_VALUE))
-			return 0;
+		if (!(ret & UCD9000_GPIO_CONFIG_STATUS))
+			return;
 
-		ret &= ~UCD9000_GPIO_CONFIG_OUT_VALUE;
+		ret &= ~UCD9000_GPIO_CONFIG_STATUS;
 	}
 
 	ret |= UCD9000_GPIO_CONFIG_ENABLE;
@@ -245,7 +244,7 @@ static int ucd9000_gpio_set(struct gpio_chip *gc, unsigned int offset,
 	if (ret < 0) {
 		dev_dbg(&client->dev, "Failed to write GPIO %d config: %d\n",
 			offset, ret);
-		return ret;
+		return;
 	}
 
 	ret &= ~UCD9000_GPIO_CONFIG_ENABLE;
@@ -254,8 +253,6 @@ static int ucd9000_gpio_set(struct gpio_chip *gc, unsigned int offset,
 	if (ret < 0)
 		dev_dbg(&client->dev, "Failed to write GPIO %d config: %d\n",
 			offset, ret);
-
-	return ret;
 }
 
 static int ucd9000_gpio_get_direction(struct gpio_chip *gc,
@@ -645,4 +642,4 @@ module_i2c_driver(ucd9000_driver);
 MODULE_AUTHOR("Guenter Roeck");
 MODULE_DESCRIPTION("PMBus driver for TI UCD90xxx");
 MODULE_LICENSE("GPL");
-MODULE_IMPORT_NS("PMBUS");
+MODULE_IMPORT_NS(PMBUS);

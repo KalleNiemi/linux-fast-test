@@ -31,7 +31,6 @@
 
 #define FRU_EEPROM_MADDR_6      0x60000
 #define FRU_EEPROM_MADDR_8      0x80000
-#define FRU_EEPROM_MADDR_INV    0xFFFFF
 
 static bool is_fru_eeprom_supported(struct amdgpu_device *adev, u32 *fru_addr)
 {
@@ -64,10 +63,10 @@ static bool is_fru_eeprom_supported(struct amdgpu_device *adev, u32 *fru_addr)
 		switch (adev->asic_type) {
 		case CHIP_VEGA20:
 			/* D161 and D163 are the VG20 server SKUs */
-			if (atom_ctx && (strnstr(atom_ctx->vbios_pn, "D161",
-						 sizeof(atom_ctx->vbios_pn)) ||
-					 strnstr(atom_ctx->vbios_pn, "D163",
-						 sizeof(atom_ctx->vbios_pn)))) {
+			if (strnstr(atom_ctx->vbios_pn, "D161",
+				    sizeof(atom_ctx->vbios_pn)) ||
+			    strnstr(atom_ctx->vbios_pn, "D163",
+				    sizeof(atom_ctx->vbios_pn))) {
 				if (fru_addr)
 					*fru_addr = FRU_EEPROM_MADDR_6;
 				return true;
@@ -79,8 +78,8 @@ static bool is_fru_eeprom_supported(struct amdgpu_device *adev, u32 *fru_addr)
 			return false;
 		}
 	case IP_VERSION(11, 0, 7):
-		if (atom_ctx && strnstr(atom_ctx->vbios_pn, "D603",
-					sizeof(atom_ctx->vbios_pn))) {
+		if (strnstr(atom_ctx->vbios_pn, "D603",
+			    sizeof(atom_ctx->vbios_pn))) {
 			if (strnstr(atom_ctx->vbios_pn, "D603GLXE",
 				    sizeof(atom_ctx->vbios_pn))) {
 				return false;
@@ -95,8 +94,8 @@ static bool is_fru_eeprom_supported(struct amdgpu_device *adev, u32 *fru_addr)
 		}
 	case IP_VERSION(13, 0, 2):
 		/* All Aldebaran SKUs have an FRU */
-		if (atom_ctx && !strnstr(atom_ctx->vbios_pn, "D673",
-					 sizeof(atom_ctx->vbios_pn)))
+		if (!strnstr(atom_ctx->vbios_pn, "D673",
+			     sizeof(atom_ctx->vbios_pn)))
 			if (fru_addr)
 				*fru_addr = FRU_EEPROM_MADDR_6;
 		return true;
@@ -105,51 +104,9 @@ static bool is_fru_eeprom_supported(struct amdgpu_device *adev, u32 *fru_addr)
 			if (fru_addr)
 				*fru_addr = FRU_EEPROM_MADDR_8;
 			return true;
-	case IP_VERSION(13, 0, 12):
-	case IP_VERSION(15, 0, 8):
-			if (fru_addr)
-				*fru_addr = FRU_EEPROM_MADDR_INV;
-			return true;
 	default:
 		return false;
 	}
-}
-
-/*
- * IPMI FRU Product Info Area fields are TLV: one type/length byte
- * (low 6 bits = data length) followed by that many data bytes. These
- * helpers walk the cursor and copy a single field while bounding all
- * accesses to the actual buffer length read from the EEPROM.
- */
-#define FRU_FIELD_LEN(p, a)	((p)[a] & 0x3F)
-
-/* Advance cursor past the current TLV. Returns false if no more data. */
-static bool fru_pia_advance(u32 *addr, const unsigned char *pia, int len)
-{
-	if (*addr >= (u32)len)
-		return false;
-	*addr += 1 + FRU_FIELD_LEN(pia, *addr);
-	return true;
-}
-
-/*
- * Copy the current TLV's data into dst (NUL-terminated). Returns false if
- * the TLV header or data would read past the end of pia.
- */
-static bool fru_pia_copy_field(char *dst, size_t dst_size,
-			       const unsigned char *pia, u32 addr, int len)
-{
-	size_t fl;
-
-	if (addr + 1 >= (u32)len)
-		return false;
-
-	fl = min3((size_t)FRU_FIELD_LEN(pia, addr),
-			  dst_size - 1,
-			  (size_t)(len - addr - 1));
-	memcpy(dst, pia + addr + 1, fl);
-	dst[fl] = '\0';
-	return true;
 }
 
 int amdgpu_fru_get_product_info(struct amdgpu_device *adev)
@@ -163,12 +120,8 @@ int amdgpu_fru_get_product_info(struct amdgpu_device *adev)
 	if (!is_fru_eeprom_supported(adev, &fru_addr))
 		return 0;
 
-	/* FRU data avaialble, but no direct EEPROM access */
-	if (fru_addr == FRU_EEPROM_MADDR_INV)
-		return 0;
-
 	if (!adev->fru_info) {
-		adev->fru_info = kzalloc_obj(*adev->fru_info);
+		adev->fru_info = kzalloc(sizeof(*adev->fru_info), GFP_KERNEL);
 		if (!adev->fru_info)
 			return -ENOMEM;
 	}
@@ -182,8 +135,7 @@ int amdgpu_fru_get_product_info(struct amdgpu_device *adev)
 
 	/* If algo exists, it means that the i2c_adapter's initialized */
 	if (!adev->pm.fru_eeprom_i2c_bus || !adev->pm.fru_eeprom_i2c_bus->algo) {
-		dev_warn(adev->dev,
-			 "Cannot access FRU, EEPROM accessor not initialized");
+		DRM_WARN("Cannot access FRU, EEPROM accessor not initialized");
 		return -ENODEV;
 	}
 
@@ -191,22 +143,19 @@ int amdgpu_fru_get_product_info(struct amdgpu_device *adev)
 	len = amdgpu_eeprom_read(adev->pm.fru_eeprom_i2c_bus, fru_addr, buf,
 				 sizeof(buf));
 	if (len != 8) {
-		dev_err(adev->dev, "Couldn't read the IPMI Common Header: %d",
-			len);
+		DRM_ERROR("Couldn't read the IPMI Common Header: %d", len);
 		return len < 0 ? len : -EIO;
 	}
 
 	if (buf[0] != 1) {
-		dev_err(adev->dev, "Bad IPMI Common Header version: 0x%02x",
-			buf[0]);
+		DRM_ERROR("Bad IPMI Common Header version: 0x%02x", buf[0]);
 		return -EIO;
 	}
 
 	for (csum = 0; len > 0; len--)
 		csum += buf[len - 1];
 	if (csum) {
-		dev_err(adev->dev, "Bad IPMI Common Header checksum: 0x%02x",
-			csum);
+		DRM_ERROR("Bad IPMI Common Header checksum: 0x%02x", csum);
 		return -EIO;
 	}
 
@@ -221,14 +170,12 @@ int amdgpu_fru_get_product_info(struct amdgpu_device *adev)
 	/* Read the header of the PIA. */
 	len = amdgpu_eeprom_read(adev->pm.fru_eeprom_i2c_bus, addr, buf, 3);
 	if (len != 3) {
-		dev_err(adev->dev,
-			"Couldn't read the Product Info Area header: %d", len);
+		DRM_ERROR("Couldn't read the Product Info Area header: %d", len);
 		return len < 0 ? len : -EIO;
 	}
 
 	if (buf[0] != 1) {
-		dev_err(adev->dev, "Bad IPMI Product Info Area version: 0x%02x",
-			buf[0]);
+		DRM_ERROR("Bad IPMI Product Info Area version: 0x%02x", buf[0]);
 		return -EIO;
 	}
 
@@ -241,16 +188,14 @@ int amdgpu_fru_get_product_info(struct amdgpu_device *adev)
 	len = amdgpu_eeprom_read(adev->pm.fru_eeprom_i2c_bus, addr, pia, size);
 	if (len != size) {
 		kfree(pia);
-		dev_err(adev->dev, "Couldn't read the Product Info Area: %d",
-			len);
+		DRM_ERROR("Couldn't read the Product Info Area: %d", len);
 		return len < 0 ? len : -EIO;
 	}
 
 	for (csum = 0; size > 0; size--)
 		csum += pia[size - 1];
 	if (csum) {
-		dev_err(adev->dev, "Bad Product Info Area checksum: 0x%02x",
-			csum);
+		DRM_ERROR("Bad Product Info Area checksum: 0x%02x", csum);
 		kfree(pia);
 		return -EIO;
 	}
@@ -260,46 +205,52 @@ int amdgpu_fru_get_product_info(struct amdgpu_device *adev)
 	 * Read Manufacturer Name field whose length is [3].
 	 */
 	addr = 3;
-	if (!fru_pia_copy_field(fru_info->manufacturer_name,
-				sizeof(fru_info->manufacturer_name),
-				pia, addr, len))
+	if (addr + 1 >= len)
 		goto Out;
+	memcpy(fru_info->manufacturer_name, pia + addr + 1,
+	       min_t(size_t, sizeof(fru_info->manufacturer_name),
+		     pia[addr] & 0x3F));
+	fru_info->manufacturer_name[sizeof(fru_info->manufacturer_name) - 1] =
+		'\0';
 
 	/* Read Product Name field. */
-	if (!fru_pia_advance(&addr, pia, len) ||
-	    !fru_pia_copy_field(fru_info->product_name,
-				sizeof(fru_info->product_name),
-				pia, addr, len))
+	addr += 1 + (pia[addr] & 0x3F);
+	if (addr + 1 >= len)
 		goto Out;
+	memcpy(fru_info->product_name, pia + addr + 1,
+	       min_t(size_t, sizeof(fru_info->product_name), pia[addr] & 0x3F));
+	fru_info->product_name[sizeof(fru_info->product_name) - 1] = '\0';
 
 	/* Go to the Product Part/Model Number field. */
-	if (!fru_pia_advance(&addr, pia, len) ||
-	    !fru_pia_copy_field(fru_info->product_number,
-				sizeof(fru_info->product_number),
-				pia, addr, len))
+	addr += 1 + (pia[addr] & 0x3F);
+	if (addr + 1 >= len)
 		goto Out;
+	memcpy(fru_info->product_number, pia + addr + 1,
+	       min_t(size_t, sizeof(fru_info->product_number),
+		     pia[addr] & 0x3F));
+	fru_info->product_number[sizeof(fru_info->product_number) - 1] = '\0';
 
-	/* Skip the Product Version field. */
-	if (!fru_pia_advance(&addr, pia, len))
-		goto Out;
+	/* Go to the Product Version field. */
+	addr += 1 + (pia[addr] & 0x3F);
 
-	/* Read the Product Serial Number field. */
-	if (!fru_pia_advance(&addr, pia, len) ||
-	    !fru_pia_copy_field(fru_info->serial,
-				sizeof(fru_info->serial),
-				pia, addr, len))
+	/* Go to the Product Serial Number field. */
+	addr += 1 + (pia[addr] & 0x3F);
+	if (addr + 1 >= len)
 		goto Out;
+	memcpy(fru_info->serial, pia + addr + 1,
+	       min_t(size_t, sizeof(fru_info->serial), pia[addr] & 0x3F));
+	fru_info->serial[sizeof(fru_info->serial) - 1] = '\0';
 
-	/* Skip the Asset Tag field. */
-	if (!fru_pia_advance(&addr, pia, len))
-		goto Out;
+	/* Asset Tag field */
+	addr += 1 + (pia[addr] & 0x3F);
 
 	/* FRU File Id field. This could be 'null'. */
-	if (!fru_pia_advance(&addr, pia, len) ||
-	    !fru_pia_copy_field(fru_info->fru_id,
-				sizeof(fru_info->fru_id),
-				pia, addr, len))
+	addr += 1 + (pia[addr] & 0x3F);
+	if ((addr + 1 >= len) || !(pia[addr] & 0x3F))
 		goto Out;
+	memcpy(fru_info->fru_id, pia + addr + 1,
+	       min_t(size_t, sizeof(fru_info->fru_id), pia[addr] & 0x3F));
+	fru_info->fru_id[sizeof(fru_info->fru_id) - 1] = '\0';
 
 Out:
 	kfree(pia);
@@ -433,7 +384,7 @@ int amdgpu_fru_sysfs_init(struct amdgpu_device *adev)
 
 void amdgpu_fru_sysfs_fini(struct amdgpu_device *adev)
 {
-	if (!adev->fru_info)
+	if (!is_fru_eeprom_supported(adev, NULL) || !adev->fru_info)
 		return;
 
 	sysfs_remove_files(&adev->dev->kobj, amdgpu_fru_attributes);

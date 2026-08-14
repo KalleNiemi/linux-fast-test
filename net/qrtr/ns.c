@@ -72,13 +72,20 @@ struct qrtr_node {
 	u32 server_count;
 };
 
-/* Max nodes, server, lookup limits are chosen based on the current platform
- * requirements. If the requirement changes in the future, these values can be
- * increased.
+/* Max server limit is chosen based on the current platform requirements. If the
+ * requirement changes in the future, this value can be increased.
+ */
+#define QRTR_NS_MAX_SERVERS 256
+
+/* Max lookup limit is chosen based on the current platform requirements. If the
+ * requirement changes in the future, this value can be increased.
+ */
+#define QRTR_NS_MAX_LOOKUPS 64
+
+/* Max nodes limit is chosen based on the current platform requirements.
+ * If the requirement changes in the future, this value can be increased.
  */
 #define QRTR_NS_MAX_NODES   512
-#define QRTR_NS_MAX_SERVERS 256
-#define QRTR_NS_MAX_LOOKUPS 128
 
 static u16 node_count;
 
@@ -96,7 +103,7 @@ static struct qrtr_node *node_get(unsigned int node_id)
 	}
 
 	/* If node didn't exist, allocate and insert it to the tree */
-	node = kzalloc_obj(*node);
+	node = kzalloc(sizeof(*node), GFP_KERNEL);
 	if (!node)
 		return NULL;
 
@@ -260,7 +267,7 @@ static struct qrtr_server *server_add(unsigned int service,
 		return NULL;
 	}
 
-	srv = kzalloc_obj(*srv);
+	srv = kzalloc(sizeof(*srv), GFP_KERNEL);
 	if (!srv)
 		return NULL;
 
@@ -581,7 +588,7 @@ static int ctrl_cmd_new_lookup(struct sockaddr_qrtr *from,
 		return -ENOSPC;
 	}
 
-	lookup = kzalloc_obj(*lookup);
+	lookup = kzalloc(sizeof(*lookup), GFP_KERNEL);
 	if (!lookup)
 		return -ENOMEM;
 
@@ -764,7 +771,7 @@ int qrtr_ns_init(void)
 	sq.sq_port = QRTR_PORT_CTRL;
 	qrtr_ns.local_node = sq.sq_node;
 
-	ret = kernel_bind(qrtr_ns.sock, (struct sockaddr_unsized *)&sq, sizeof(sq));
+	ret = kernel_bind(qrtr_ns.sock, (struct sockaddr *)&sq, sizeof(sq));
 	if (ret < 0) {
 		pr_err("failed to bind to socket\n");
 		goto err_wq;

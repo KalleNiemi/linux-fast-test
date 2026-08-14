@@ -201,7 +201,7 @@ static int m62332_probe(struct i2c_client *client)
 	indio_dev->modes = INDIO_DIRECT_MODE;
 	indio_dev->info = &m62332_info;
 
-	ret = iio_map_array_register(indio_dev, dev_get_platdata(&client->dev));
+	ret = iio_map_array_register(indio_dev, client->dev.platform_data);
 	if (ret < 0)
 		return ret;
 
@@ -228,7 +228,7 @@ static void m62332_remove(struct i2c_client *client)
 }
 
 static const struct i2c_device_id m62332_id[] = {
-	{ .name = "m62332" },
+	{ "m62332", },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, m62332_id);

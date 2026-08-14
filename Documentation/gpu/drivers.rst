@@ -8,10 +8,8 @@ GPU Driver Documentation
    amdgpu/index
    i915
    imagination/index
-   intel-display/index
    mcde
    meson
-   nouveau
    pl111
    tegra
    tve200
@@ -24,6 +22,10 @@ GPU Driver Documentation
    afbc
    komeda-kms
    panfrost
-   panthor
-   zynqmp
-   nova/index
+
+.. only::  subproject and html
+
+   Indices
+   =======
+
+   * :ref:`genindex`

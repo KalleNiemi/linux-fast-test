@@ -11,6 +11,7 @@
 #include <linux/module.h>
 #include <linux/i2c.h>
 #include <linux/delay.h>
+#include <linux/mod_devicetable.h>
 #include <linux/regmap.h>
 #include <linux/iio/iio.h>
 #include <linux/iio/buffer.h>
@@ -320,8 +321,10 @@ static int lmp91000_probe(struct i2c_client *client)
 	data->trig = devm_iio_trigger_alloc(dev, "%s-mux%d",
 					    indio_dev->name,
 					    iio_device_id(indio_dev));
-	if (!data->trig)
+	if (!data->trig) {
+		dev_err(dev, "cannot allocate iio trigger.\n");
 		return -ENOMEM;
+	}
 
 	init_completion(&data->completion);
 
@@ -397,14 +400,14 @@ static void lmp91000_remove(struct i2c_client *client)
 static const struct of_device_id lmp91000_of_match[] = {
 	{ .compatible = "ti,lmp91000", },
 	{ .compatible = "ti,lmp91002", },
-	{ }
+	{ },
 };
 MODULE_DEVICE_TABLE(of, lmp91000_of_match);
 
 static const struct i2c_device_id lmp91000_id[] = {
-	{ .name = "lmp91000" },
-	{ .name = "lmp91002" },
-	{ }
+	{ "lmp91000" },
+	{ "lmp91002" },
+	{}
 };
 MODULE_DEVICE_TABLE(i2c, lmp91000_id);
 

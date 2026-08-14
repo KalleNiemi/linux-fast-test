@@ -14,7 +14,7 @@
 #include "dso.h"
 
 #ifdef HAVE_LIBTRACEEVENT
-#include <event-parse.h>
+#include <traceevent/event-parse.h>
 #endif
 
 static int comma_fprintf(FILE *fp, bool *first, const char *fmt, ...)
@@ -81,15 +81,13 @@ int evsel__fprintf(struct evsel *evsel, struct perf_attr_details *details, FILE 
 #ifdef HAVE_LIBTRACEEVENT
 	if (details->trace_fields) {
 		struct tep_format_field *field;
-		const struct tep_event *tp_format;
 
 		if (evsel->core.attr.type != PERF_TYPE_TRACEPOINT) {
 			printed += comma_fprintf(fp, &first, " (not a tracepoint)");
 			goto out;
 		}
 
-		tp_format = evsel__tp_format(evsel);
-		field = tp_format ? tp_format->format.fields : NULL;
+		field = evsel->tp_format->format.fields;
 		if (field == NULL) {
 			printed += comma_fprintf(fp, &first, " (no trace field)");
 			goto out;
@@ -146,7 +144,7 @@ int sample__fprintf_callchain(struct perf_sample *sample, int left_alignment,
 			sym = node->ms.sym;
 			map = node->ms.map;
 
-			if (sym && symbol__ignore(sym) && print_skip_ignored)
+			if (sym && sym->ignore && print_skip_ignored)
 				goto next;
 
 			printed += fprintf(fp, "%-*.*s", left_alignment, left_alignment, " ");
@@ -168,10 +166,7 @@ int sample__fprintf_callchain(struct perf_sample *sample, int left_alignment,
 				node_al.addr = addr;
 				node_al.map  = map__get(map);
 
-				if (sample->deferred_callchain &&
-				    sample->deferred_cookie == node->ip) {
-					printed += fprintf(fp, "(cookie)");
-				} else if (print_symoffset) {
+				if (print_symoffset) {
 					printed += __symbol__fprintf_symname_offs(sym, &node_al,
 										  print_unknown_as_addr,
 										  true, fp);
@@ -182,7 +177,7 @@ int sample__fprintf_callchain(struct perf_sample *sample, int left_alignment,
 				addr_location__exit(&node_al);
 			}
 
-			if (print_dso && (!sym || !symbol__inlined(sym)))
+			if (print_dso && (!sym || !sym->inlined))
 				printed += map__fprintf_dsoname_dsoff(map, print_dsoff, addr, fp);
 
 			if (print_srcline) {
@@ -192,7 +187,7 @@ int sample__fprintf_callchain(struct perf_sample *sample, int left_alignment,
 					printed += map__fprintf_srcline(map, addr, "\n  ", fp);
 			}
 
-			if (sym && symbol__inlined(sym))
+			if (sym && sym->inlined)
 				printed += fprintf(fp, " (inlined)");
 
 			if (!print_oneline)

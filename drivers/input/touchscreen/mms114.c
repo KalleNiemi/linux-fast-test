@@ -216,6 +216,7 @@ static irqreturn_t mms114_interrupt(int irq, void *dev_id)
 {
 	struct mms114_data *data = dev_id;
 	struct i2c_client *client = data->client;
+	struct input_dev *input_dev = data->input_dev;
 	struct mms114_touch touch[MMS114_MAX_TOUCH];
 	struct mms114_touch *t;
 	int packet_size;
@@ -223,6 +224,13 @@ static irqreturn_t mms114_interrupt(int irq, void *dev_id)
 	int touch_size;
 	int index;
 	int error;
+
+	mutex_lock(&input_dev->mutex);
+	if (!input_device_enabled(input_dev)) {
+		mutex_unlock(&input_dev->mutex);
+		goto out;
+	}
+	mutex_unlock(&input_dev->mutex);
 
 	packet_size = mms114_read_reg(data, MMS114_PACKET_SIZE);
 	if (packet_size <= 0)
@@ -650,10 +658,10 @@ static int mms114_suspend(struct device *dev)
 	input_mt_report_pointer_emulation(input_dev, true);
 	input_sync(input_dev);
 
-	guard(mutex)(&input_dev->mutex);
-
+	mutex_lock(&input_dev->mutex);
 	if (input_device_enabled(input_dev))
 		mms114_stop(data);
+	mutex_unlock(&input_dev->mutex);
 
 	return 0;
 }
@@ -665,13 +673,15 @@ static int mms114_resume(struct device *dev)
 	struct input_dev *input_dev = data->input_dev;
 	int error;
 
-	guard(mutex)(&input_dev->mutex);
-
+	mutex_lock(&input_dev->mutex);
 	if (input_device_enabled(input_dev)) {
 		error = mms114_start(data);
-		if (error)
+		if (error < 0) {
+			mutex_unlock(&input_dev->mutex);
 			return error;
+		}
 	}
+	mutex_unlock(&input_dev->mutex);
 
 	return 0;
 }
@@ -679,7 +689,7 @@ static int mms114_resume(struct device *dev)
 static DEFINE_SIMPLE_DEV_PM_OPS(mms114_pm_ops, mms114_suspend, mms114_resume);
 
 static const struct i2c_device_id mms114_id[] = {
-	{ .name = "mms114" },
+	{ "mms114" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, mms114_id);

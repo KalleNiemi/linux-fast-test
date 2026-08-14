@@ -49,7 +49,7 @@ bool dcn32_internal_validate_bw(struct dc *dc,
 				display_e2e_pipe_params_st *pipes,
 				int *pipe_cnt_out,
 				int *vlevel_out,
-				enum dc_validate_mode validate_mode);
+				bool fast_validate);
 
 void dcn32_calculate_wm_and_dlg_fpu(struct dc *dc, struct dc_state *context,
 				display_e2e_pipe_params_st *pipes,
@@ -76,7 +76,5 @@ bool dcn32_find_vactive_pipe(struct dc *dc, const struct dc_state *context, stru
 void dcn32_override_min_req_memclk(struct dc *dc, struct dc_state *context);
 
 void dcn32_set_clock_limits(const struct _vcs_dpi_soc_bounding_box_st *soc_bb);
-
-unsigned int dcn32_get_max_dispclk_mhz(struct dc *dc, struct dc_state *context);
 
 #endif

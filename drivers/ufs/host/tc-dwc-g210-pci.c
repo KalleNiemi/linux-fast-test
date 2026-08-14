@@ -80,11 +80,13 @@ tc_dwc_g210_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	pci_set_master(pdev);
 
-	mmio_base = pcim_iomap_region(pdev, 0, UFSHCD);
-	if (IS_ERR(mmio_base)) {
+	err = pcim_iomap_regions(pdev, 1 << 0, UFSHCD);
+	if (err < 0) {
 		dev_err(&pdev->dev, "request and iomap failed\n");
-		return PTR_ERR(mmio_base);
+		return err;
 	}
+
+	mmio_base = pcim_iomap_table(pdev)[0];
 
 	err = ufshcd_alloc_host(&pdev->dev, &hba);
 	if (err) {
@@ -114,8 +116,8 @@ static const struct dev_pm_ops tc_dwc_g210_pci_pm_ops = {
 };
 
 static const struct pci_device_id tc_dwc_g210_pci_tbl[] = {
-	{ PCI_VDEVICE(SYNOPSYS, 0xB101) },
-	{ PCI_VDEVICE(SYNOPSYS, 0xB102) },
+	{ PCI_VENDOR_ID_SYNOPSYS, 0xB101, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0 },
+	{ PCI_VENDOR_ID_SYNOPSYS, 0xB102, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0 },
 	{ }	/* terminate list */
 };
 

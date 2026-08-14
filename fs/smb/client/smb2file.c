@@ -13,6 +13,7 @@
 #include <linux/pagemap.h>
 #include <asm/div64.h>
 #include "cifsfs.h"
+#include "cifspdu.h"
 #include "cifsglob.h"
 #include "cifsproto.h"
 #include "cifs_debug.h"
@@ -21,7 +22,6 @@
 #include "fscache.h"
 #include "smb2proto.h"
 #include "../common/smb2status.h"
-#include "../common/smbfsctl.h"
 
 static struct smb2_symlink_err_rsp *symlink_data(const struct kvec *iov)
 {
@@ -29,19 +29,6 @@ static struct smb2_symlink_err_rsp *symlink_data(const struct kvec *iov)
 	struct smb2_symlink_err_rsp *sym = ERR_PTR(-EINVAL);
 	u8 *end = (u8 *)err + iov->iov_len;
 	u32 len;
-
-	/*
-	 * Per [MS-SMB2] section 2.2.2, a STATUS_STOPPED_ON_SYMLINK response has to
-	 * carry a Symbolic Link Error Response, so ByteCount cannot be zero.  Some
-	 * servers (e.g. the macOS built-in SMB server) violate this and return an
-	 * empty error response, with both ErrorContextCount and ByteCount set to
-	 * zero, i.e. without the symlink target.  Detect this and return -ENODATA
-	 * so that callers can tell "server did not send the target" apart from a
-	 * malformed response, and retrieve the target with FSCTL_GET_REPARSE_POINT
-	 * instead.
-	 */
-	if (!err->ErrorContextCount && !le32_to_cpu(err->ByteCount))
-		return ERR_PTR(-ENODATA);
 
 	if (err->ErrorContextCount) {
 		struct smb2_error_context_rsp *p;
@@ -81,52 +68,6 @@ static struct smb2_symlink_err_rsp *symlink_data(const struct kvec *iov)
 	return sym;
 }
 
-int smb2_fix_symlink_target_type(char **target, bool directory, struct cifs_sb_info *cifs_sb)
-{
-	char *buf;
-	int len;
-
-	/*
-	 * POSIX server does not distinguish between symlinks to file and
-	 * symlink directory. So nothing is needed to fix on the client side.
-	 */
-	if (cifs_sb_flags(cifs_sb) & CIFS_MOUNT_POSIX_PATHS)
-		return 0;
-
-	if (!*target)
-		return smb_EIO(smb_eio_trace_null_pointers);
-
-	len = strlen(*target);
-	if (!len)
-		return smb_EIO1(smb_eio_trace_sym_target_len, len);
-
-	/*
-	 * If this is directory symlink and it does not have trailing slash then
-	 * append it. Trailing slash simulates Windows/SMB behavior which do not
-	 * allow resolving directory symlink to file.
-	 */
-	if (directory && (*target)[len-1] != '/') {
-		buf = krealloc(*target, len+2, GFP_KERNEL);
-		if (!buf)
-			return -ENOMEM;
-		buf[len] = '/';
-		buf[len+1] = '\0';
-		*target = buf;
-		len++;
-	}
-
-	/*
-	 * If this is a file (non-directory) symlink and it points to path name
-	 * with trailing slash then this is an invalid symlink because file name
-	 * cannot contain slash character. File name with slash is invalid on
-	 * both Windows and Linux systems. So return an error for such symlink.
-	 */
-	if (!directory && (*target)[len-1] == '/')
-		return smb_EIO(smb_eio_trace_sym_slash);
-
-	return 0;
-}
-
 int smb2_parse_symlink_response(struct cifs_sb_info *cifs_sb, const struct kvec *iov,
 				const char *full_path, char **path)
 {
@@ -155,18 +96,20 @@ int smb2_parse_symlink_response(struct cifs_sb_info *cifs_sb, const struct kvec 
 	return smb2_parse_native_symlink(path,
 					 (char *)sym->PathBuffer + sub_offs,
 					 sub_len,
+					 true,
 					 le32_to_cpu(sym->Flags) & SYMLINK_FLAG_RELATIVE,
 					 full_path,
 					 cifs_sb);
 }
 
-int smb2_open_file(const unsigned int xid, struct cifs_open_parms *oparms,
-		   __u32 *oplock, void *buf)
+int smb2_open_file(const unsigned int xid, struct cifs_open_parms *oparms, __u32 *oplock, void *buf)
 {
 	int rc;
 	__le16 *smb2_path;
 	__u8 smb2_oplock;
 	struct cifs_open_info_data *data = buf;
+	struct smb2_file_all_info file_info = {};
+	struct smb2_file_all_info *smb2_data = data ? &file_info : NULL;
 	struct kvec err_iov = {};
 	int err_buftype = CIFS_NO_BUFFER;
 	struct cifs_fid *fid = oparms->fid;
@@ -177,30 +120,20 @@ int smb2_open_file(const unsigned int xid, struct cifs_open_parms *oparms,
 	if (smb2_path == NULL)
 		return -ENOMEM;
 
-	/*
-	 * GENERIC_READ, GENERIC_EXECUTE, GENERIC_ALL and MAXIMUM_ALLOWED
-	 * contains also FILE_READ_ATTRIBUTES access right. So do not append
-	 * FILE_READ_ATTRIBUTES when not needed and prevent calling code path
-	 * for retry_without_read_attributes.
-	 */
-	if (!(oparms->desired_access & FILE_READ_ATTRIBUTES) &&
-	    !(oparms->desired_access & GENERIC_READ) &&
-	    !(oparms->desired_access & GENERIC_EXECUTE) &&
-	    !(oparms->desired_access & GENERIC_ALL) &&
-	    !(oparms->desired_access & MAXIMUM_ALLOWED)) {
+	if (!(oparms->desired_access & FILE_READ_ATTRIBUTES)) {
 		oparms->desired_access |= FILE_READ_ATTRIBUTES;
 		retry_without_read_attributes = true;
 	}
 	smb2_oplock = SMB2_OPLOCK_LEVEL_BATCH;
 
-	rc = SMB2_open(xid, oparms, smb2_path, &smb2_oplock, data, NULL, &err_iov,
+	rc = SMB2_open(xid, oparms, smb2_path, &smb2_oplock, smb2_data, NULL, &err_iov,
 		       &err_buftype);
 	if (rc == -EACCES && retry_without_read_attributes) {
 		free_rsp_buf(err_buftype, err_iov.iov_base);
 		memset(&err_iov, 0, sizeof(err_iov));
 		err_buftype = CIFS_NO_BUFFER;
 		oparms->desired_access &= ~FILE_READ_ATTRIBUTES;
-		rc = SMB2_open(xid, oparms, smb2_path, &smb2_oplock, data, NULL, &err_iov,
+		rc = SMB2_open(xid, oparms, smb2_path, &smb2_oplock, smb2_data, NULL, &err_iov,
 			       &err_buftype);
 	}
 	if (rc && data) {
@@ -212,25 +145,12 @@ int smb2_open_file(const unsigned int xid, struct cifs_open_parms *oparms,
 			rc = smb2_parse_symlink_response(oparms->cifs_sb, &err_iov,
 							 oparms->path,
 							 &data->symlink_target);
-			/*
-			 * If smb2_parse_symlink_response returned -ENODATA then the
-			 * symlink_target was not sent. Treat this as if the SMB2_open()
-			 * failed with STATUS_IO_REPARSE_TAG_NOT_HANDLED status, which is
-			 * indicated by the -EIO errno.
-			 */
-			if (rc == -ENODATA)
-				rc = -EIO;
 			if (!rc) {
-				memset(&data->fi, 0, sizeof(data->fi));
+				memset(smb2_data, 0, sizeof(*smb2_data));
 				oparms->create_options |= OPEN_REPARSE_POINT;
-				rc = SMB2_open(xid, oparms, smb2_path, &smb2_oplock, data,
+				rc = SMB2_open(xid, oparms, smb2_path, &smb2_oplock, smb2_data,
 					       NULL, NULL, NULL);
 				oparms->create_options &= ~OPEN_REPARSE_POINT;
-			}
-			if (!rc) {
-				bool directory = le32_to_cpu(data->fi.Attributes) & ATTR_DIRECTORY;
-				rc = smb2_fix_symlink_target_type(&data->symlink_target,
-								  directory, oparms->cifs_sb);
 			}
 		}
 	}
@@ -257,22 +177,23 @@ int smb2_open_file(const unsigned int xid, struct cifs_open_parms *oparms,
 		rc = 0;
 	}
 
-	if (data) {
+	if (smb2_data) {
 		/* if open response does not have IndexNumber field - get it */
-		if (data->fi.IndexNumber == 0) {
+		if (smb2_data->IndexNumber == 0) {
 			rc = SMB2_get_srv_num(xid, oparms->tcon,
 				      fid->persistent_fid,
 				      fid->volatile_fid,
-				      &data->fi.IndexNumber);
+				      &smb2_data->IndexNumber);
 			if (rc) {
 				/*
 				 * let get_inode_info disable server inode
 				 * numbers
 				 */
-				data->fi.IndexNumber = 0;
+				smb2_data->IndexNumber = 0;
 				rc = 0;
 			}
 		}
+		memcpy(&data->fi, smb2_data, sizeof(data->fi));
 	}
 
 	*oplock = smb2_oplock;
@@ -306,7 +227,7 @@ smb2_unlock_range(struct cifsFileInfo *cfile, struct file_lock *flock,
 	BUILD_BUG_ON(sizeof(struct smb2_lock_element) > PAGE_SIZE);
 	max_buf = min_t(unsigned int, max_buf, PAGE_SIZE);
 	max_num = max_buf / sizeof(struct smb2_lock_element);
-	buf = kzalloc_objs(struct smb2_lock_element, max_num);
+	buf = kcalloc(max_num, sizeof(struct smb2_lock_element), GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
 
@@ -449,7 +370,7 @@ smb2_push_mandatory_locks(struct cifsFileInfo *cfile)
 	BUILD_BUG_ON(sizeof(struct smb2_lock_element) > PAGE_SIZE);
 	max_buf = min_t(unsigned int, max_buf, PAGE_SIZE);
 	max_num = max_buf / sizeof(struct smb2_lock_element);
-	buf = kzalloc_objs(struct smb2_lock_element, max_num);
+	buf = kcalloc(max_num, sizeof(struct smb2_lock_element), GFP_KERNEL);
 	if (!buf) {
 		free_xid(xid);
 		return -ENOMEM;

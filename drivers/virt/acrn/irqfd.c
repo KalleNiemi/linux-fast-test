@@ -16,8 +16,7 @@
 
 #include "acrn_drv.h"
 
-/* Cleanup work has been queued; set via test_and_set_bit(). */
-#define HSM_IRQFD_FLAG_SHUTDOWN	0
+static LIST_HEAD(acrn_irqfd_clients);
 
 /**
  * struct hsm_irqfd - Properties of HSM irqfd
@@ -28,7 +27,6 @@
  * @list:	Entry within &acrn_vm.irqfds of irqfds of a VM
  * @pt:		Structure for select/poll on the associated eventfd
  * @msi:	MSI data
- * @flags:	Internal lifecycle flags (HSM_IRQFD_FLAG_*)
  */
 struct hsm_irqfd {
 	struct acrn_vm		*vm;
@@ -38,7 +36,6 @@ struct hsm_irqfd {
 	struct list_head	list;
 	poll_table		pt;
 	struct acrn_msi_entry	msi;
-	unsigned long		flags;
 };
 
 static void acrn_irqfd_inject(struct hsm_irqfd *irqfd)
@@ -49,29 +46,30 @@ static void acrn_irqfd_inject(struct hsm_irqfd *irqfd)
 			irqfd->msi.msi_data);
 }
 
-/* Queue the cleanup work at most once. Safe from atomic context. */
-static void hsm_irqfd_queue_shutdown(struct hsm_irqfd *irqfd)
+static void hsm_irqfd_shutdown(struct hsm_irqfd *irqfd)
 {
-	if (!test_and_set_bit(HSM_IRQFD_FLAG_SHUTDOWN, &irqfd->flags))
-		queue_work(irqfd->vm->irqfd_wq, &irqfd->shutdown);
-}
-
-/* Sole owner of @irqfd: unhook waitqueue, drop eventfd ref, free. */
-static void hsm_irqfd_shutdown_work(struct work_struct *work)
-{
-	struct hsm_irqfd *irqfd = container_of(work, struct hsm_irqfd,
-					       shutdown);
-	struct acrn_vm *vm = irqfd->vm;
 	u64 cnt;
 
-	mutex_lock(&vm->irqfds_lock);
-	if (!list_empty(&irqfd->list))
-		list_del_init(&irqfd->list);
-	mutex_unlock(&vm->irqfds_lock);
+	lockdep_assert_held(&irqfd->vm->irqfds_lock);
 
+	/* remove from wait queue */
+	list_del_init(&irqfd->list);
 	eventfd_ctx_remove_wait_queue(irqfd->eventfd, &irqfd->wait, &cnt);
 	eventfd_ctx_put(irqfd->eventfd);
 	kfree(irqfd);
+}
+
+static void hsm_irqfd_shutdown_work(struct work_struct *work)
+{
+	struct hsm_irqfd *irqfd;
+	struct acrn_vm *vm;
+
+	irqfd = container_of(work, struct hsm_irqfd, shutdown);
+	vm = irqfd->vm;
+	mutex_lock(&vm->irqfds_lock);
+	if (!list_empty(&irqfd->list))
+		hsm_irqfd_shutdown(irqfd);
+	mutex_unlock(&vm->irqfds_lock);
 }
 
 /* Called with wqh->lock held and interrupts disabled */
@@ -80,16 +78,17 @@ static int hsm_irqfd_wakeup(wait_queue_entry_t *wait, unsigned int mode,
 {
 	unsigned long poll_bits = (unsigned long)key;
 	struct hsm_irqfd *irqfd;
+	struct acrn_vm *vm;
 
 	irqfd = container_of(wait, struct hsm_irqfd, wait);
-
+	vm = irqfd->vm;
 	if (poll_bits & POLLIN)
 		/* An event has been signaled, inject an interrupt */
 		acrn_irqfd_inject(irqfd);
 
 	if (poll_bits & POLLHUP)
-		/* Defer teardown to the cleanup work; can't sleep here. */
-		hsm_irqfd_queue_shutdown(irqfd);
+		/* Do shutdown work in thread to hold wqh->lock */
+		queue_work(vm->irqfd_wq, &irqfd->shutdown);
 
 	return 0;
 }
@@ -113,9 +112,10 @@ static int acrn_irqfd_assign(struct acrn_vm *vm, struct acrn_irqfd *args)
 	struct eventfd_ctx *eventfd = NULL;
 	struct hsm_irqfd *irqfd, *tmp;
 	__poll_t events;
+	struct fd f;
 	int ret = 0;
 
-	irqfd = kzalloc_obj(*irqfd);
+	irqfd = kzalloc(sizeof(*irqfd), GFP_KERNEL);
 	if (!irqfd)
 		return -ENOMEM;
 
@@ -124,8 +124,8 @@ static int acrn_irqfd_assign(struct acrn_vm *vm, struct acrn_irqfd *args)
 	INIT_LIST_HEAD(&irqfd->list);
 	INIT_WORK(&irqfd->shutdown, hsm_irqfd_shutdown_work);
 
-	CLASS(fd, f)(args->fd);
-	if (fd_empty(f)) {
+	f = fdget(args->fd);
+	if (!fd_file(f)) {
 		ret = -EBADF;
 		goto out;
 	}
@@ -133,7 +133,7 @@ static int acrn_irqfd_assign(struct acrn_vm *vm, struct acrn_irqfd *args)
 	eventfd = eventfd_ctx_fileget(fd_file(f));
 	if (IS_ERR(eventfd)) {
 		ret = PTR_ERR(eventfd);
-		goto out;
+		goto fail;
 	}
 
 	irqfd->eventfd = eventfd;
@@ -145,12 +145,6 @@ static int acrn_irqfd_assign(struct acrn_vm *vm, struct acrn_irqfd *args)
 	init_waitqueue_func_entry(&irqfd->wait, hsm_irqfd_wakeup);
 	init_poll_funcptr(&irqfd->pt, hsm_irqfd_poll_func);
 
-	/*
-	 * Hold irqfds_lock across waitqueue install and list_add so the
-	 * irqfd is not visible to deassign/deinit before its waitqueue
-	 * entry is in place, and any racing EPOLLHUP cleanup work blocks
-	 * on irqfds_lock until publication completes.
-	 */
 	mutex_lock(&vm->irqfds_lock);
 	list_for_each_entry(tmp, &vm->irqfds, list) {
 		if (irqfd->eventfd != tmp->eventfd)
@@ -159,16 +153,22 @@ static int acrn_irqfd_assign(struct acrn_vm *vm, struct acrn_irqfd *args)
 		mutex_unlock(&vm->irqfds_lock);
 		goto fail;
 	}
-
-	events = vfs_poll(fd_file(f), &irqfd->pt);
 	list_add_tail(&irqfd->list, &vm->irqfds);
-	if (events & EPOLLIN)
-		acrn_irqfd_inject(irqfd);
 	mutex_unlock(&vm->irqfds_lock);
 
+	/* Check the pending event in this stage */
+	events = vfs_poll(fd_file(f), &irqfd->pt);
+
+	if (events & EPOLLIN)
+		acrn_irqfd_inject(irqfd);
+
+	fdput(f);
 	return 0;
 fail:
-	eventfd_ctx_put(eventfd);
+	if (eventfd && !IS_ERR(eventfd))
+		eventfd_ctx_put(eventfd);
+
+	fdput(f);
 out:
 	kfree(irqfd);
 	return ret;
@@ -187,16 +187,12 @@ static int acrn_irqfd_deassign(struct acrn_vm *vm,
 	mutex_lock(&vm->irqfds_lock);
 	list_for_each_entry_safe(irqfd, tmp, &vm->irqfds, list) {
 		if (irqfd->eventfd == eventfd) {
-			list_del_init(&irqfd->list);
-			hsm_irqfd_queue_shutdown(irqfd);
+			hsm_irqfd_shutdown(irqfd);
 			break;
 		}
 	}
 	mutex_unlock(&vm->irqfds_lock);
 	eventfd_ctx_put(eventfd);
-
-	/* Wait for cleanup work to finish so the eventfd is fully detached. */
-	flush_workqueue(vm->irqfd_wq);
 
 	return 0;
 }
@@ -217,7 +213,7 @@ int acrn_irqfd_init(struct acrn_vm *vm)
 {
 	INIT_LIST_HEAD(&vm->irqfds);
 	mutex_init(&vm->irqfds_lock);
-	vm->irqfd_wq = alloc_workqueue("acrn_irqfd-%u", WQ_PERCPU, 0, vm->vmid);
+	vm->irqfd_wq = alloc_workqueue("acrn_irqfd-%u", 0, 0, vm->vmid);
 	if (!vm->irqfd_wq)
 		return -ENOMEM;
 
@@ -230,15 +226,9 @@ void acrn_irqfd_deinit(struct acrn_vm *vm)
 	struct hsm_irqfd *irqfd, *next;
 
 	dev_dbg(acrn_dev.this_device, "VM %u irqfd deinit.\n", vm->vmid);
-
-	mutex_lock(&vm->irqfds_lock);
-	list_for_each_entry_safe(irqfd, next, &vm->irqfds, list) {
-		list_del_init(&irqfd->list);
-		hsm_irqfd_queue_shutdown(irqfd);
-	}
-	mutex_unlock(&vm->irqfds_lock);
-
-	/* Drain all cleanup work before tearing the workqueue down. */
-	flush_workqueue(vm->irqfd_wq);
 	destroy_workqueue(vm->irqfd_wq);
+	mutex_lock(&vm->irqfds_lock);
+	list_for_each_entry_safe(irqfd, next, &vm->irqfds, list)
+		hsm_irqfd_shutdown(irqfd);
+	mutex_unlock(&vm->irqfds_lock);
 }

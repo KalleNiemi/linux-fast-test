@@ -28,6 +28,7 @@
 #include <linux/irq.h>
 #include <linux/scatterlist.h>
 #include <linux/dma-mapping.h>
+#include <linux/mod_devicetable.h>
 #include <linux/delay.h>
 #include <linux/crypto.h>
 #include <crypto/scatterwalk.h>
@@ -304,12 +305,12 @@ static size_t atmel_sha_append_sg(struct atmel_sha_reqctx *ctx)
 	size_t count;
 
 	while ((ctx->bufcnt < ctx->buflen) && ctx->total) {
-		count = min3(ctx->sg->length - ctx->offset, ctx->total,
-			     ctx->buflen - ctx->bufcnt);
+		count = min(ctx->sg->length - ctx->offset, ctx->total);
+		count = min(count, ctx->buflen - ctx->bufcnt);
 
-		if (count == 0) {
+		if (count <= 0) {
 			/*
-			* Check if count == 0 because the buffer is full or
+			* Check if count <= 0 because the buffer is full or
 			* because the sg length is 0. In the latest case,
 			* check if there is another sg in the list, a 0 length
 			* sg doesn't necessarily mean the end of the sg list.
@@ -403,13 +404,20 @@ static void atmel_sha_fill_padding(struct atmel_sha_reqctx *ctx, int length)
 
 static struct atmel_sha_dev *atmel_sha_find_dev(struct atmel_sha_ctx *tctx)
 {
-	struct atmel_sha_dev *dd;
+	struct atmel_sha_dev *dd = NULL;
+	struct atmel_sha_dev *tmp;
 
 	spin_lock_bh(&atmel_sha.lock);
-	if (!tctx->dd)
-		tctx->dd = list_first_entry_or_null(&atmel_sha.dev_list,
-						    struct atmel_sha_dev, list);
-	dd = tctx->dd;
+	if (!tctx->dd) {
+		list_for_each_entry(tmp, &atmel_sha.dev_list, list) {
+			dd = tmp;
+			break;
+		}
+		tctx->dd = dd;
+	} else {
+		dd = tctx->dd;
+	}
+
 	spin_unlock_bh(&atmel_sha.lock);
 
 	return dd;
@@ -1246,8 +1254,7 @@ static int atmel_sha_cra_init(struct crypto_tfm *tfm)
 static void atmel_sha_alg_init(struct ahash_alg *alg)
 {
 	alg->halg.base.cra_priority = ATMEL_SHA_PRIORITY;
-	alg->halg.base.cra_flags = CRYPTO_ALG_ASYNC |
-				   CRYPTO_ALG_KERN_DRIVER_ONLY;
+	alg->halg.base.cra_flags = CRYPTO_ALG_ASYNC;
 	alg->halg.base.cra_ctxsize = sizeof(struct atmel_sha_ctx);
 	alg->halg.base.cra_module = THIS_MODULE;
 	alg->halg.base.cra_init = atmel_sha_cra_init;
@@ -1723,7 +1730,8 @@ static int atmel_sha_hmac_setup(struct atmel_sha_dev *dd,
 		return atmel_sha_hmac_prehash_key(dd, key, keylen);
 
 	/* Prepare ipad. */
-	memcpy_and_pad(hmac->ipad, bs, key, keylen, 0);
+	memcpy((u8 *)hmac->ipad, key, keylen);
+	memset((u8 *)hmac->ipad + keylen, 0, bs - keylen);
 	return atmel_sha_hmac_compute_ipad_hash(dd);
 }
 
@@ -2033,8 +2041,7 @@ static void atmel_sha_hmac_cra_exit(struct crypto_tfm *tfm)
 static void atmel_sha_hmac_alg_init(struct ahash_alg *alg)
 {
 	alg->halg.base.cra_priority = ATMEL_SHA_PRIORITY;
-	alg->halg.base.cra_flags = CRYPTO_ALG_ASYNC |
-				   CRYPTO_ALG_KERN_DRIVER_ONLY;
+	alg->halg.base.cra_flags = CRYPTO_ALG_ASYNC;
 	alg->halg.base.cra_ctxsize = sizeof(struct atmel_sha_hmac_ctx);
 	alg->halg.base.cra_module = THIS_MODULE;
 	alg->halg.base.cra_init	= atmel_sha_hmac_cra_init;
@@ -2198,7 +2205,7 @@ struct atmel_sha_authenc_ctx *atmel_sha_authenc_spawn(unsigned long mode)
 	tctx->start = atmel_sha_authenc_start;
 	tctx->flags = mode;
 
-	auth = kzalloc_obj(*auth);
+	auth = kzalloc(sizeof(*auth), GFP_KERNEL);
 	if (!auth) {
 		err = -ENOMEM;
 		goto err_free_ahash;
@@ -2518,7 +2525,6 @@ static void atmel_sha_get_cap(struct atmel_sha_dev *dd)
 
 	/* keep only major version number */
 	switch (dd->hw_version & 0xff0) {
-	case 0x800:
 	case 0x700:
 	case 0x600:
 	case 0x510:
@@ -2678,7 +2684,7 @@ static void atmel_sha_remove(struct platform_device *pdev)
 
 static struct platform_driver atmel_sha_driver = {
 	.probe		= atmel_sha_probe,
-	.remove		= atmel_sha_remove,
+	.remove_new	= atmel_sha_remove,
 	.driver		= {
 		.name	= "atmel_sha",
 		.of_match_table	= atmel_sha_dt_ids,

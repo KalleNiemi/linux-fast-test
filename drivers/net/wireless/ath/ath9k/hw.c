@@ -14,14 +14,13 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#include <linux/export.h>
 #include <linux/io.h>
 #include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/time.h>
 #include <linux/bitops.h>
 #include <linux/etherdevice.h>
-#include <linux/gpio/consumer.h>
+#include <linux/gpio.h>
 #include <linux/unaligned.h>
 
 #include "hw.h"
@@ -491,7 +490,7 @@ static void ath9k_hw_init_macaddr(struct ath_hw *ah)
 	u16 eeval;
 	static const u32 EEP_MAC[] = { EEP_MAC_LSW, EEP_MAC_MID, EEP_MAC_MSW };
 
-	/* MAC address may already be loaded via NVMEM */
+	/* MAC address may already be loaded via ath9k_platform_data */
 	if (is_valid_ether_addr(common->macaddr))
 		return;
 
@@ -1848,11 +1847,20 @@ fail:
 	return -EINVAL;
 }
 
-u32 ath9k_hw_get_tsf_offset(ktime_t last, ktime_t cur)
+u32 ath9k_hw_get_tsf_offset(struct timespec64 *last, struct timespec64 *cur)
 {
-	if (cur == 0)
-		cur = ktime_get_raw();
-	return ktime_us_delta(cur, last);
+	struct timespec64 ts;
+	s64 usec;
+
+	if (!cur) {
+		ktime_get_raw_ts64(&ts);
+		cur = &ts;
+	}
+
+	usec = cur->tv_sec * 1000000ULL + cur->tv_nsec / 1000;
+	usec -= last->tv_sec * 1000000ULL + last->tv_nsec / 1000;
+
+	return (u32) usec;
 }
 EXPORT_SYMBOL(ath9k_hw_get_tsf_offset);
 
@@ -1863,7 +1871,7 @@ int ath9k_hw_reset(struct ath_hw *ah, struct ath9k_channel *chan,
 	u32 saveLedState;
 	u32 saveDefAntenna;
 	u32 macStaId1;
-	ktime_t tsf_ts;
+	struct timespec64 tsf_ts;
 	u32 tsf_offset;
 	u64 tsf = 0;
 	int r;
@@ -1909,7 +1917,7 @@ int ath9k_hw_reset(struct ath_hw *ah, struct ath9k_channel *chan,
 	macStaId1 = REG_READ(ah, AR_STA_ID1) & AR_STA_ID1_BASE_RATE_11B;
 
 	/* Save TSF before chip reset, a cold reset clears it */
-	tsf_ts = ktime_get_raw();
+	ktime_get_raw_ts64(&tsf_ts);
 	tsf = ath9k_hw_gettsf64(ah);
 
 	saveLedState = REG_READ(ah, AR_CFG_LED) &
@@ -1943,7 +1951,7 @@ int ath9k_hw_reset(struct ath_hw *ah, struct ath9k_channel *chan,
 	}
 
 	/* Restore TSF */
-	tsf_offset = ath9k_hw_get_tsf_offset(tsf_ts, 0);
+	tsf_offset = ath9k_hw_get_tsf_offset(&tsf_ts, NULL);
 	ath9k_hw_settsf64(ah, tsf + tsf_offset);
 
 	if (AR_SREV_9280_20_OR_LATER(ah))
@@ -1967,7 +1975,7 @@ int ath9k_hw_reset(struct ath_hw *ah, struct ath9k_channel *chan,
 	 * value after the initvals have been applied.
 	 */
 	if (AR_SREV_9100(ah) && (ath9k_hw_gettsf64(ah) < tsf)) {
-		tsf_offset = ath9k_hw_get_tsf_offset(tsf_ts, 0);
+		tsf_offset = ath9k_hw_get_tsf_offset(&tsf_ts, NULL);
 		ath9k_hw_settsf64(ah, tsf + tsf_offset);
 	}
 
@@ -2141,7 +2149,7 @@ static void ath9k_set_power_network_sleep(struct ath_hw *ah)
 
 		/* When chip goes into network sleep, it could be waken
 		 * up by MCI_INT interrupt caused by BT's HW messages
-		 * (LNA_xxx, CONT_xxx) which could be in a very fast
+		 * (LNA_xxx, CONT_xxx) which chould be in a very fast
 		 * rate (~100us). This will cause chip to leave and
 		 * re-enter network sleep mode frequently, which in
 		 * consequence will have WLAN MCI HW to generate lots of
@@ -2498,11 +2506,19 @@ int ath9k_hw_fill_cap_info(struct ath_hw *ah)
 
 	eeval = ah->eep_ops->get_eeprom(ah, EEP_OP_MODE);
 
-	if (eeval & AR5416_OPFLAGS_11A)
-		pCap->hw_caps |= ATH9K_HW_CAP_5GHZ;
+	if (eeval & AR5416_OPFLAGS_11A) {
+		if (ah->disable_5ghz)
+			ath_warn(common, "disabling 5GHz band\n");
+		else
+			pCap->hw_caps |= ATH9K_HW_CAP_5GHZ;
+	}
 
-	if (eeval & AR5416_OPFLAGS_11G)
-		pCap->hw_caps |= ATH9K_HW_CAP_2GHZ;
+	if (eeval & AR5416_OPFLAGS_11G) {
+		if (ah->disable_2ghz)
+			ath_warn(common, "disabling 2GHz band\n");
+		else
+			pCap->hw_caps |= ATH9K_HW_CAP_2GHZ;
+	}
 
 	if ((pCap->hw_caps & (ATH9K_HW_CAP_2GHZ | ATH9K_HW_CAP_5GHZ)) == 0) {
 		ath_err(common, "both bands are disabled\n");
@@ -2528,7 +2544,7 @@ int ath9k_hw_fill_cap_info(struct ath_hw *ah)
 
 	pCap->tx_chainmask = ah->eep_ops->get_eeprom(ah, EEP_TX_MASK);
 	/*
-	 * For AR9271 we will temporarily use the rx chainmax as read from
+	 * For AR9271 we will temporarilly uses the rx chainmax as read from
 	 * the EEPROM.
 	 */
 	if ((ah->hw_version.devid == AR5416_DEVID_PCI) &&
@@ -2711,28 +2727,19 @@ static void ath9k_hw_gpio_cfg_output_mux(struct ath_hw *ah, u32 gpio, u32 type)
 static void ath9k_hw_gpio_cfg_soc(struct ath_hw *ah, u32 gpio, bool out,
 				  const char *label)
 {
-	enum gpiod_flags flags = out ? GPIOD_OUT_LOW : GPIOD_IN;
-	struct gpio_desc *gpiod;
 	int err;
 
-	if (ah->gpiods[gpio])
+	if (ah->caps.gpio_requested & BIT(gpio))
 		return;
 
-	/*
-	 * Obtains a system specific GPIO descriptor from another GPIO controller.
-	 * Ideally this should come from the device tree, this is a legacy code
-	 * path.
-	 */
-	gpiod = gpiod_get_index(NULL, "ath9k", gpio, flags);
-	err = PTR_ERR_OR_ZERO(gpiod);
+	err = devm_gpio_request_one(ah->dev, gpio, out ? GPIOF_OUT_INIT_LOW : GPIOF_IN, label);
 	if (err) {
 		ath_err(ath9k_hw_common(ah), "request GPIO%d failed:%d\n",
 			gpio, err);
 		return;
 	}
 
-	gpiod_set_consumer_name(gpiod, label);
-	ah->gpiods[gpio] = gpiod;
+	ah->caps.gpio_requested |= BIT(gpio);
 }
 
 static void ath9k_hw_gpio_cfg_wmac(struct ath_hw *ah, u32 gpio, bool out,
@@ -2792,12 +2799,10 @@ void ath9k_hw_gpio_free(struct ath_hw *ah, u32 gpio)
 	if (!AR_SREV_SOC(ah))
 		return;
 
-	if (ah->gpiods[gpio]) {
-		gpiod_put(ah->gpiods[gpio]);
-		ah->gpiods[gpio] = NULL;
-	}
-
 	WARN_ON(gpio >= ah->caps.num_gpio_pins);
+
+	if (ah->caps.gpio_requested & BIT(gpio))
+		ah->caps.gpio_requested &= ~BIT(gpio);
 }
 EXPORT_SYMBOL(ath9k_hw_gpio_free);
 
@@ -2825,8 +2830,8 @@ u32 ath9k_hw_gpio_get(struct ath_hw *ah, u32 gpio)
 			val = REG_READ(ah, AR_GPIO_IN(ah)) & BIT(gpio);
 		else
 			val = MS_REG_READ(AR, gpio);
-	} else if (ah->gpiods[gpio]) {
-		val = gpiod_get_value(ah->gpiods[gpio]);
+	} else if (BIT(gpio) & ah->caps.gpio_requested) {
+		val = gpio_get_value(gpio) & BIT(gpio);
 	} else {
 		WARN_ON(1);
 	}
@@ -2849,8 +2854,8 @@ void ath9k_hw_set_gpio(struct ath_hw *ah, u32 gpio, u32 val)
 			AR7010_GPIO_OUT : AR_GPIO_IN_OUT(ah);
 
 		REG_RMW(ah, out_addr, val << gpio, BIT(gpio));
-	} else if (ah->gpiods[gpio]) {
-		gpiod_set_value(ah->gpiods[gpio], val);
+	} else if (BIT(gpio) & ah->caps.gpio_requested) {
+		gpio_set_value(gpio, val);
 	} else {
 		WARN_ON(1);
 	}
@@ -3131,7 +3136,7 @@ struct ath_gen_timer *ath_gen_timer_alloc(struct ath_hw *ah,
 	    !AR_SREV_9300_20_OR_LATER(ah))
 		return NULL;
 
-	timer = kzalloc_obj(struct ath_gen_timer);
+	timer = kzalloc(sizeof(struct ath_gen_timer), GFP_KERNEL);
 	if (timer == NULL)
 		return NULL;
 

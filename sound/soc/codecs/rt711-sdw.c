@@ -8,6 +8,7 @@
 
 #include <linux/delay.h>
 #include <linux/device.h>
+#include <linux/mod_devicetable.h>
 #include <linux/soundwire/sdw.h>
 #include <linux/soundwire/sdw_type.h>
 #include <linux/soundwire/sdw_registers.h>
@@ -457,7 +458,7 @@ static int rt711_sdw_probe(struct sdw_slave *slave,
 	return rt711_init(&slave->dev, sdw_regmap, regmap, slave);
 }
 
-static void rt711_sdw_remove(struct sdw_slave *slave)
+static int rt711_sdw_remove(struct sdw_slave *slave)
 {
 	struct rt711_priv *rt711 = dev_get_drvdata(&slave->dev);
 
@@ -471,6 +472,8 @@ static void rt711_sdw_remove(struct sdw_slave *slave)
 
 	mutex_destroy(&rt711->calibrate_mutex);
 	mutex_destroy(&rt711->disable_irq_lock);
+
+	return 0;
 }
 
 static const struct sdw_device_id rt711_id[] = {
@@ -479,7 +482,7 @@ static const struct sdw_device_id rt711_id[] = {
 };
 MODULE_DEVICE_TABLE(sdw, rt711_id);
 
-static int rt711_dev_suspend(struct device *dev)
+static int __maybe_unused rt711_dev_suspend(struct device *dev)
 {
 	struct rt711_priv *rt711 = dev_get_drvdata(dev);
 
@@ -495,7 +498,7 @@ static int rt711_dev_suspend(struct device *dev)
 	return 0;
 }
 
-static int rt711_dev_system_suspend(struct device *dev)
+static int __maybe_unused rt711_dev_system_suspend(struct device *dev)
 {
 	struct rt711_priv *rt711 = dev_get_drvdata(dev);
 	struct sdw_slave *slave = dev_to_sdw_dev(dev);
@@ -525,11 +528,11 @@ static int rt711_dev_system_suspend(struct device *dev)
 
 #define RT711_PROBE_TIMEOUT 5000
 
-static int rt711_dev_resume(struct device *dev)
+static int __maybe_unused rt711_dev_resume(struct device *dev)
 {
 	struct sdw_slave *slave = dev_to_sdw_dev(dev);
 	struct rt711_priv *rt711 = dev_get_drvdata(dev);
-	int ret;
+	unsigned long time;
 
 	if (!rt711->first_hw_init)
 		return 0;
@@ -541,12 +544,18 @@ static int rt711_dev_resume(struct device *dev)
 			rt711->disable_irq = false;
 		}
 		mutex_unlock(&rt711->disable_irq_lock);
+		goto regmap_sync;
 	}
 
-	ret = sdw_slave_wait_for_init(slave, RT711_PROBE_TIMEOUT);
-	if (ret)
-		return ret;
+	time = wait_for_completion_timeout(&slave->initialization_complete,
+				msecs_to_jiffies(RT711_PROBE_TIMEOUT));
+	if (!time) {
+		dev_err(&slave->dev, "%s: Initialization not complete, timed out\n", __func__);
+		return -ETIMEDOUT;
+	}
 
+regmap_sync:
+	slave->unattach_request = 0;
 	regcache_cache_only(rt711->regmap, false);
 	regcache_sync_region(rt711->regmap, 0x3000, 0x8fff);
 	regcache_sync_region(rt711->regmap, 0x752009, 0x752091);
@@ -555,14 +564,14 @@ static int rt711_dev_resume(struct device *dev)
 }
 
 static const struct dev_pm_ops rt711_pm = {
-	SYSTEM_SLEEP_PM_OPS(rt711_dev_system_suspend, rt711_dev_resume)
-	RUNTIME_PM_OPS(rt711_dev_suspend, rt711_dev_resume, NULL)
+	SET_SYSTEM_SLEEP_PM_OPS(rt711_dev_system_suspend, rt711_dev_resume)
+	SET_RUNTIME_PM_OPS(rt711_dev_suspend, rt711_dev_resume, NULL)
 };
 
 static struct sdw_driver rt711_sdw_driver = {
 	.driver = {
 		.name = "rt711",
-		.pm = pm_ptr(&rt711_pm),
+		.pm = &rt711_pm,
 	},
 	.probe = rt711_sdw_probe,
 	.remove = rt711_sdw_remove,

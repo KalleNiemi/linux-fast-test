@@ -40,15 +40,22 @@ struct kernfs_open_node {
 static DEFINE_SPINLOCK(kernfs_notify_lock);
 static struct kernfs_node *kernfs_notify_list = KERNFS_NOTIFY_EOL;
 
-/* Compatibility wrappers - use the common hashed node lock */
 static inline struct mutex *kernfs_open_file_mutex_ptr(struct kernfs_node *kn)
 {
-	return kernfs_node_lock_ptr(kn);
+	int idx = hash_ptr(kn, NR_KERNFS_LOCK_BITS);
+
+	return &kernfs_locks->open_file_mutex[idx];
 }
 
 static inline struct mutex *kernfs_open_file_mutex_lock(struct kernfs_node *kn)
 {
-	return kernfs_node_lock(kn);
+	struct mutex *lock;
+
+	lock = kernfs_open_file_mutex_ptr(kn);
+
+	mutex_lock(lock);
+
+	return lock;
 }
 
 /**
@@ -533,7 +540,7 @@ static int kernfs_get_open_node(struct kernfs_node *kn,
 
 	if (!on) {
 		/* not there, initialize a new one */
-		on = kzalloc_obj(*on);
+		on = kzalloc(sizeof(*on), GFP_KERNEL);
 		if (!on) {
 			mutex_unlock(mutex);
 			return -ENOMEM;
@@ -631,7 +638,7 @@ static int kernfs_fop_open(struct inode *inode, struct file *file)
 
 	/* allocate a kernfs_open_file for the file */
 	error = -ENOMEM;
-	of = kzalloc_obj(struct kernfs_open_file);
+	of = kzalloc(sizeof(struct kernfs_open_file), GFP_KERNEL);
 	if (!of)
 		goto err_out;
 
@@ -923,11 +930,9 @@ repeat:
 	/* kick fsnotify */
 
 	down_read(&root->kernfs_supers_rwsem);
-	down_read(&root->kernfs_rwsem);
 	list_for_each_entry(info, &kernfs_root(kn)->supers, node) {
 		struct kernfs_node *parent;
 		struct inode *p_inode = NULL;
-		const char *kn_name;
 		struct inode *inode;
 		struct qstr name;
 
@@ -941,8 +946,7 @@ repeat:
 		if (!inode)
 			continue;
 
-		kn_name = kernfs_rcu_name(kn);
-		name = QSTR(kn_name);
+		name = QSTR(kn->name);
 		parent = kernfs_get_parent(kn);
 		if (parent) {
 			p_inode = ilookup(info->sb, kernfs_ino(parent));
@@ -962,7 +966,6 @@ repeat:
 		iput(inode);
 	}
 
-	up_read(&root->kernfs_rwsem);
 	up_read(&root->kernfs_supers_rwsem);
 	kernfs_put(kn);
 	goto repeat;
@@ -1038,7 +1041,7 @@ struct kernfs_node *__kernfs_create_file(struct kernfs_node *parent,
 					 umode_t mode, kuid_t uid, kgid_t gid,
 					 loff_t size,
 					 const struct kernfs_ops *ops,
-					 void *priv, const struct ns_common *ns,
+					 void *priv, const void *ns,
 					 struct lock_class_key *key)
 {
 	struct kernfs_node *kn;

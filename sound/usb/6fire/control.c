@@ -553,7 +553,8 @@ int usb6fire_control_init(struct sfire_chip *chip)
 {
 	int i;
 	int ret;
-	struct control_runtime *rt = kzalloc_obj(struct control_runtime);
+	struct control_runtime *rt = kzalloc(sizeof(struct control_runtime),
+			GFP_KERNEL);
 	struct comm_runtime *comm_rt = chip->comm;
 
 	if (!rt)
@@ -582,31 +583,30 @@ int usb6fire_control_init(struct sfire_chip *chip)
 		"Master Playback Volume", vol_elements);
 	if (ret) {
 		dev_err(&chip->dev->dev, "cannot add control.\n");
-		goto free_rt;
+		kfree(rt);
+		return ret;
 	}
 	ret = usb6fire_control_add_virtual(rt, chip->card,
 		"Master Playback Switch", mute_elements);
 	if (ret) {
 		dev_err(&chip->dev->dev, "cannot add control.\n");
-		goto free_rt;
+		kfree(rt);
+		return ret;
 	}
 
 	i = 0;
 	while (elements[i].name) {
 		ret = snd_ctl_add(chip->card, snd_ctl_new1(&elements[i], rt));
 		if (ret < 0) {
+			kfree(rt);
 			dev_err(&chip->dev->dev, "cannot add control.\n");
-			goto free_rt;
+			return ret;
 		}
 		i++;
 	}
 
 	chip->control = rt;
 	return 0;
-
-free_rt:
-	kfree(rt);
-	return ret;
 }
 
 void usb6fire_control_abort(struct sfire_chip *chip)

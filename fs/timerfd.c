@@ -55,15 +55,6 @@ static inline bool isalarm(struct timerfd_ctx *ctx)
 		ctx->clockid == CLOCK_BOOTTIME_ALARM;
 }
 
-static void __timerfd_triggered(struct timerfd_ctx *ctx)
-{
-	lockdep_assert_held(&ctx->wqh.lock);
-
-	ctx->expired = 1;
-	ctx->ticks++;
-	wake_up_locked_poll(&ctx->wqh, EPOLLIN);
-}
-
 /*
  * This gets called when the timer event triggers. We set the "expired"
  * flag, but we do not re-arm the timer (in case it's necessary,
@@ -71,8 +62,13 @@ static void __timerfd_triggered(struct timerfd_ctx *ctx)
  */
 static void timerfd_triggered(struct timerfd_ctx *ctx)
 {
-	guard(spinlock_irqsave)(&ctx->wqh.lock);
-	__timerfd_triggered(ctx);
+	unsigned long flags;
+
+	spin_lock_irqsave(&ctx->wqh.lock, flags);
+	ctx->expired = 1;
+	ctx->ticks++;
+	wake_up_locked_poll(&ctx->wqh, EPOLLIN);
+	spin_unlock_irqrestore(&ctx->wqh.lock, flags);
 }
 
 static enum hrtimer_restart timerfd_tmrproc(struct hrtimer *htmr)
@@ -83,11 +79,13 @@ static enum hrtimer_restart timerfd_tmrproc(struct hrtimer *htmr)
 	return HRTIMER_NORESTART;
 }
 
-static void timerfd_alarmproc(struct alarm *alarm, ktime_t now)
+static enum alarmtimer_restart timerfd_alarmproc(struct alarm *alarm,
+	ktime_t now)
 {
 	struct timerfd_ctx *ctx = container_of(alarm, struct timerfd_ctx,
 					       t.alarm);
 	timerfd_triggered(ctx);
+	return ALARMTIMER_NORESTART;
 }
 
 /*
@@ -188,54 +186,15 @@ static ktime_t timerfd_get_remaining(struct timerfd_ctx *ctx)
 	return remaining < 0 ? 0: remaining;
 }
 
-static void timerfd_alarm_start(struct timerfd_ctx *ctx, ktime_t exp, bool relative)
-{
-	/* Start the timer. If it's expired already, handle the callback. */
-	if (!alarm_start_timer(&ctx->t.alarm, exp, relative))
-		__timerfd_triggered(ctx);
-}
-
-static u64 timerfd_alarm_restart(struct timerfd_ctx *ctx)
-{
-	/* -1 to account for ctx->ticks++ in __timerfd_triggered() */
-	u64 ticks = alarm_forward_now(&ctx->t.alarm, ctx->tintv) - 1;
-
-	timerfd_alarm_start(ctx, alarm_get_expires(&ctx->t.alarm), false);
-	return ticks;
-}
-
-static void timerfd_hrtimer_start(struct timerfd_ctx *ctx, ktime_t exp,
-				  const enum hrtimer_mode mode)
-{
-	/* Start the timer. If it's expired already, handle the callback. */
-	if (!hrtimer_start_range_ns_user(&ctx->t.tmr, exp, 0, mode))
-		__timerfd_triggered(ctx);
-}
-
-static u64 timerfd_hrtimer_restart(struct timerfd_ctx *ctx)
-{
-	/* -1 to account for ctx->ticks++ in __timerfd_triggered() */
-	u64 ticks = hrtimer_forward_now(&ctx->t.tmr, ctx->tintv) - 1;
-
-	timerfd_hrtimer_start(ctx, hrtimer_get_expires(&ctx->t.tmr), HRTIMER_MODE_ABS);
-	return ticks;
-}
-
-static u64 timerfd_restart(struct timerfd_ctx *ctx)
-{
-	if (isalarm(ctx))
-		return timerfd_alarm_restart(ctx);
-	return timerfd_hrtimer_restart(ctx);
-}
-
 static int timerfd_setup(struct timerfd_ctx *ctx, int flags,
 			 const struct itimerspec64 *ktmr)
 {
-	int clockid = ctx->clockid;
 	enum hrtimer_mode htmode;
 	ktime_t texp;
+	int clockid = ctx->clockid;
 
-	htmode = (flags & TFD_TIMER_ABSTIME) ? HRTIMER_MODE_ABS: HRTIMER_MODE_REL;
+	htmode = (flags & TFD_TIMER_ABSTIME) ?
+		HRTIMER_MODE_ABS: HRTIMER_MODE_REL;
 
 	texp = timespec64_to_ktime(ktmr->it_value);
 	ctx->expired = 0;
@@ -248,16 +207,22 @@ static int timerfd_setup(struct timerfd_ctx *ctx, int flags,
 			   ALARM_REALTIME : ALARM_BOOTTIME,
 			   timerfd_alarmproc);
 	} else {
-		hrtimer_setup(&ctx->t.tmr, timerfd_tmrproc, clockid, htmode);
+		hrtimer_init(&ctx->t.tmr, clockid, htmode);
+		hrtimer_set_expires(&ctx->t.tmr, texp);
+		ctx->t.tmr.function = timerfd_tmrproc;
 	}
 
 	if (texp != 0) {
 		if (flags & TFD_TIMER_ABSTIME)
 			texp = timens_ktime_to_host(clockid, texp);
-		if (isalarm(ctx))
-			timerfd_alarm_start(ctx, texp, !(flags & TFD_TIMER_ABSTIME));
-		else
-			timerfd_hrtimer_start(ctx, texp, htmode);
+		if (isalarm(ctx)) {
+			if (flags & TFD_TIMER_ABSTIME)
+				alarm_start(&ctx->t.alarm, texp);
+			else
+				alarm_start_relative(&ctx->t.alarm, texp);
+		} else {
+			hrtimer_start(&ctx->t.tmr, texp, htmode);
+		}
 
 		if (timerfd_canceled(ctx))
 			return -ECANCELED;
@@ -325,19 +290,27 @@ static ssize_t timerfd_read_iter(struct kiocb *iocb, struct iov_iter *to)
 	}
 
 	if (ctx->ticks) {
-		unsigned int expired = ctx->expired;
-
 		ticks = ctx->ticks;
+
+		if (ctx->expired && ctx->tintv) {
+			/*
+			 * If tintv != 0, this is a periodic timer that
+			 * needs to be re-armed. We avoid doing it in the timer
+			 * callback to avoid DoS attacks specifying a very
+			 * short timer period.
+			 */
+			if (isalarm(ctx)) {
+				ticks += alarm_forward_now(
+					&ctx->t.alarm, ctx->tintv) - 1;
+				alarm_restart(&ctx->t.alarm);
+			} else {
+				ticks += hrtimer_forward_now(&ctx->t.tmr,
+							     ctx->tintv) - 1;
+				hrtimer_restart(&ctx->t.tmr);
+			}
+		}
 		ctx->expired = 0;
 		ctx->ticks = 0;
-
-		/*
-		 * If tintv != 0, this is a periodic timer that needs to be
-		 * re-armed. We avoid doing it in the timer callback to avoid
-		 * DoS attacks specifying a very short timer period.
-		 */
-		if (expired && ctx->tintv)
-			ticks += timerfd_restart(ctx);
 	}
 	spin_unlock_irq(&ctx->wqh.lock);
 	if (ticks) {
@@ -421,10 +394,24 @@ static const struct file_operations timerfd_fops = {
 	.unlocked_ioctl	= timerfd_ioctl,
 };
 
+static int timerfd_fget(int fd, struct fd *p)
+{
+	struct fd f = fdget(fd);
+	if (!fd_file(f))
+		return -EBADF;
+	if (fd_file(f)->f_op != &timerfd_fops) {
+		fdput(f);
+		return -EINVAL;
+	}
+	*p = f;
+	return 0;
+}
+
 SYSCALL_DEFINE2(timerfd_create, int, clockid, int, flags)
 {
-	struct timerfd_ctx *ctx __free(kfree) = NULL;
-	int ret;
+	int ufd;
+	struct timerfd_ctx *ctx;
+	struct file *file;
 
 	/* Check the TFD_* constants for consistency.  */
 	BUILD_BUG_ON(TFD_CLOEXEC != O_CLOEXEC);
@@ -443,7 +430,7 @@ SYSCALL_DEFINE2(timerfd_create, int, clockid, int, flags)
 	    !capable(CAP_WAKE_ALARM))
 		return -EPERM;
 
-	ctx = kzalloc_obj(*ctx);
+	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
 	if (!ctx)
 		return -ENOMEM;
 
@@ -457,23 +444,34 @@ SYSCALL_DEFINE2(timerfd_create, int, clockid, int, flags)
 			   ALARM_REALTIME : ALARM_BOOTTIME,
 			   timerfd_alarmproc);
 	else
-		hrtimer_setup(&ctx->t.tmr, timerfd_tmrproc, clockid, HRTIMER_MODE_ABS);
+		hrtimer_init(&ctx->t.tmr, clockid, HRTIMER_MODE_ABS);
 
 	ctx->moffs = ktime_mono_to_real(0);
 
-	ret = FD_ADD(flags & TFD_SHARED_FCNTL_FLAGS,
-		     anon_inode_getfile_fmode("[timerfd]", &timerfd_fops, ctx,
-					      O_RDWR | (flags & TFD_SHARED_FCNTL_FLAGS),
-					      FMODE_NOWAIT));
-	if (ret >= 0)
-		retain_and_null_ptr(ctx);
-	return ret;
+	ufd = get_unused_fd_flags(flags & TFD_SHARED_FCNTL_FLAGS);
+	if (ufd < 0) {
+		kfree(ctx);
+		return ufd;
+	}
+
+	file = anon_inode_getfile("[timerfd]", &timerfd_fops, ctx,
+				    O_RDWR | (flags & TFD_SHARED_FCNTL_FLAGS));
+	if (IS_ERR(file)) {
+		put_unused_fd(ufd);
+		kfree(ctx);
+		return PTR_ERR(file);
+	}
+
+	file->f_mode |= FMODE_NOWAIT;
+	fd_install(ufd, file);
+	return ufd;
 }
 
 static int do_timerfd_settime(int ufd, int flags, 
 		const struct itimerspec64 *new,
 		struct itimerspec64 *old)
 {
+	struct fd f;
 	struct timerfd_ctx *ctx;
 	int ret;
 
@@ -481,17 +479,15 @@ static int do_timerfd_settime(int ufd, int flags,
 		 !itimerspec64_valid(new))
 		return -EINVAL;
 
-	CLASS(fd, f)(ufd);
-	if (fd_empty(f))
-		return -EBADF;
-
-	if (fd_file(f)->f_op != &timerfd_fops)
-		return -EINVAL;
-
+	ret = timerfd_fget(ufd, &f);
+	if (ret)
+		return ret;
 	ctx = fd_file(f)->private_data;
 
-	if (isalarm(ctx) && !capable(CAP_WAKE_ALARM))
+	if (isalarm(ctx) && !capable(CAP_WAKE_ALARM)) {
+		fdput(f);
 		return -EPERM;
+	}
 
 	timerfd_setup_cancel(ctx, flags);
 
@@ -539,28 +535,39 @@ static int do_timerfd_settime(int ufd, int flags,
 	ret = timerfd_setup(ctx, flags, new);
 
 	spin_unlock_irq(&ctx->wqh.lock);
+	fdput(f);
 	return ret;
 }
 
 static int do_timerfd_gettime(int ufd, struct itimerspec64 *t)
 {
+	struct fd f;
 	struct timerfd_ctx *ctx;
-	CLASS(fd, f)(ufd);
-
-	if (fd_empty(f))
-		return -EBADF;
-	if (fd_file(f)->f_op != &timerfd_fops)
-		return -EINVAL;
+	int ret = timerfd_fget(ufd, &f);
+	if (ret)
+		return ret;
 	ctx = fd_file(f)->private_data;
 
 	spin_lock_irq(&ctx->wqh.lock);
 	if (ctx->expired && ctx->tintv) {
 		ctx->expired = 0;
-		ctx->ticks += timerfd_restart(ctx);
+
+		if (isalarm(ctx)) {
+			ctx->ticks +=
+				alarm_forward_now(
+					&ctx->t.alarm, ctx->tintv) - 1;
+			alarm_restart(&ctx->t.alarm);
+		} else {
+			ctx->ticks +=
+				hrtimer_forward_now(&ctx->t.tmr, ctx->tintv)
+				- 1;
+			hrtimer_restart(&ctx->t.tmr);
+		}
 	}
 	t->it_value = ktime_to_timespec64(timerfd_get_remaining(ctx));
 	t->it_interval = ktime_to_timespec64(ctx->tintv);
 	spin_unlock_irq(&ctx->wqh.lock);
+	fdput(f);
 	return 0;
 }
 

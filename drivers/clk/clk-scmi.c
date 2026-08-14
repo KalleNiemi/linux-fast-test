@@ -10,6 +10,7 @@
 #include <linux/device.h>
 #include <linux/err.h>
 #include <linux/of.h>
+#include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/scmi_protocol.h>
 
@@ -53,22 +54,33 @@ static unsigned long scmi_clk_recalc_rate(struct clk_hw *hw,
 	return rate;
 }
 
-static int scmi_clk_determine_rate(struct clk_hw *hw,
-				   struct clk_rate_request *req)
+static long scmi_clk_round_rate(struct clk_hw *hw, unsigned long rate,
+				unsigned long *parent_rate)
 {
-	int ret;
+	u64 fmin, fmax, ftmp;
 	struct scmi_clk *clk = to_scmi_clk(hw);
 
 	/*
-	 * If we could not get a better rate scmi_clk_recalc_rate() will be
-	 * called after the rate is set and we'll know what rate the clock is
+	 * We can't figure out what rate it will be, so just return the
+	 * rate back to the caller. scmi_clk_recalc_rate() will be called
+	 * after the rate is set and we'll know what rate the clock is
 	 * running at then.
 	 */
-	ret = scmi_proto_clk_ops->determine_rate(clk->ph, clk->id, &req->rate);
-	if (ret)
-		return ret;
+	if (clk->info->rate_discrete)
+		return rate;
 
-	return 0;
+	fmin = clk->info->range.min_rate;
+	fmax = clk->info->range.max_rate;
+	if (rate <= fmin)
+		return fmin;
+	else if (rate >= fmax)
+		return fmax;
+
+	ftmp = rate - fmin;
+	ftmp += clk->info->range.step_size - 1; /* to round up */
+	ftmp = div64_ul(ftmp, clk->info->range.step_size);
+
+	return ftmp * clk->info->range.step_size + fmin;
 }
 
 static int scmi_clk_set_rate(struct clk_hw *hw, unsigned long rate,
@@ -105,6 +117,15 @@ static u8 scmi_clk_get_parent(struct clk_hw *hw)
 		return 0;
 
 	return p_idx;
+}
+
+static int scmi_clk_determine_rate(struct clk_hw *hw, struct clk_rate_request *req)
+{
+	/*
+	 * Suppose all the requested rates are supported, and let firmware
+	 * to handle the left work.
+	 */
+	return 0;
 }
 
 static int scmi_clk_enable(struct clk_hw *hw)
@@ -202,6 +223,7 @@ static int scmi_clk_ops_init(struct device *dev, struct scmi_clk *sclk,
 			     const struct clk_ops *scmi_ops)
 {
 	int ret;
+	unsigned long min_rate, max_rate;
 
 	struct clk_init_data init = {
 		.flags = CLK_GET_RATE_NOCACHE,
@@ -216,8 +238,20 @@ static int scmi_clk_ops_init(struct device *dev, struct scmi_clk *sclk,
 	if (ret)
 		return ret;
 
-	clk_hw_set_rate_range(&sclk->hw, sclk->info->min_rate,
-			      sclk->info->max_rate);
+	if (sclk->info->rate_discrete) {
+		int num_rates = sclk->info->list.num_rates;
+
+		if (num_rates <= 0)
+			return -EINVAL;
+
+		min_rate = sclk->info->list.rates[0];
+		max_rate = sclk->info->list.rates[num_rates - 1];
+	} else {
+		min_rate = sclk->info->range.min_rate;
+		max_rate = sclk->info->range.max_rate;
+	}
+
+	clk_hw_set_rate_range(&sclk->hw, min_rate, max_rate);
 	return ret;
 }
 
@@ -266,6 +300,7 @@ scmi_clk_ops_alloc(struct device *dev, unsigned long feats_key)
 
 	/* Rate ops */
 	ops->recalc_rate = scmi_clk_recalc_rate;
+	ops->round_rate = scmi_clk_round_rate;
 	ops->determine_rate = scmi_clk_determine_rate;
 	if (feats_key & BIT(SCMI_CLK_RATE_CTRL_SUPPORTED))
 		ops->set_rate = scmi_clk_set_rate;
@@ -427,7 +462,7 @@ static int scmi_clocks_probe(struct scmi_device *sdev)
 
 		/*
 		 * Note that the scmi_clk_ops_db is on the stack, not global,
-		 * because it cannot be shared between multiple probe-sequences
+		 * because it cannot be shared between mulitple probe-sequences
 		 * to avoid sharing the devm_ allocated clk_ops between multiple
 		 * SCMI clk driver instances.
 		 */

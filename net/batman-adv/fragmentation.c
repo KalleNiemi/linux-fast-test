@@ -8,7 +8,6 @@
 #include "main.h"
 
 #include <linux/atomic.h>
-#include <linux/bug.h>
 #include <linux/byteorder/generic.h>
 #include <linux/errno.h>
 #include <linux/etherdevice.h>
@@ -161,7 +160,7 @@ static bool batadv_frag_insert_packet(struct batadv_orig_node *orig_node,
 	seqno = ntohs(frag_packet->seqno);
 	bucket = seqno % BATADV_FRAG_BUFFER_COUNT;
 
-	frag_entry_new = kmalloc_obj(*frag_entry_new, GFP_ATOMIC);
+	frag_entry_new = kmalloc(sizeof(*frag_entry_new), GFP_ATOMIC);
 	if (!frag_entry_new)
 		goto err;
 
@@ -306,11 +305,10 @@ free:
 }
 
 /**
- * batadv_skb_is_frag() - check if newly merged skb contains unicast fragment
+ * batadv_skb_is_frag() - check if newly merged skb is gain a unicast packet
  * @skb: newly merged skb
  *
- * Return: true if the newly merged skb is of type BATADV_UNICAST_FRAG, false
- *  otherwise
+ * Return: if newly skb is of type BATADV_UNICAST_FRAG
  */
 static bool batadv_skb_is_frag(struct sk_buff *skb)
 {
@@ -400,7 +398,7 @@ bool batadv_frag_skb_fwd(struct sk_buff *skb,
 			 struct batadv_orig_node *orig_node_src,
 			 int *rx_result)
 {
-	struct batadv_priv *bat_priv = netdev_priv(recv_if->mesh_iface);
+	struct batadv_priv *bat_priv = netdev_priv(recv_if->soft_iface);
 	struct batadv_neigh_node *neigh_node = NULL;
 	struct batadv_frag_packet *packet;
 	u16 total_size;

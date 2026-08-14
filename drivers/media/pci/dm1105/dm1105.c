@@ -768,8 +768,6 @@ static void dm1105_ir_exit(struct dm1105_dev *dm1105)
 
 static int dm1105_hw_init(struct dm1105_dev *dev)
 {
-	int ret;
-
 	dm1105_disable_irqs(dev);
 
 	dm_writeb(DM1105_HOST_CTR, 0);
@@ -780,10 +778,7 @@ static int dm1105_hw_init(struct dm1105_dev *dev)
 	dm_writew(DM1105_TSCTR, 0xc10a);
 
 	/* map DMA and set address */
-	ret = dm1105_dma_map(dev);
-	if (ret)
-		return -ENOMEM;
-
+	dm1105_dma_map(dev);
 	dm1105_set_dma_addr(dev);
 	/* big buffer */
 	dm_writel(DM1105_RLEN, 5 * DM1105_DMA_BYTES);
@@ -982,7 +977,7 @@ static int dm1105_probe(struct pci_dev *pdev,
 	if (dm1105_devcount >= ARRAY_SIZE(card))
 		return -ENODEV;
 
-	dev = kzalloc_obj(struct dm1105_dev);
+	dev = kzalloc(sizeof(struct dm1105_dev), GFP_KERNEL);
 	if (!dev)
 		return -ENOMEM;
 

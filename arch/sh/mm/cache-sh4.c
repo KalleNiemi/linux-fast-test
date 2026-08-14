@@ -114,7 +114,7 @@ static void sh4_flush_dcache_folio(void *arg)
 	struct address_space *mapping = folio_flush_mapping(folio);
 
 	if (mapping && !mapping_mapped(mapping))
-		clear_bit(PG_dcache_clean, &folio->flags.f);
+		clear_bit(PG_dcache_clean, &folio->flags);
 	else
 #endif
 	{
@@ -248,7 +248,7 @@ static void sh4_flush_cache_page(void *args)
 		 */
 		map_coherent = (current_cpu_data.dcache.n_aliases &&
 			test_bit(PG_dcache_clean, folio_flags(folio, 0)) &&
-			folio_mapped(folio));
+			page_mapped(page));
 		if (map_coherent)
 			vaddr = kmap_coherent(page, address);
 		else

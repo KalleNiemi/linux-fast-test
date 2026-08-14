@@ -80,12 +80,10 @@ struct xdp_sock {
 	 * call of __xsk_generic_xmit().
 	 */
 	struct sk_buff *skb;
-	bool drain_cont;
 
 	struct list_head map_list;
 	/* Protects map_list */
 	spinlock_t map_list_lock;
-	u32 max_tx_budget;
 	/* Protects multiple processes in the control path */
 	struct mutex mutex;
 	struct xsk_queue *fq_tmp; /* Only as tmp storage before bind */
@@ -109,16 +107,11 @@ struct xdp_sock {
  *     indicates position where checksumming should start.
  *     csum_offset indicates position where checksum should be stored.
  *
- * void (*tmo_request_launch_time)(u64 launch_time, void *priv)
- *     Called when AF_XDP frame requested launch time HW offload support.
- *     launch_time indicates the PTP time at which the device can schedule the
- *     packet for transmission.
  */
 struct xsk_tx_metadata_ops {
 	void	(*tmo_request_timestamp)(void *priv);
 	u64	(*tmo_fill_timestamp)(void *priv);
 	void	(*tmo_request_checksum)(u16 csum_start, u16 csum_offset, void *priv);
-	void	(*tmo_request_launch_time)(u64 launch_time, void *priv);
 };
 
 #ifdef CONFIG_XDP_SOCKETS
@@ -126,7 +119,6 @@ struct xsk_tx_metadata_ops {
 int xsk_generic_rcv(struct xdp_sock *xs, struct xdp_buff *xdp);
 int __xsk_map_redirect(struct xdp_sock *xs, struct xdp_buff *xdp);
 void __xsk_map_flush(struct list_head *flush_list);
-INDIRECT_CALLABLE_DECLARE(void xsk_destruct_skb(struct sk_buff *));
 
 /**
  *  xsk_tx_metadata_to_compl - Save enough relevant metadata information
@@ -141,16 +133,40 @@ INDIRECT_CALLABLE_DECLARE(void xsk_destruct_skb(struct sk_buff *));
 static inline void xsk_tx_metadata_to_compl(struct xsk_tx_metadata *meta,
 					    struct xsk_tx_metadata_compl *compl)
 {
-	compl->tx_timestamp = NULL;
-
 	if (!meta)
 		return;
 
-	/* we can only arrive here if the completion timestamp has been
-	 * requested via XDP_TXMD_FLAGS_TIMESTAMP, see xsk_tx_metadata_request
-	 */
+	if (meta->flags & XDP_TXMD_FLAGS_TIMESTAMP)
+		compl->tx_timestamp = &meta->completion.tx_timestamp;
+	else
+		compl->tx_timestamp = NULL;
+}
 
-	compl->tx_timestamp = &meta->completion.tx_timestamp;
+/**
+ *  xsk_tx_metadata_request - Evaluate AF_XDP TX metadata at submission
+ *  and call appropriate xsk_tx_metadata_ops operation.
+ *  @meta: pointer to AF_XDP metadata area
+ *  @ops: pointer to struct xsk_tx_metadata_ops
+ *  @priv: pointer to driver-private aread
+ *
+ *  This function should be called by the networking device when
+ *  it prepares AF_XDP egress packet.
+ */
+static inline void xsk_tx_metadata_request(const struct xsk_tx_metadata *meta,
+					   const struct xsk_tx_metadata_ops *ops,
+					   void *priv)
+{
+	if (!meta)
+		return;
+
+	if (ops->tmo_request_timestamp)
+		if (meta->flags & XDP_TXMD_FLAGS_TIMESTAMP)
+			ops->tmo_request_timestamp(priv);
+
+	if (ops->tmo_request_checksum)
+		if (meta->flags & XDP_TXMD_FLAGS_CHECKSUM)
+			ops->tmo_request_checksum(meta->request.csum_start,
+						  meta->request.csum_offset, priv);
 }
 
 /**
@@ -191,14 +207,14 @@ static inline void __xsk_map_flush(struct list_head *flush_list)
 {
 }
 
-#ifdef CONFIG_MITIGATION_RETPOLINE
-static inline void xsk_destruct_skb(struct sk_buff *skb)
-{
-}
-#endif
-
 static inline void xsk_tx_metadata_to_compl(struct xsk_tx_metadata *meta,
 					    struct xsk_tx_metadata_compl *compl)
+{
+}
+
+static inline void xsk_tx_metadata_request(struct xsk_tx_metadata *meta,
+					   const struct xsk_tx_metadata_ops *ops,
+					   void *priv)
 {
 }
 

@@ -32,14 +32,16 @@ static int tegra_aconnect_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	aconnect->ape_clk = devm_clk_get(&pdev->dev, "ape");
-	if (IS_ERR(aconnect->ape_clk))
-		return dev_err_probe(&pdev->dev, PTR_ERR(aconnect->ape_clk),
-				     "can't retrieve ape clock\n");
+	if (IS_ERR(aconnect->ape_clk)) {
+		dev_err(&pdev->dev, "Can't retrieve ape clock\n");
+		return PTR_ERR(aconnect->ape_clk);
+	}
 
 	aconnect->apb2ape_clk = devm_clk_get(&pdev->dev, "apb2ape");
-	if (IS_ERR(aconnect->apb2ape_clk))
-		return dev_err_probe(&pdev->dev, PTR_ERR(aconnect->apb2ape_clk),
-				     "can't retrieve apb2ape clock\n");
+	if (IS_ERR(aconnect->apb2ape_clk)) {
+		dev_err(&pdev->dev, "Can't retrieve apb2ape clock\n");
+		return PTR_ERR(aconnect->apb2ape_clk);
+	}
 
 	dev_set_drvdata(&pdev->dev, aconnect);
 	pm_runtime_enable(&pdev->dev);
@@ -102,7 +104,7 @@ MODULE_DEVICE_TABLE(of, tegra_aconnect_of_match);
 
 static struct platform_driver tegra_aconnect_driver = {
 	.probe = tegra_aconnect_probe,
-	.remove = tegra_aconnect_remove,
+	.remove_new = tegra_aconnect_remove,
 	.driver = {
 		.name = "tegra-aconnect",
 		.of_match_table = tegra_aconnect_of_match,

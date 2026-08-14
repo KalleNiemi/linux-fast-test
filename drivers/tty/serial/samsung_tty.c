@@ -52,7 +52,7 @@
 #define S3C24XX_SERIAL_MINOR	64
 
 #ifdef CONFIG_ARM64
-#define UART_NR			18
+#define UART_NR			12
 #else
 #define UART_NR			CONFIG_SERIAL_SAMSUNG_UARTS
 #endif
@@ -190,8 +190,6 @@ static void wr_reg(const struct uart_port *port, u32 reg, u32 val)
 	case UPIO_MEM32:
 		writel_relaxed(val, portaddr(port, reg));
 		break;
-	default:
-		break;
 	}
 }
 
@@ -311,7 +309,7 @@ static void s3c24xx_serial_stop_tx(struct uart_port *port)
 	ourport->tx_enabled = 0;
 	ourport->tx_in_progress = 0;
 
-	if (uart_cons_flow_enabled(port))
+	if (port->flags & UPF_CONS_FLOW)
 		s3c24xx_serial_rx_enable(port);
 
 	ourport->tx_mode = 0;
@@ -485,7 +483,7 @@ static void s3c24xx_serial_start_tx(struct uart_port *port)
 	struct tty_port *tport = &port->state->port;
 
 	if (!ourport->tx_enabled) {
-		if (uart_cons_flow_enabled(port))
+		if (port->flags & UPF_CONS_FLOW)
 			s3c24xx_serial_rx_disable(port);
 
 		ourport->tx_enabled = 1;
@@ -773,7 +771,7 @@ static void s3c24xx_serial_rx_drain_fifo(struct s3c24xx_uart_port *ourport)
 		uerstat = rd_regl(port, S3C2410_UERSTAT);
 		ch = rd_reg(port, S3C2410_URXH);
 
-		if (uart_cons_flow_enabled(port)) {
+		if (port->flags & UPF_CONS_FLOW) {
 			bool txe = s3c24xx_serial_txempty_nofifo(port);
 
 			if (ourport->rx_enabled) {
@@ -1554,11 +1552,11 @@ static void s3c24xx_serial_set_termios(struct uart_port *port,
 		ulcon |= S3C2410_LCON_PNONE;
 	}
 
+	uart_port_lock_irqsave(port, &flags);
+
 	dev_dbg(port->dev,
 		"setting ulcon to %08x, brddiv to %d, udivslot %08x\n",
 		ulcon, quot, udivslot);
-
-	uart_port_lock_irqsave(port, &flags);
 
 	wr_regl(port, S3C2410_ULCON, ulcon);
 	wr_regl(port, S3C2410_UBRDIV, quot);
@@ -1578,6 +1576,12 @@ static void s3c24xx_serial_set_termios(struct uart_port *port,
 
 	if (ourport->info->has_divslot)
 		wr_regl(port, S3C2443_DIVSLOT, udivslot);
+
+	dev_dbg(port->dev,
+		"uart: ulcon = 0x%08x, ucon = 0x%08x, ufcon = 0x%08x\n",
+		rd_regl(port, S3C2410_ULCON),
+		rd_regl(port, S3C2410_UCON),
+		rd_regl(port, S3C2410_UFCON));
 
 	/*
 	 * Update the per-port timeout.
@@ -1822,7 +1826,7 @@ static int s3c24xx_serial_init_port(struct s3c24xx_uart_port *ourport,
 
 	if (cfg->uart_flags & UPF_CONS_FLOW) {
 		dev_dbg(port->dev, "enabling flow control\n");
-		uart_set_cons_flow_enabled(port, true);
+		port->flags |= UPF_CONS_FLOW;
 	}
 
 	/* sort our the physical and virtual addresses for each UART */
@@ -2486,12 +2490,6 @@ static const struct s3c24xx_serial_drv_data exynos850_serial_drv_data = {
 	.fifosize = { 256, 64, 64, 64 },
 };
 
-static const struct s3c24xx_serial_drv_data exynos8895_serial_drv_data = {
-	EXYNOS_COMMON_SERIAL_DRV_DATA,
-	/* samsung,uart-fifosize must be specified in the device tree. */
-	.fifosize = { 0 },
-};
-
 static const struct s3c24xx_serial_drv_data gs101_serial_drv_data = {
 	.info = {
 		.name		= "Google GS101 UART",
@@ -2522,14 +2520,12 @@ static const struct s3c24xx_serial_drv_data gs101_serial_drv_data = {
 #define EXYNOS4210_SERIAL_DRV_DATA (&exynos4210_serial_drv_data)
 #define EXYNOS5433_SERIAL_DRV_DATA (&exynos5433_serial_drv_data)
 #define EXYNOS850_SERIAL_DRV_DATA (&exynos850_serial_drv_data)
-#define EXYNOS8895_SERIAL_DRV_DATA (&exynos8895_serial_drv_data)
 #define GS101_SERIAL_DRV_DATA (&gs101_serial_drv_data)
 
 #else
 #define EXYNOS4210_SERIAL_DRV_DATA NULL
 #define EXYNOS5433_SERIAL_DRV_DATA NULL
 #define EXYNOS850_SERIAL_DRV_DATA NULL
-#define EXYNOS8895_SERIAL_DRV_DATA NULL
 #define GS101_SERIAL_DRV_DATA NULL
 #endif
 
@@ -2619,9 +2615,6 @@ static const struct platform_device_id s3c24xx_serial_driver_ids[] = {
 	}, {
 		.name		= "gs101-uart",
 		.driver_data	= (kernel_ulong_t)GS101_SERIAL_DRV_DATA,
-	}, {
-		.name		= "exynos8895-uart",
-		.driver_data	= (kernel_ulong_t)EXYNOS8895_SERIAL_DRV_DATA,
 	},
 	{ },
 };
@@ -2645,8 +2638,6 @@ static const struct of_device_id s3c24xx_uart_dt_match[] = {
 		.data = ARTPEC8_SERIAL_DRV_DATA },
 	{ .compatible = "google,gs101-uart",
 		.data = GS101_SERIAL_DRV_DATA },
-	{ .compatible = "samsung,exynos8895-uart",
-		.data = EXYNOS8895_SERIAL_DRV_DATA },
 	{},
 };
 MODULE_DEVICE_TABLE(of, s3c24xx_uart_dt_match);
@@ -2654,7 +2645,7 @@ MODULE_DEVICE_TABLE(of, s3c24xx_uart_dt_match);
 
 static struct platform_driver samsung_serial_driver = {
 	.probe		= s3c24xx_serial_probe,
-	.remove		= s3c24xx_serial_remove,
+	.remove_new	= s3c24xx_serial_remove,
 	.id_table	= s3c24xx_serial_driver_ids,
 	.driver		= {
 		.name	= "samsung-uart",
@@ -2700,8 +2691,6 @@ static void wr_reg_barrier(const struct uart_port *port, u32 reg, u32 val)
 		break;
 	case UPIO_MEM32:
 		writel(val, portaddr(port, reg));
-		break;
-	default:
 		break;
 	}
 }
@@ -2815,8 +2804,6 @@ OF_EARLYCON_DECLARE(s5pv210, "samsung,s5pv210-uart",
 OF_EARLYCON_DECLARE(exynos4210, "samsung,exynos4210-uart",
 			s5pv210_early_console_setup);
 OF_EARLYCON_DECLARE(artpec8, "axis,artpec8-uart",
-			s5pv210_early_console_setup);
-OF_EARLYCON_DECLARE(exynos850, "samsung,exynos850-uart",
 			s5pv210_early_console_setup);
 
 static int __init gs101_early_console_setup(struct earlycon_device *device,

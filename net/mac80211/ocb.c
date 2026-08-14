@@ -4,7 +4,7 @@
  *
  * Copyright: (c) 2014 Czech Technical University in Prague
  *            (c) 2014 Volkswagen Group Research
- * Copyright (C) 2022 - 2024, 2026 Intel Corporation
+ * Copyright (C) 2022 - 2023 Intel Corporation
  * Author:    Rostislav Lisovy <rostislav.lisovy@fel.cvut.cz>
  * Funded by: Volkswagen Group Research
  */
@@ -92,9 +92,6 @@ static struct sta_info *ieee80211_ocb_finish_sta(struct sta_info *sta)
 
 	memcpy(addr, sta->sta.addr, ETH_ALEN);
 
-	ieee80211_sta_init_nss_bw_capa(&sta->deflink,
-				       &sdata->deflink.conf->chanreq.oper);
-
 	ocb_dbg(sdata, "Adding new IBSS station %pM (dev=%s)\n",
 		addr, sdata->name);
 
@@ -102,7 +99,7 @@ static struct sta_info *ieee80211_ocb_finish_sta(struct sta_info *sta)
 	sta_info_move_state(sta, IEEE80211_STA_ASSOC);
 	sta_info_move_state(sta, IEEE80211_STA_AUTHORIZED);
 
-	rate_control_rate_init(&sta->deflink);
+	rate_control_rate_init(sta);
 
 	/* If it fails, maybe we raced another insertion? */
 	if (sta_info_insert_rcu(sta))
@@ -152,7 +149,7 @@ void ieee80211_ocb_work(struct ieee80211_sub_if_data *sdata)
 static void ieee80211_ocb_housekeeping_timer(struct timer_list *t)
 {
 	struct ieee80211_sub_if_data *sdata =
-		timer_container_of(sdata, t, u.ocb.housekeeping_timer);
+		from_timer(sdata, t, u.ocb.housekeeping_timer);
 	struct ieee80211_local *local = sdata->local;
 	struct ieee80211_if_ocb *ifocb = &sdata->u.ocb;
 
@@ -236,7 +233,7 @@ int ieee80211_ocb_leave(struct ieee80211_sub_if_data *sdata)
 
 	skb_queue_purge(&sdata->skb_queue);
 
-	timer_delete_sync(&sdata->u.ocb.housekeeping_timer);
+	del_timer_sync(&sdata->u.ocb.housekeeping_timer);
 	/* If the timer fired while we waited for it, it will have
 	 * requeued the work. Now the work will be running again
 	 * but will not rearm the timer again because it checks

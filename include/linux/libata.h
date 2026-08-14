@@ -41,17 +41,29 @@
  */
 #undef ATA_IRQ_TRAP		/* define to ack screaming irqs */
 
+
+#define ata_print_version_once(dev, version)			\
+({								\
+	static bool __print_once;				\
+								\
+	if (!__print_once) {					\
+		__print_once = true;				\
+		ata_print_version(dev, version);		\
+	}							\
+})
+
 /* defines only for the constants which don't work well as enums */
 #define ATA_TAG_POISON		0xfafbfcfdU
 
 /*
  * Quirk flags bits.
- * ata_device->quirks is an u64, so __ATA_QUIRK_MAX must not exceed 64.
+ * ata_device->quirks is an unsigned int, so __ATA_QUIRK_MAX must not exceed 32.
  */
 enum ata_quirks {
 	__ATA_QUIRK_DIAGNOSTIC,		/* Failed boot diag */
 	__ATA_QUIRK_NODMA,		/* DMA problems */
 	__ATA_QUIRK_NONCQ,		/* Don't use NCQ */
+	__ATA_QUIRK_MAX_SEC_128,	/* Limit max sects to 128 */
 	__ATA_QUIRK_BROKEN_HPA,		/* Broken HPA */
 	__ATA_QUIRK_DISABLE,		/* Disable it */
 	__ATA_QUIRK_HPA_SIZE,		/* Native size off by one */
@@ -73,7 +85,7 @@ enum ata_quirks {
 	__ATA_QUIRK_ZERO_AFTER_TRIM,	/* Guarantees zero after trim */
 	__ATA_QUIRK_NO_DMA_LOG,		/* Do not use DMA for log read */
 	__ATA_QUIRK_NOTRIM,		/* Do not use TRIM */
-	__ATA_QUIRK_MAX_SEC,		/* Limit max sectors */
+	__ATA_QUIRK_MAX_SEC_1024,	/* Limit max sects to 1024 */
 	__ATA_QUIRK_MAX_TRIM_128M,	/* Limit max trim size to 128M */
 	__ATA_QUIRK_NO_NCQ_ON_ATI,	/* Disable NCQ on ATI chipset */
 	__ATA_QUIRK_NO_LPM_ON_ATI,	/* Disable LPM on ATI chipset */
@@ -82,43 +94,6 @@ enum ata_quirks {
 	__ATA_QUIRK_NO_FUA,		/* Do not use FUA */
 
 	__ATA_QUIRK_MAX,
-};
-
-/*
- * Quirk flags: may be set by libata or controller drivers on drives.
- * Some quirks may be drive/controller pair dependent.
- */
-enum {
-	ATA_QUIRK_DIAGNOSTIC		= BIT_ULL(__ATA_QUIRK_DIAGNOSTIC),
-	ATA_QUIRK_NODMA			= BIT_ULL(__ATA_QUIRK_NODMA),
-	ATA_QUIRK_NONCQ			= BIT_ULL(__ATA_QUIRK_NONCQ),
-	ATA_QUIRK_BROKEN_HPA		= BIT_ULL(__ATA_QUIRK_BROKEN_HPA),
-	ATA_QUIRK_DISABLE		= BIT_ULL(__ATA_QUIRK_DISABLE),
-	ATA_QUIRK_HPA_SIZE		= BIT_ULL(__ATA_QUIRK_HPA_SIZE),
-	ATA_QUIRK_IVB			= BIT_ULL(__ATA_QUIRK_IVB),
-	ATA_QUIRK_STUCK_ERR		= BIT_ULL(__ATA_QUIRK_STUCK_ERR),
-	ATA_QUIRK_BRIDGE_OK		= BIT_ULL(__ATA_QUIRK_BRIDGE_OK),
-	ATA_QUIRK_ATAPI_MOD16_DMA	= BIT_ULL(__ATA_QUIRK_ATAPI_MOD16_DMA),
-	ATA_QUIRK_FIRMWARE_WARN		= BIT_ULL(__ATA_QUIRK_FIRMWARE_WARN),
-	ATA_QUIRK_1_5_GBPS		= BIT_ULL(__ATA_QUIRK_1_5_GBPS),
-	ATA_QUIRK_NOSETXFER		= BIT_ULL(__ATA_QUIRK_NOSETXFER),
-	ATA_QUIRK_BROKEN_FPDMA_AA	= BIT_ULL(__ATA_QUIRK_BROKEN_FPDMA_AA),
-	ATA_QUIRK_DUMP_ID		= BIT_ULL(__ATA_QUIRK_DUMP_ID),
-	ATA_QUIRK_MAX_SEC_LBA48		= BIT_ULL(__ATA_QUIRK_MAX_SEC_LBA48),
-	ATA_QUIRK_ATAPI_DMADIR		= BIT_ULL(__ATA_QUIRK_ATAPI_DMADIR),
-	ATA_QUIRK_NO_NCQ_TRIM		= BIT_ULL(__ATA_QUIRK_NO_NCQ_TRIM),
-	ATA_QUIRK_NOLPM			= BIT_ULL(__ATA_QUIRK_NOLPM),
-	ATA_QUIRK_WD_BROKEN_LPM		= BIT_ULL(__ATA_QUIRK_WD_BROKEN_LPM),
-	ATA_QUIRK_ZERO_AFTER_TRIM	= BIT_ULL(__ATA_QUIRK_ZERO_AFTER_TRIM),
-	ATA_QUIRK_NO_DMA_LOG		= BIT_ULL(__ATA_QUIRK_NO_DMA_LOG),
-	ATA_QUIRK_NOTRIM		= BIT_ULL(__ATA_QUIRK_NOTRIM),
-	ATA_QUIRK_MAX_SEC		= BIT_ULL(__ATA_QUIRK_MAX_SEC),
-	ATA_QUIRK_MAX_TRIM_128M		= BIT_ULL(__ATA_QUIRK_MAX_TRIM_128M),
-	ATA_QUIRK_NO_NCQ_ON_ATI		= BIT_ULL(__ATA_QUIRK_NO_NCQ_ON_ATI),
-	ATA_QUIRK_NO_LPM_ON_ATI		= BIT_ULL(__ATA_QUIRK_NO_LPM_ON_ATI),
-	ATA_QUIRK_NO_ID_DEV_LOG		= BIT_ULL(__ATA_QUIRK_NO_ID_DEV_LOG),
-	ATA_QUIRK_NO_LOG_DIR		= BIT_ULL(__ATA_QUIRK_NO_LOG_DIR),
-	ATA_QUIRK_NO_FUA		= BIT_ULL(__ATA_QUIRK_NO_FUA),
 };
 
 enum {
@@ -295,7 +270,9 @@ enum {
 
 	/* bits 24:31 of host->flags are reserved for LLD specific flags */
 
-	/* Various lengths of time */
+	/* various lengths of time */
+	ATA_TMOUT_BOOT		= 30000,	/* heuristic */
+	ATA_TMOUT_BOOT_QUICK	=  7000,	/* heuristic */
 	ATA_TMOUT_INTERNAL_QUICK = 5000,
 	ATA_TMOUT_MAX_PARK	= 30000,
 
@@ -425,7 +402,43 @@ enum {
 	/* This should match the actual table size of
 	 * ata_eh_cmd_timeout_table in libata-eh.c.
 	 */
-	ATA_EH_CMD_TIMEOUT_TABLE_SIZE = 9,
+	ATA_EH_CMD_TIMEOUT_TABLE_SIZE = 8,
+
+	/*
+	 * Quirk flags: may be set by libata or controller drivers on drives.
+	 * Some quirks may be drive/controller pair dependent.
+	 */
+	ATA_QUIRK_DIAGNOSTIC		= (1U << __ATA_QUIRK_DIAGNOSTIC),
+	ATA_QUIRK_NODMA			= (1U << __ATA_QUIRK_NODMA),
+	ATA_QUIRK_NONCQ			= (1U << __ATA_QUIRK_NONCQ),
+	ATA_QUIRK_MAX_SEC_128		= (1U << __ATA_QUIRK_MAX_SEC_128),
+	ATA_QUIRK_BROKEN_HPA		= (1U << __ATA_QUIRK_BROKEN_HPA),
+	ATA_QUIRK_DISABLE		= (1U << __ATA_QUIRK_DISABLE),
+	ATA_QUIRK_HPA_SIZE		= (1U << __ATA_QUIRK_HPA_SIZE),
+	ATA_QUIRK_IVB			= (1U << __ATA_QUIRK_IVB),
+	ATA_QUIRK_STUCK_ERR		= (1U << __ATA_QUIRK_STUCK_ERR),
+	ATA_QUIRK_BRIDGE_OK		= (1U << __ATA_QUIRK_BRIDGE_OK),
+	ATA_QUIRK_ATAPI_MOD16_DMA	= (1U << __ATA_QUIRK_ATAPI_MOD16_DMA),
+	ATA_QUIRK_FIRMWARE_WARN		= (1U << __ATA_QUIRK_FIRMWARE_WARN),
+	ATA_QUIRK_1_5_GBPS		= (1U << __ATA_QUIRK_1_5_GBPS),
+	ATA_QUIRK_NOSETXFER		= (1U << __ATA_QUIRK_NOSETXFER),
+	ATA_QUIRK_BROKEN_FPDMA_AA	= (1U << __ATA_QUIRK_BROKEN_FPDMA_AA),
+	ATA_QUIRK_DUMP_ID		= (1U << __ATA_QUIRK_DUMP_ID),
+	ATA_QUIRK_MAX_SEC_LBA48		= (1U << __ATA_QUIRK_MAX_SEC_LBA48),
+	ATA_QUIRK_ATAPI_DMADIR		= (1U << __ATA_QUIRK_ATAPI_DMADIR),
+	ATA_QUIRK_NO_NCQ_TRIM		= (1U << __ATA_QUIRK_NO_NCQ_TRIM),
+	ATA_QUIRK_NOLPM			= (1U << __ATA_QUIRK_NOLPM),
+	ATA_QUIRK_WD_BROKEN_LPM		= (1U << __ATA_QUIRK_WD_BROKEN_LPM),
+	ATA_QUIRK_ZERO_AFTER_TRIM	= (1U << __ATA_QUIRK_ZERO_AFTER_TRIM),
+	ATA_QUIRK_NO_DMA_LOG		= (1U << __ATA_QUIRK_NO_DMA_LOG),
+	ATA_QUIRK_NOTRIM		= (1U << __ATA_QUIRK_NOTRIM),
+	ATA_QUIRK_MAX_SEC_1024		= (1U << __ATA_QUIRK_MAX_SEC_1024),
+	ATA_QUIRK_MAX_TRIM_128M		= (1U << __ATA_QUIRK_MAX_TRIM_128M),
+	ATA_QUIRK_NO_NCQ_ON_ATI		= (1U << __ATA_QUIRK_NO_NCQ_ON_ATI),
+	ATA_QUIRK_NO_LPM_ON_ATI		= (1U << __ATA_QUIRK_NO_LPM_ON_ATI),
+	ATA_QUIRK_NO_ID_DEV_LOG		= (1U << __ATA_QUIRK_NO_ID_DEV_LOG),
+	ATA_QUIRK_NO_LOG_DIR		= (1U << __ATA_QUIRK_NO_LOG_DIR),
+	ATA_QUIRK_NO_FUA		= (1U << __ATA_QUIRK_NO_FUA),
 
 	/* User visible DMA mask for DMA control. DO NOT renumber. */
 	ATA_DMA_MASK_ATA	= (1 << 0),	/* DMA on ATA Disk */
@@ -500,28 +513,16 @@ enum ata_completion_errors {
 };
 
 /*
- * Link Power Management (LPM) policies.
- *
- * The default LPM policy to use for a device link is defined using these values
- * with the CONFIG_SATA_MOBILE_LPM_POLICY config option and applied through the
- * target_lpm_policy field of struct ata_port.
- *
- * If you alter this, you also need to alter the policy names used with the
- * sysfs attribute link_power_management_policy defined in libata-sata.c.
+ * Link power management policy: If you alter this, you also need to
+ * alter libata-sata.c (for the ascii descriptions)
  */
 enum ata_lpm_policy {
-	/* Keep firmware settings */
 	ATA_LPM_UNKNOWN,
-	/* No power savings (maximum performance) */
 	ATA_LPM_MAX_POWER,
-	/* HIPM (Partial) */
 	ATA_LPM_MED_POWER,
-	/* HIPM (Partial) and DIPM (Partial and Slumber) */
-	ATA_LPM_MED_POWER_WITH_DIPM,
-	/* HIPM (Partial and DevSleep) and DIPM (Partial and Slumber) */
-	ATA_LPM_MIN_POWER_WITH_PARTIAL,
-	/* HIPM (Slumber and DevSleep) and DIPM (Partial and Slumber) */
-	ATA_LPM_MIN_POWER,
+	ATA_LPM_MED_POWER_WITH_DIPM, /* Med power + DIPM as win IRST does */
+	ATA_LPM_MIN_POWER_WITH_PARTIAL, /* Min Power + partial and slumber */
+	ATA_LPM_MIN_POWER, /* Min power + no partial (slumber only) */
 };
 
 enum ata_lpm_hints {
@@ -720,7 +721,7 @@ struct ata_cdl {
 struct ata_device {
 	struct ata_link		*link;
 	unsigned int		devno;		/* 0 or 1 */
-	u64			quirks;		/* List of broken features */
+	unsigned int		quirks;		/* List of broken features */
 	unsigned long		flags;		/* ATA_DFLAG_xxx */
 	struct scsi_device	*sdev;		/* attached SCSI device */
 	void			*private_data;
@@ -762,9 +763,6 @@ struct ata_device {
 		u16		id[ATA_ID_WORDS]; /* IDENTIFY xxx DEVICE data */
 		u32		gscr[SATA_PMP_GSCR_DWORDS]; /* PMP GSCR block */
 	} ____cacheline_aligned;
-
-	/* General Purpose Log Directory log page */
-	u8			gp_log_dir[ATA_SECT_SIZE] ____cacheline_aligned;
 
 	/* DEVSLP Timing Variables from Identify Device Data Log */
 	u8			devslp_timing[ATA_LOG_DEVSLP_SIZE];
@@ -949,13 +947,6 @@ struct ata_port {
  */
 #define ATA_OP_NULL		(void *)(unsigned long)(-ENOENT)
 
-struct ata_reset_operations {
-	ata_prereset_fn_t	prereset;
-	ata_reset_fn_t		softreset;
-	ata_reset_fn_t		hardreset;
-	ata_postreset_fn_t	postreset;
-};
-
 struct ata_port_operations {
 	/*
 	 * Command execution
@@ -982,10 +973,15 @@ struct ata_port_operations {
 
 	void (*freeze)(struct ata_port *ap);
 	void (*thaw)(struct ata_port *ap);
-	struct ata_reset_operations reset;
-	struct ata_reset_operations pmp_reset;
-	void (*error_handler)(struct ata_port *ap)
-		__must_hold(&ap->host->eh_mutex);
+	ata_prereset_fn_t	prereset;
+	ata_reset_fn_t		softreset;
+	ata_reset_fn_t		hardreset;
+	ata_postreset_fn_t	postreset;
+	ata_prereset_fn_t	pmp_prereset;
+	ata_reset_fn_t		pmp_softreset;
+	ata_reset_fn_t		pmp_hardreset;
+	ata_postreset_fn_t	pmp_postreset;
+	void (*error_handler)(struct ata_port *ap);
 	void (*lost_interrupt)(struct ata_port *ap);
 	void (*post_internal_cmd)(struct ata_queued_cmd *qc);
 	void (*sched_eh)(struct ata_port *ap);
@@ -1151,11 +1147,7 @@ extern int ata_scsi_ioctl(struct scsi_device *dev, unsigned int cmd,
 #else
 #define ATA_SCSI_COMPAT_IOCTL /* empty */
 #endif
-extern enum scsi_qc_status ata_scsi_queuecmd(struct Scsi_Host *h,
-					     struct scsi_cmnd *cmd);
-enum scsi_timeout_action ata_scsi_retry_deferred_qc(struct ata_port *ap,
-						    struct scsi_cmnd *scmd);
-enum scsi_timeout_action ata_scsi_eh_timed_out(struct scsi_cmnd *cmd);
+extern int ata_scsi_queuecmd(struct Scsi_Host *h, struct scsi_cmnd *cmd);
 #if IS_REACHABLE(CONFIG_ATA)
 bool ata_scsi_dma_need_drain(struct request *rq);
 #else
@@ -1210,13 +1202,15 @@ extern unsigned int ata_do_dev_read_id(struct ata_device *dev,
 				       struct ata_taskfile *tf, __le16 *id);
 extern void ata_qc_complete(struct ata_queued_cmd *qc);
 extern u64 ata_qc_get_active(struct ata_port *ap);
+extern void ata_scsi_simulate(struct ata_device *dev, struct scsi_cmnd *cmd);
 extern int ata_std_bios_param(struct scsi_device *sdev,
-			      struct gendisk *unused,
+			      struct block_device *bdev,
 			      sector_t capacity, int geom[]);
 extern void ata_scsi_unlock_native_capacity(struct scsi_device *sdev);
-extern int ata_scsi_sdev_init(struct scsi_device *sdev);
-int ata_scsi_sdev_configure(struct scsi_device *sdev, struct queue_limits *lim);
-extern void ata_scsi_sdev_destroy(struct scsi_device *sdev);
+extern int ata_scsi_slave_alloc(struct scsi_device *sdev);
+int ata_scsi_device_configure(struct scsi_device *sdev,
+		struct queue_limits *lim);
+extern void ata_scsi_slave_destroy(struct scsi_device *sdev);
 extern int ata_scsi_change_queue_depth(struct scsi_device *sdev,
 				       int queue_depth);
 extern int ata_change_queue_depth(struct ata_port *ap, struct scsi_device *sdev,
@@ -1228,10 +1222,9 @@ extern int ata_ncq_prio_enabled(struct ata_port *ap, struct scsi_device *sdev,
 extern int ata_ncq_prio_enable(struct ata_port *ap, struct scsi_device *sdev,
 			       bool enable);
 extern struct ata_device *ata_dev_pair(struct ata_device *adev);
-int ata_set_mode(struct ata_link *link, struct ata_device **r_failed_dev);
+extern int ata_do_set_mode(struct ata_link *link, struct ata_device **r_failed_dev);
 extern void ata_scsi_port_error_handler(struct Scsi_Host *host, struct ata_port *ap);
-int ata_scsi_cmd_error_handler(struct Scsi_Host *host, struct ata_port *ap,
-			       struct list_head *eh_q);
+extern void ata_scsi_cmd_error_handler(struct Scsi_Host *host, struct ata_port *ap, struct list_head *eh_q);
 
 /*
  * SATA specific code - drivers/ata/libata-sata.c
@@ -1316,10 +1309,9 @@ extern struct ata_port *ata_port_alloc(struct ata_host *host);
 extern void ata_port_free(struct ata_port *ap);
 extern int ata_tport_add(struct device *parent, struct ata_port *ap);
 extern void ata_tport_delete(struct ata_port *ap);
-int ata_sas_sdev_configure(struct scsi_device *sdev, struct queue_limits *lim,
-			   struct ata_port *ap);
-extern int ata_sas_queuecmd(struct scsi_cmnd *cmd, struct ata_port *ap)
-	__must_hold(ap->lock);
+int ata_sas_device_configure(struct scsi_device *sdev, struct queue_limits *lim,
+		struct ata_port *ap);
+extern int ata_sas_queuecmd(struct scsi_cmnd *cmd, struct ata_port *ap);
 extern void ata_tf_to_fis(const struct ata_taskfile *tf,
 			  u8 pmp, int is_cmd, u8 *fis);
 extern void ata_tf_from_fis(const u8 *fis, struct ata_taskfile *tf);
@@ -1424,8 +1416,10 @@ extern void ata_eh_thaw_port(struct ata_port *ap);
 extern void ata_eh_qc_complete(struct ata_queued_cmd *qc);
 extern void ata_eh_qc_retry(struct ata_queued_cmd *qc);
 
-extern void ata_std_error_handler(struct ata_port *ap)
-	__must_hold(&ap->host->eh_mutex);
+extern void ata_do_eh(struct ata_port *ap, ata_prereset_fn_t prereset,
+		      ata_reset_fn_t softreset, ata_reset_fn_t hardreset,
+		      ata_postreset_fn_t postreset);
+extern void ata_std_error_handler(struct ata_port *ap);
 extern void ata_std_sched_eh(struct ata_port *ap);
 extern void ata_std_end_eh(struct ata_port *ap);
 extern int ata_link_nr_enabled(struct ata_link *link);
@@ -1467,13 +1461,12 @@ extern const struct attribute_group *ata_common_sdev_groups[];
 	.ioctl			= ata_scsi_ioctl,		\
 	ATA_SCSI_COMPAT_IOCTL					\
 	.queuecommand		= ata_scsi_queuecmd,		\
-	.eh_timed_out		= ata_scsi_eh_timed_out,	\
 	.dma_need_drain		= ata_scsi_dma_need_drain,	\
 	.this_id		= ATA_SHT_THIS_ID,		\
 	.emulated		= ATA_SHT_EMULATED,		\
 	.proc_name		= drv_name,			\
-	.sdev_init		= ata_scsi_sdev_init,		\
-	.sdev_destroy		= ata_scsi_sdev_destroy,	\
+	.slave_alloc		= ata_scsi_slave_alloc,		\
+	.slave_destroy		= ata_scsi_slave_destroy,	\
 	.bios_param		= ata_std_bios_param,		\
 	.unlock_native_capacity	= ata_scsi_unlock_native_capacity,\
 	.max_sectors		= ATA_MAX_SECTORS_LBA48
@@ -1481,14 +1474,14 @@ extern const struct attribute_group *ata_common_sdev_groups[];
 #define ATA_SUBBASE_SHT(drv_name)				\
 	__ATA_BASE_SHT(drv_name),				\
 	.can_queue		= ATA_DEF_QUEUE,		\
-	.tag_alloc_policy_rr	= true,				\
-	.sdev_configure		= ata_scsi_sdev_configure
+	.tag_alloc_policy	= BLK_TAG_ALLOC_RR,		\
+	.device_configure	= ata_scsi_device_configure
 
 #define ATA_SUBBASE_SHT_QD(drv_name, drv_qd)			\
 	__ATA_BASE_SHT(drv_name),				\
 	.can_queue		= drv_qd,			\
-	.tag_alloc_policy_rr	= true,				\
-	.sdev_configure		= ata_scsi_sdev_configure
+	.tag_alloc_policy	= BLK_TAG_ALLOC_RR,		\
+	.device_configure	= ata_scsi_device_configure
 
 #define ATA_BASE_SHT(drv_name)					\
 	ATA_SUBBASE_SHT(drv_name),				\
@@ -1606,17 +1599,7 @@ do {								\
 #define ata_dev_dbg(dev, fmt, ...)				\
 	ata_dev_printk(debug, dev, fmt, ##__VA_ARGS__)
 
-#define ata_dev_warn_once(dev, fmt, ...)			\
-	pr_warn_once("ata%u.%02u: " fmt,			\
-		     (dev)->link->ap->print_id,			\
-		     (dev)->link->pmp + (dev)->devno,		\
-		     ##__VA_ARGS__)
-
-static inline void ata_print_version_once(const struct device *dev,
-					  const char *version)
-{
-	dev_dbg_once(dev, "version %s\n", version);
-}
+void ata_print_version(const struct device *dev, const char *version);
 
 /*
  * ata_eh_info helpers
@@ -1648,8 +1631,6 @@ static inline void ata_port_desc_misc(struct ata_port *ap, int irq)
 {
 	ata_port_desc(ap, "irq %d", irq);
 	ata_port_desc(ap, "lpm-pol %d", ap->target_lpm_policy);
-	if (ap->pflags & ATA_PFLAG_EXTERNAL)
-		ata_port_desc(ap, "ext");
 }
 
 static inline bool ata_tag_internal(unsigned int tag)
@@ -2006,8 +1987,7 @@ extern void ata_timing_merge(const struct ata_timing *,
 extern const struct ata_port_operations sata_pmp_port_ops;
 
 extern int sata_pmp_qc_defer_cmd_switch(struct ata_queued_cmd *qc);
-extern void sata_pmp_error_handler(struct ata_port *ap)
-	__must_hold(&ap->host->eh_mutex);
+extern void sata_pmp_error_handler(struct ata_port *ap);
 
 #else /* CONFIG_SATA_PMP */
 
@@ -2071,8 +2051,7 @@ extern int sata_sff_hardreset(struct ata_link *link, unsigned int *class,
 			       unsigned long deadline);
 extern void ata_sff_postreset(struct ata_link *link, unsigned int *classes);
 extern void ata_sff_drain_fifo(struct ata_queued_cmd *qc);
-extern void ata_sff_error_handler(struct ata_port *ap)
-	__must_hold(&ap->host->eh_mutex);
+extern void ata_sff_error_handler(struct ata_port *ap);
 extern void ata_sff_std_ports(struct ata_ioports *ioaddr);
 #ifdef CONFIG_PCI
 extern int ata_pci_sff_init_host(struct ata_host *host);
@@ -2102,8 +2081,7 @@ extern enum ata_completion_errors ata_bmdma_dumb_qc_prep(struct ata_queued_cmd *
 extern unsigned int ata_bmdma_port_intr(struct ata_port *ap,
 				      struct ata_queued_cmd *qc);
 extern irqreturn_t ata_bmdma_interrupt(int irq, void *dev_instance);
-extern void ata_bmdma_error_handler(struct ata_port *ap)
-	__must_hold(&ap->host->eh_mutex);
+extern void ata_bmdma_error_handler(struct ata_port *ap);
 extern void ata_bmdma_post_internal_cmd(struct ata_queued_cmd *qc);
 extern void ata_bmdma_irq_clear(struct ata_port *ap);
 extern void ata_bmdma_setup(struct ata_queued_cmd *qc);
@@ -2171,12 +2149,6 @@ static inline u8 ata_wait_idle(struct ata_port *ap)
 		ata_port_dbg(ap, "abnormal Status 0x%X\n", status);
 
 	return status;
-}
-#else /* CONFIG_ATA_SFF */
-static inline int sata_sff_hardreset(struct ata_link *link, unsigned int *class,
-				     unsigned long deadline)
-{
-	return -EOPNOTSUPP;
 }
 #endif /* CONFIG_ATA_SFF */
 

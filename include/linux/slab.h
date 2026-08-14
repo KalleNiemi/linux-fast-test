@@ -17,7 +17,6 @@
 #include <linux/gfp.h>
 #include <linux/overflow.h>
 #include <linux/types.h>
-#include <linux/rcupdate.h>
 #include <linux/workqueue.h>
 #include <linux/percpu-refcount.h>
 #include <linux/cleanup.h>
@@ -60,11 +59,7 @@ enum _slab_flag_bits {
 	_SLAB_CMPXCHG_DOUBLE,
 #ifdef CONFIG_SLAB_OBJ_EXT
 	_SLAB_NO_OBJ_EXT,
-#ifdef CONFIG_64BIT
-	_SLAB_OBJ_EXT_IN_OBJ,
 #endif
-#endif
-	_SLAB_NO_SHEAVES,
 	_SLAB_FLAGS_LAST_BIT
 };
 
@@ -83,17 +78,7 @@ enum _slab_flag_bits {
 #define SLAB_POISON		__SLAB_FLAG_BIT(_SLAB_POISON)
 /* Indicate a kmalloc slab */
 #define SLAB_KMALLOC		__SLAB_FLAG_BIT(_SLAB_KMALLOC)
-/**
- * define SLAB_HWCACHE_ALIGN - Align objects on cache line boundaries.
- *
- * Sufficiently large objects are aligned on cache line boundary. For object
- * size smaller than a half of cache line size, the alignment is on the half of
- * cache line size. In general, if object size is smaller than 1/2^n of cache
- * line size, the alignment is adjusted to 1/2^n.
- *
- * If explicit alignment is also requested by the respective
- * &struct kmem_cache_args field, the greater of both is alignments is applied.
- */
+/* Align objs on cache lines */
 #define SLAB_HWCACHE_ALIGN	__SLAB_FLAG_BIT(_SLAB_HWCACHE_ALIGN)
 /* Use GFP_DMA memory */
 #define SLAB_CACHE_DMA		__SLAB_FLAG_BIT(_SLAB_CACHE_DMA)
@@ -103,8 +88,8 @@ enum _slab_flag_bits {
 #define SLAB_STORE_USER		__SLAB_FLAG_BIT(_SLAB_STORE_USER)
 /* Panic if kmem_cache_create() fails */
 #define SLAB_PANIC		__SLAB_FLAG_BIT(_SLAB_PANIC)
-/**
- * define SLAB_TYPESAFE_BY_RCU - **WARNING** READ THIS!
+/*
+ * SLAB_TYPESAFE_BY_RCU - **WARNING** READ THIS!
  *
  * This delays freeing the SLAB page by a grace period, it does _NOT_
  * delay object freeing. This means that if you do kmem_cache_free()
@@ -115,22 +100,20 @@ enum _slab_flag_bits {
  * stays valid, the trick to using this is relying on an independent
  * object validation pass. Something like:
  *
- * ::
+ * begin:
+ *  rcu_read_lock();
+ *  obj = lockless_lookup(key);
+ *  if (obj) {
+ *    if (!try_get_ref(obj)) // might fail for free objects
+ *      rcu_read_unlock();
+ *      goto begin;
  *
- *  begin:
- *   rcu_read_lock();
- *   obj = lockless_lookup(key);
- *   if (obj) {
- *     if (!try_get_ref(obj)) // might fail for free objects
- *       rcu_read_unlock();
- *       goto begin;
- *
- *     if (obj->key != key) { // not the object we expected
- *       put_ref(obj);
- *       rcu_read_unlock();
- *       goto begin;
- *     }
- *   }
+ *    if (obj->key != key) { // not the object we expected
+ *      put_ref(obj);
+ *      rcu_read_unlock();
+ *      goto begin;
+ *    }
+ *  }
  *  rcu_read_unlock();
  *
  * This is useful if we need to approach a kernel structure obliquely,
@@ -141,15 +124,6 @@ enum _slab_flag_bits {
  *
  * rcu_read_lock before reading the address, then rcu_read_unlock after
  * taking the spinlock within the structure expected at that address.
- *
- * Note that object identity check has to be done *after* acquiring a
- * reference, therefore user has to ensure proper ordering for loads.
- * Similarly, when initializing objects allocated with SLAB_TYPESAFE_BY_RCU,
- * the newly allocated object has to be fully initialized *before* its
- * refcount gets initialized and proper ordering for stores is required.
- * refcount_{add|inc}_not_zero_acquire() and refcount_set_release() are
- * designed with the proper fences required for reference counting objects
- * allocated with SLAB_TYPESAFE_BY_RCU.
  *
  * Note that it is not possible to acquire a lock within a structure
  * allocated with SLAB_TYPESAFE_BY_RCU without first acquiring a reference
@@ -164,6 +138,7 @@ enum _slab_flag_bits {
  *
  * Note that SLAB_TYPESAFE_BY_RCU was originally named SLAB_DESTROY_BY_RCU.
  */
+/* Defer freeing slabs to RCU */
 #define SLAB_TYPESAFE_BY_RCU	__SLAB_FLAG_BIT(_SLAB_TYPESAFE_BY_RCU)
 /* Trace allocations and frees */
 #define SLAB_TRACE		__SLAB_FLAG_BIT(_SLAB_TRACE)
@@ -196,12 +171,7 @@ enum _slab_flag_bits {
 #else
 # define SLAB_FAILSLAB		__SLAB_FLAG_UNUSED
 #endif
-/**
- * define SLAB_ACCOUNT - Account allocations to memcg.
- *
- * All object allocations from this cache will be memcg accounted, regardless of
- * __GFP_ACCOUNT being or not being passed to individual allocations.
- */
+/* Account to memcg */
 #ifdef CONFIG_MEMCG
 # define SLAB_ACCOUNT		__SLAB_FLAG_BIT(_SLAB_ACCOUNT)
 #else
@@ -228,13 +198,7 @@ enum _slab_flag_bits {
 #endif
 
 /* The following flags affect the page allocator grouping pages by mobility */
-/**
- * define SLAB_RECLAIM_ACCOUNT - Objects are reclaimable.
- *
- * Use this flag for caches that have an associated shrinker. As a result, slab
- * pages are allocated with __GFP_RECLAIMABLE, which affects grouping pages by
- * mobility, and are accounted in SReclaimable counter in /proc/meminfo
- */
+/* Objects are reclaimable */
 #ifndef CONFIG_SLUB_TINY
 #define SLAB_RECLAIM_ACCOUNT	__SLAB_FLAG_BIT(_SLAB_RECLAIM_ACCOUNT)
 #else
@@ -242,20 +206,18 @@ enum _slab_flag_bits {
 #endif
 #define SLAB_TEMPORARY		SLAB_RECLAIM_ACCOUNT	/* Objects are short-lived */
 
-/* Slab caches without obj_exts array */
+/* Slab created using create_boot_cache */
 #ifdef CONFIG_SLAB_OBJ_EXT
 #define SLAB_NO_OBJ_EXT		__SLAB_FLAG_BIT(_SLAB_NO_OBJ_EXT)
 #else
 #define SLAB_NO_OBJ_EXT		__SLAB_FLAG_UNUSED
 #endif
 
-#define SLAB_NO_SHEAVES		__SLAB_FLAG_BIT(_SLAB_NO_SHEAVES)
-
-#if defined(CONFIG_SLAB_OBJ_EXT) && defined(CONFIG_64BIT)
-#define SLAB_OBJ_EXT_IN_OBJ	__SLAB_FLAG_BIT(_SLAB_OBJ_EXT_IN_OBJ)
-#else
-#define SLAB_OBJ_EXT_IN_OBJ	__SLAB_FLAG_UNUSED
-#endif
+/*
+ * freeptr_t represents a SLUB freelist pointer, which might be encoded
+ * and not dereferenceable if CONFIG_SLAB_FREELIST_HARDENED is enabled.
+ */
+typedef struct { unsigned long v; } freeptr_t;
 
 /*
  * ZERO_SIZE_PTR will be returned for zero sized kmalloc requests.
@@ -312,26 +274,24 @@ struct kmem_cache_args {
 	unsigned int usersize;
 	/**
 	 * @freeptr_offset: Custom offset for the free pointer
-	 * in caches with &SLAB_TYPESAFE_BY_RCU or @ctor
+	 * in &SLAB_TYPESAFE_BY_RCU caches
 	 *
-	 * By default, &SLAB_TYPESAFE_BY_RCU and @ctor caches place the free
-	 * pointer outside of the object. This might cause the object to grow
-	 * in size. Cache creators that have a reason to avoid this can specify
-	 * a custom free pointer offset in their data structure where the free
-	 * pointer will be placed.
+	 * By default &SLAB_TYPESAFE_BY_RCU caches place the free pointer
+	 * outside of the object. This might cause the object to grow in size.
+	 * Cache creators that have a reason to avoid this can specify a custom
+	 * free pointer offset in their struct where the free pointer will be
+	 * placed.
 	 *
-	 * For caches with &SLAB_TYPESAFE_BY_RCU, the caller must ensure that
-	 * the free pointer does not overlay fields required to guard against
-	 * object recycling (See &SLAB_TYPESAFE_BY_RCU for details).
-	 *
-	 * For caches with @ctor, the caller must ensure that the free pointer
-	 * does not overlay fields initialized by the constructor.
-	 *
-	 * Currently, only caches with &SLAB_TYPESAFE_BY_RCU or @ctor
-	 * may specify @freeptr_offset.
+	 * Note that placing the free pointer inside the object requires the
+	 * caller to ensure that no fields are invalidated that are required to
+	 * guard against object recycling (See &SLAB_TYPESAFE_BY_RCU for
+	 * details).
 	 *
 	 * Using %0 as a value for @freeptr_offset is valid. If @freeptr_offset
-	 * is specified, @use_freeptr_offset must be set %true.
+	 * is specified, %use_freeptr_offset must be set %true.
+	 *
+	 * Note that @ctor currently isn't supported with custom free pointers
+	 * as a @ctor requires an external free pointer.
 	 */
 	unsigned int freeptr_offset;
 	/**
@@ -350,37 +310,6 @@ struct kmem_cache_args {
 	 * %NULL means no constructor.
 	 */
 	void (*ctor)(void *);
-	/**
-	 * @sheaf_capacity: Enable sheaves of given capacity for the cache.
-	 *
-	 * With a non-zero value, allocations from the cache go through caching
-	 * arrays called sheaves. Each cpu has a main sheaf that's always
-	 * present, and a spare sheaf that may be not present. When both become
-	 * empty, there's an attempt to replace an empty sheaf with a full sheaf
-	 * from the per-node barn.
-	 *
-	 * When no full sheaf is available, and gfp flags allow blocking, a
-	 * sheaf is allocated and filled from slab(s) using bulk allocation.
-	 * Otherwise the allocation falls back to the normal operation
-	 * allocating a single object from a slab.
-	 *
-	 * Analogically when freeing and both percpu sheaves are full, the barn
-	 * may replace it with an empty sheaf, unless it's over capacity. In
-	 * that case a sheaf is bulk freed to slab pages.
-	 *
-	 * The sheaves do not enforce NUMA placement of objects, so allocations
-	 * via kmem_cache_alloc_node() with a node specified other than
-	 * NUMA_NO_NODE will bypass them.
-	 *
-	 * Bulk allocation and free operations also try to use the cpu sheaves
-	 * and barn, but fallback to using slab pages directly.
-	 *
-	 * When slub_debug is enabled for the cache, the sheaf_capacity argument
-	 * is ignored.
-	 *
-	 * %0 means no sheaves will be created.
-	 */
-	unsigned int sheaf_capacity;
 };
 
 struct kmem_cache *__kmem_cache_create_args(const char *name,
@@ -508,94 +437,31 @@ int kmem_cache_shrink(struct kmem_cache *s);
 				.usersize	= sizeof_field(struct __struct, __field),	\
 			}, (__flags))
 
-#ifdef CONFIG_KMALLOC_PARTITION_CACHES
-typedef struct { unsigned long v; } kmalloc_token_t;
-#ifdef CONFIG_KMALLOC_PARTITION_RANDOM
-extern unsigned long random_kmalloc_seed;
-#define __kmalloc_token(...) ((kmalloc_token_t){ .v = _CODE_LOCATION_ })
-#elif defined(CONFIG_KMALLOC_PARTITION_TYPED)
-#ifdef __CHECKER__
-#define __kmalloc_token(...) ((kmalloc_token_t){ .v = 0 })
-#else /* !__CHECKER__ */
-#define __kmalloc_token(...) ((kmalloc_token_t){ .v = __builtin_infer_alloc_token(__VA_ARGS__) })
-#endif /* __CHECKER__ */
-#endif /* CONFIG_KMALLOC_PARTITION_TYPED */
-#define DECL_TOKEN_PARAM(_token)	, kmalloc_token_t (_token)
-#define _PASS_TOKEN_PARAM(_token)	, (_token)
-#define PASS_TOKEN_PARAM(_token)	(_token)
-#define DECL_TOKEN_PARAMS(_size, _token) size_t (_size), kmalloc_token_t (_token)
-#define PASS_TOKEN_PARAMS(_size, _token) (_size), (_token)
-#else /* !CONFIG_KMALLOC_PARTITION_CACHES */
-typedef struct {} kmalloc_token_t;
-#define __kmalloc_token(...) ((kmalloc_token_t){}) /* no-op */
-#define DECL_TOKEN_PARAM(_token)
-#define _PASS_TOKEN_PARAM(_token)
-#define PASS_TOKEN_PARAM(_token)	((kmalloc_token_t){})
-#define DECL_TOKEN_PARAMS(_size, _token) size_t (_size)
-#define PASS_TOKEN_PARAMS(_size, _token) (_size)
-#endif /* CONFIG_KMALLOC_PARTITION_CACHES */
-
 /*
  * Common kmalloc functions provided by all allocators
  */
-void * __must_check krealloc_node_align_noprof(const void *objp,
-					       DECL_TOKEN_PARAMS(new_size, token),
-					       unsigned long align,
-					       gfp_t flags, int nid) __realloc_size(2);
-#define krealloc_noprof(_o, _s, _f)	krealloc_node_align_noprof(_o, PASS_TOKEN_PARAMS(_s, __kmalloc_token(_s)), 1, _f, NUMA_NO_NODE)
-#if 0 /* kernel-doc */
-/**
- * krealloc_node_align - reallocate memory. The contents will remain unchanged.
- * @p: object to reallocate memory for.
- * @new_size: how many bytes of memory are required.
- * @align: desired alignment.
- * @flags: the type of memory to allocate.
- * @nid: NUMA node or NUMA_NO_NODE
- *
- * If @p is %NULL, krealloc() behaves exactly like kmalloc().  If @new_size
- * is 0 and @p is not a %NULL pointer, the object pointed to is freed.
- *
- * Only alignments up to those guaranteed by kmalloc() will be honored. Please see
- * Documentation/core-api/memory-allocation.rst for more details.
- *
- * If __GFP_ZERO logic is requested, callers must ensure that, starting with the
- * initial memory allocation, every subsequent call to this API for the same
- * memory allocation is flagged with __GFP_ZERO. Otherwise, it is possible that
- * __GFP_ZERO is not fully honored by this API.
- *
- * When slub_debug_orig_size() is off, krealloc() only knows about the bucket
- * size of an allocation (but not the exact size it was allocated with) and
- * hence implements the following semantics for shrinking and growing buffers
- * with __GFP_ZERO::
- *
- *           new             bucket
- *   0       size             size
- *   |--------|----------------|
- *   |  keep  |      zero      |
- *
- * Otherwise, the original allocation size 'orig_size' could be used to
- * precisely clear the requested size, and the new size will also be stored
- * as the new 'orig_size'.
- *
- * In any case, the contents of the object pointed to are preserved up to the
- * lesser of the new and old sizes.
- *
- * Return: pointer to the allocated memory or %NULL in case of error
- */
-void *krealloc_node_align(const void *p, size_t new_size, unsigned long align, gfp_t flags, int nid);
-#endif
-#define krealloc_node_align(p, new_size, align, flags, nid) \
-	alloc_hooks(krealloc_node_align_noprof(p, PASS_TOKEN_PARAMS(new_size, __kmalloc_token(new_size)), align, flags, nid))
-#define krealloc_node(_o, _s, _f, _n)	krealloc_node_align(_o, _s, 1, _f, _n)
-#define krealloc(...)			krealloc_node(__VA_ARGS__, NUMA_NO_NODE)
+void * __must_check krealloc_noprof(const void *objp, size_t new_size,
+				    gfp_t flags) __realloc_size(2);
+#define krealloc(...)				alloc_hooks(krealloc_noprof(__VA_ARGS__))
 
 void kfree(const void *objp);
-void kfree_nolock(const void *objp);
 void kfree_sensitive(const void *objp);
+size_t __ksize(const void *objp);
 
 DEFINE_FREE(kfree, void *, if (!IS_ERR_OR_NULL(_T)) kfree(_T))
-DEFINE_FREE(kfree_sensitive, void *, if (_T) kfree_sensitive(_T))
 
+/**
+ * ksize - Report actual allocation size of associated object
+ *
+ * @objp: Pointer returned from a prior kmalloc()-family allocation.
+ *
+ * This should not be used for writing beyond the originally requested
+ * allocation size. Either use krealloc() or round up the allocation size
+ * with kmalloc_size_roundup() prior to allocation. If this is used to
+ * access beyond the originally requested allocation size, UBSAN_BOUNDS
+ * and/or FORTIFY_SOURCE may trip, since they only know about the
+ * originally allocated size via the __alloc_size attribute.
+ */
 size_t ksize(const void *objp);
 
 #ifdef CONFIG_PRINTK
@@ -691,10 +557,10 @@ static inline unsigned int arch_slab_minalign(void)
 #define SLAB_OBJ_MIN_SIZE      (KMALLOC_MIN_SIZE < 16 ? \
                                (KMALLOC_MIN_SIZE) : 16)
 
-#ifdef CONFIG_KMALLOC_PARTITION_CACHES
-#define KMALLOC_PARTITION_CACHES_NR	15 // # of cache copies
+#ifdef CONFIG_RANDOM_KMALLOC_CACHES
+#define RANDOM_KMALLOC_CACHES_NR	15 // # of cache copies
 #else
-#define KMALLOC_PARTITION_CACHES_NR	0
+#define RANDOM_KMALLOC_CACHES_NR	0
 #endif
 
 /*
@@ -713,11 +579,8 @@ enum kmalloc_cache_type {
 #ifndef CONFIG_MEMCG
 	KMALLOC_CGROUP = KMALLOC_NORMAL,
 #endif
-#ifndef CONFIG_SLAB_OBJ_EXT
-	KMALLOC_NO_OBJ_EXT = KMALLOC_NORMAL,
-#endif
-	KMALLOC_PARTITION_START = KMALLOC_NORMAL,
-	KMALLOC_PARTITION_END = KMALLOC_PARTITION_START + KMALLOC_PARTITION_CACHES_NR,
+	KMALLOC_RANDOM_START = KMALLOC_NORMAL,
+	KMALLOC_RANDOM_END = KMALLOC_RANDOM_START + RANDOM_KMALLOC_CACHES_NR,
 #ifdef CONFIG_SLUB_TINY
 	KMALLOC_RECLAIM = KMALLOC_NORMAL,
 #else
@@ -728,9 +591,6 @@ enum kmalloc_cache_type {
 #endif
 #ifdef CONFIG_MEMCG
 	KMALLOC_CGROUP,
-#endif
-#ifdef CONFIG_SLAB_OBJ_EXT
-	KMALLOC_NO_OBJ_EXT,
 #endif
 	NR_KMALLOC_TYPES
 };
@@ -747,19 +607,19 @@ extern kmem_buckets kmalloc_caches[NR_KMALLOC_TYPES];
 	(IS_ENABLED(CONFIG_ZONE_DMA)   ? __GFP_DMA : 0) |	\
 	(IS_ENABLED(CONFIG_MEMCG) ? __GFP_ACCOUNT : 0))
 
-static __always_inline enum kmalloc_cache_type kmalloc_type(gfp_t flags, kmalloc_token_t token)
+extern unsigned long random_kmalloc_seed;
+
+static __always_inline enum kmalloc_cache_type kmalloc_type(gfp_t flags, unsigned long caller)
 {
 	/*
 	 * The most common case is KMALLOC_NORMAL, so test for it
 	 * with a single branch for all the relevant flags.
 	 */
 	if (likely((flags & KMALLOC_NOT_NORMAL_BITS) == 0))
-#ifdef CONFIG_KMALLOC_PARTITION_RANDOM
-		/* KMALLOC_PARTITION_CACHES_NR (=15) copies + the KMALLOC_NORMAL */
-		return KMALLOC_PARTITION_START + hash_64(token.v ^ random_kmalloc_seed,
-							 ilog2(KMALLOC_PARTITION_CACHES_NR + 1));
-#elif defined(CONFIG_KMALLOC_PARTITION_TYPED)
-		return KMALLOC_PARTITION_START + token.v;
+#ifdef CONFIG_RANDOM_KMALLOC_CACHES
+		/* RANDOM_KMALLOC_CACHES_NR (=15) copies + the KMALLOC_NORMAL */
+		return KMALLOC_RANDOM_START + hash_64(caller ^ random_kmalloc_seed,
+						      ilog2(RANDOM_KMALLOC_CACHES_NR + 1));
 #else
 		return KMALLOC_NORMAL;
 #endif
@@ -900,10 +760,8 @@ kmem_buckets *kmem_buckets_create(const char *name, slab_flags_t flags,
  */
 void kmem_cache_free_bulk(struct kmem_cache *s, size_t size, void **p);
 
-bool kmem_cache_alloc_bulk_noprof(struct kmem_cache *s, gfp_t flags,
-		size_t size, void **p);
-#define kmem_cache_alloc_bulk(...) \
-	alloc_hooks(kmem_cache_alloc_bulk_noprof(__VA_ARGS__))
+int kmem_cache_alloc_bulk_noprof(struct kmem_cache *s, gfp_t flags, size_t size, void **p);
+#define kmem_cache_alloc_bulk(...)	alloc_hooks(kmem_cache_alloc_bulk_noprof(__VA_ARGS__))
 
 static __always_inline void kfree_bulk(size_t size, void **p)
 {
@@ -913,22 +771,6 @@ static __always_inline void kfree_bulk(size_t size, void **p)
 void *kmem_cache_alloc_node_noprof(struct kmem_cache *s, gfp_t flags,
 				   int node) __assume_slab_alignment __malloc;
 #define kmem_cache_alloc_node(...)	alloc_hooks(kmem_cache_alloc_node_noprof(__VA_ARGS__))
-
-struct slab_sheaf *
-kmem_cache_prefill_sheaf(struct kmem_cache *s, gfp_t gfp, unsigned int size);
-
-int kmem_cache_refill_sheaf(struct kmem_cache *s, gfp_t gfp,
-		struct slab_sheaf **sheafp, unsigned int size);
-
-void kmem_cache_return_sheaf(struct kmem_cache *s, gfp_t gfp,
-				       struct slab_sheaf *sheaf);
-
-void *kmem_cache_alloc_from_sheaf_noprof(struct kmem_cache *cachep, gfp_t gfp,
-			struct slab_sheaf *sheaf) __assume_slab_alignment __malloc;
-#define kmem_cache_alloc_from_sheaf(...)	\
-			alloc_hooks(kmem_cache_alloc_from_sheaf_noprof(__VA_ARGS__))
-
-unsigned int kmem_cache_sheaf_size(struct slab_sheaf *sheaf);
 
 /*
  * These macros allow declaring a kmem_buckets * parameter alongside size, which
@@ -945,22 +787,16 @@ unsigned int kmem_cache_sheaf_size(struct slab_sheaf *sheaf);
 #define PASS_BUCKET_PARAM(_b)		NULL
 #endif
 
-#define DECL_KMALLOC_PARAMS(_size, _b, _token) DECL_BUCKET_PARAMS(_size, _b) \
-					       DECL_TOKEN_PARAM(_token)
-
-#define PASS_KMALLOC_PARAMS(_size, _b, _token) PASS_BUCKET_PARAMS(_size, _b) \
-					       _PASS_TOKEN_PARAM(_token)
-
 /*
  * The following functions are not to be used directly and are intended only
  * for internal use from kmalloc() and kmalloc_node()
  * with the exception of kunit tests
  */
 
-void *__kmalloc_noprof(DECL_TOKEN_PARAMS(size, token), gfp_t flags)
+void *__kmalloc_noprof(size_t size, gfp_t flags)
 				__assume_kmalloc_alignment __alloc_size(1);
 
-void *__kmalloc_node_noprof(DECL_KMALLOC_PARAMS(size, b, token), gfp_t flags, int node)
+void *__kmalloc_node_noprof(DECL_BUCKET_PARAMS(size, b), gfp_t flags, int node)
 				__assume_kmalloc_alignment __alloc_size(1);
 
 void *__kmalloc_cache_noprof(struct kmem_cache *s, gfp_t flags, size_t size)
@@ -976,23 +812,6 @@ void *__kmalloc_large_noprof(size_t size, gfp_t flags)
 void *__kmalloc_large_node_noprof(size_t size, gfp_t flags, int node)
 				__assume_page_alignment __alloc_size(1);
 
-static __always_inline __alloc_size(1) void *_kmalloc_noprof(size_t size, gfp_t flags, kmalloc_token_t token)
-{
-	if (__builtin_constant_p(size) && size) {
-		unsigned int index;
-
-		if (size > KMALLOC_MAX_CACHE_SIZE)
-			return __kmalloc_large_noprof(size, flags);
-
-		index = kmalloc_index(size);
-		return __kmalloc_cache_noprof(
-				kmalloc_caches[kmalloc_type(flags, token)][index],
-				flags, size);
-	}
-	return __kmalloc_noprof(PASS_TOKEN_PARAMS(size, token), flags);
-}
-#define kmalloc_noprof(...)			_kmalloc_noprof(__VA_ARGS__, __kmalloc_token(__VA_ARGS__))
-#if 0 /* kernel-doc */
 /**
  * kmalloc - allocate kernel memory
  * @size: how many bytes of memory are required.
@@ -1048,28 +867,22 @@ static __always_inline __alloc_size(1) void *_kmalloc_noprof(size_t size, gfp_t 
  *	Try really hard to succeed the allocation but fail
  *	eventually.
  */
-void *kmalloc(size_t size, gfp_t flags);
-#endif
-#define kmalloc(size, flags)			alloc_hooks(kmalloc_noprof(size, flags))
+static __always_inline __alloc_size(1) void *kmalloc_noprof(size_t size, gfp_t flags)
+{
+	if (__builtin_constant_p(size) && size) {
+		unsigned int index;
 
-void *_kmalloc_nolock_noprof(DECL_TOKEN_PARAMS(size, token), gfp_t gfp_flags, int node);
-#define kmalloc_nolock_noprof(_s, _f, _n)	_kmalloc_nolock_noprof(PASS_TOKEN_PARAMS(_s, __kmalloc_token(_s)), _f, _n)
-#if 0 /* kernel-doc */
-/**
- * kmalloc_nolock - Allocate an object of given size from any context.
- * @size: size to allocate
- * @gfp_flags: GFP flags. Only __GFP_ACCOUNT and __GFP_ZERO allowed.  Also
- * __GFP_NOWARN and __GFP_NOMEMALLOC are allowed but added internally thus not
- * necessary.
- * @node: node number of the target node.
- *
- * Return: pointer to the new object or NULL in case of error.
- * NULL does not mean EBUSY or EAGAIN. It means ENOMEM.
- * There is no reason to call it again and expect !NULL.
- */
-void *kmalloc_nolock(size_t size, gfp_t gfp_flags, int node);
-#endif
-#define kmalloc_nolock(size, gfp_flags, node)	alloc_hooks(kmalloc_nolock_noprof(size, gfp_flags, node))
+		if (size > KMALLOC_MAX_CACHE_SIZE)
+			return __kmalloc_large_noprof(size, flags);
+
+		index = kmalloc_index(size);
+		return __kmalloc_cache_noprof(
+				kmalloc_caches[kmalloc_type(flags, _RET_IP_)][index],
+				flags, size);
+	}
+	return __kmalloc_noprof(size, flags);
+}
+#define kmalloc(...)				alloc_hooks(kmalloc_noprof(__VA_ARGS__))
 
 /**
  * __alloc_objs - Allocate objects of a given type using
@@ -1105,8 +918,6 @@ void *kmalloc_nolock(size_t size, gfp_t gfp_flags, int node);
 	const size_t __count = (COUNT);					\
 	const size_t __obj_size = struct_size_t(TYPE, FAM, __count);	\
 	TYPE *__obj_ptr = KMALLOC(__obj_size, GFP);			\
-	if (__obj_ptr)							\
-		__set_flex_counter(__obj_ptr->FAM, __count);		\
 	__obj_ptr;							\
 })
 
@@ -1173,15 +984,12 @@ void *kmalloc_nolock(size_t size, gfp_t gfp_flags, int node);
 	__alloc_flex(kvzalloc, default_gfp(__VA_ARGS__), typeof(P), FAM, COUNT)
 
 #define kmem_buckets_alloc(_b, _size, _flags)	\
-	alloc_hooks(__kmalloc_node_noprof(PASS_KMALLOC_PARAMS(_size, _b, __kmalloc_token(_size)), _flags, NUMA_NO_NODE))
+	alloc_hooks(__kmalloc_node_noprof(PASS_BUCKET_PARAMS(_size, _b), _flags, NUMA_NO_NODE))
 
-#define kmem_buckets_alloc_node_track_caller(_b, _size, _flags, _node)	\
-	alloc_hooks(__kmalloc_node_track_caller_noprof(PASS_KMALLOC_PARAMS(_size, _b, __kmalloc_token(_size)), _flags, _node, _RET_IP_))
+#define kmem_buckets_alloc_track_caller(_b, _size, _flags)	\
+	alloc_hooks(__kmalloc_node_track_caller_noprof(PASS_BUCKET_PARAMS(_size, _b), _flags, NUMA_NO_NODE, _RET_IP_))
 
-#define kmem_buckets_alloc_track_caller(_b, _size, _flags) \
-	kmem_buckets_alloc_node_track_caller(_b, _size, _flags, NUMA_NO_NODE)
-
-static __always_inline __alloc_size(1) void *_kmalloc_node_noprof(size_t size, gfp_t flags, int node, kmalloc_token_t token)
+static __always_inline __alloc_size(1) void *kmalloc_node_noprof(size_t size, gfp_t flags, int node)
 {
 	if (__builtin_constant_p(size) && size) {
 		unsigned int index;
@@ -1191,48 +999,31 @@ static __always_inline __alloc_size(1) void *_kmalloc_node_noprof(size_t size, g
 
 		index = kmalloc_index(size);
 		return __kmalloc_cache_node_noprof(
-				kmalloc_caches[kmalloc_type(flags, token)][index],
+				kmalloc_caches[kmalloc_type(flags, _RET_IP_)][index],
 				flags, node, size);
 	}
-	return __kmalloc_node_noprof(PASS_KMALLOC_PARAMS(size, NULL, token), flags, node);
+	return __kmalloc_node_noprof(PASS_BUCKET_PARAMS(size, NULL), flags, node);
 }
-#define kmalloc_node_noprof(...)		_kmalloc_node_noprof(__VA_ARGS__, __kmalloc_token(__VA_ARGS__))
 #define kmalloc_node(...)			alloc_hooks(kmalloc_node_noprof(__VA_ARGS__))
 
-static inline __alloc_size(1, 2) void *_kmalloc_array_noprof(size_t n, size_t size, gfp_t flags, kmalloc_token_t token)
-{
-	size_t bytes;
-
-	if (unlikely(check_mul_overflow(n, size, &bytes)))
-		return NULL;
-	return _kmalloc_noprof(bytes, flags, token);
-}
-#define kmalloc_array_noprof(...)		_kmalloc_array_noprof(__VA_ARGS__, __kmalloc_token(__VA_ARGS__))
-#if 0 /* kernel-doc */
 /**
  * kmalloc_array - allocate memory for an array.
  * @n: number of elements.
  * @size: element size.
  * @flags: the type of memory to allocate (see kmalloc).
  */
-void *kmalloc_array(size_t n, size_t size, gfp_t flags);
-#endif
-#define kmalloc_array(n, size, flags)		alloc_hooks(kmalloc_array_noprof(n, size, flags))
-
-static inline __realloc_size(2, 3) void * __must_check _krealloc_array_noprof(void *p,
-								       size_t new_n,
-								       size_t new_size,
-								       gfp_t flags, kmalloc_token_t token)
+static inline __alloc_size(1, 2) void *kmalloc_array_noprof(size_t n, size_t size, gfp_t flags)
 {
 	size_t bytes;
 
-	if (unlikely(check_mul_overflow(new_n, new_size, &bytes)))
+	if (unlikely(check_mul_overflow(n, size, &bytes)))
 		return NULL;
-
-	return krealloc_node_align_noprof(p, PASS_TOKEN_PARAMS(bytes, token), 1, flags, NUMA_NO_NODE);
+	if (__builtin_constant_p(n) && __builtin_constant_p(size))
+		return kmalloc_noprof(bytes, flags);
+	return kmalloc_noprof(bytes, flags);
 }
-#define krealloc_array_noprof(...)		_krealloc_array_noprof(__VA_ARGS__, __kmalloc_token(__VA_ARGS__))
-#if 0 /* kernel-doc */
+#define kmalloc_array(...)			alloc_hooks(kmalloc_array_noprof(__VA_ARGS__))
+
 /**
  * krealloc_array - reallocate memory for an array.
  * @p: pointer to the memory chunk to reallocate
@@ -1250,9 +1041,19 @@ static inline __realloc_size(2, 3) void * __must_check _krealloc_array_noprof(vo
  * In any case, the contents of the object pointed to are preserved up to the
  * lesser of the new and old sizes.
  */
-void *krealloc_array(void *p, size_t new_n, size_t new_size, gfp_t flags);
-#endif
-#define krealloc_array(p, new_n, new_size, flags) alloc_hooks(krealloc_array_noprof(p, new_n, new_size, flags))
+static inline __realloc_size(2, 3) void * __must_check krealloc_array_noprof(void *p,
+								       size_t new_n,
+								       size_t new_size,
+								       gfp_t flags)
+{
+	size_t bytes;
+
+	if (unlikely(check_mul_overflow(new_n, new_size, &bytes)))
+		return NULL;
+
+	return krealloc_noprof(p, bytes, flags);
+}
+#define krealloc_array(...)			alloc_hooks(krealloc_array_noprof(__VA_ARGS__))
 
 /**
  * kcalloc - allocate memory for an array. The memory is set to zero.
@@ -1262,10 +1063,10 @@ void *krealloc_array(void *p, size_t new_n, size_t new_size, gfp_t flags);
  */
 #define kcalloc(n, size, flags)		kmalloc_array(n, size, (flags) | __GFP_ZERO)
 
-void *__kmalloc_node_track_caller_noprof(DECL_KMALLOC_PARAMS(size, b, token), gfp_t flags, int node,
+void *__kmalloc_node_track_caller_noprof(DECL_BUCKET_PARAMS(size, b), gfp_t flags, int node,
 					 unsigned long caller) __alloc_size(1);
 #define kmalloc_node_track_caller_noprof(size, flags, node, caller) \
-	__kmalloc_node_track_caller_noprof(PASS_KMALLOC_PARAMS(size, NULL, __kmalloc_token(size)), flags, node, caller)
+	__kmalloc_node_track_caller_noprof(PASS_BUCKET_PARAMS(size, NULL), flags, node, caller)
 #define kmalloc_node_track_caller(...)		\
 	alloc_hooks(kmalloc_node_track_caller_noprof(__VA_ARGS__, _RET_IP_))
 
@@ -1282,18 +1083,17 @@ void *__kmalloc_node_track_caller_noprof(DECL_KMALLOC_PARAMS(size, b, token), gf
 #define kmalloc_track_caller_noprof(...)	\
 		kmalloc_node_track_caller_noprof(__VA_ARGS__, NUMA_NO_NODE, _RET_IP_)
 
-static inline __alloc_size(1, 2) void *_kmalloc_array_node_noprof(size_t n, size_t size, gfp_t flags,
-								  int node, kmalloc_token_t token)
+static inline __alloc_size(1, 2) void *kmalloc_array_node_noprof(size_t n, size_t size, gfp_t flags,
+							  int node)
 {
 	size_t bytes;
 
 	if (unlikely(check_mul_overflow(n, size, &bytes)))
 		return NULL;
 	if (__builtin_constant_p(n) && __builtin_constant_p(size))
-		return _kmalloc_node_noprof(bytes, flags, node, token);
-	return __kmalloc_node_noprof(PASS_KMALLOC_PARAMS(bytes, NULL, token), flags, node);
+		return kmalloc_node_noprof(bytes, flags, node);
+	return __kmalloc_node_noprof(PASS_BUCKET_PARAMS(bytes, NULL), flags, node);
 }
-#define kmalloc_array_node_noprof(...)		_kmalloc_array_node_noprof(__VA_ARGS__, __kmalloc_token(__VA_ARGS__))
 #define kmalloc_array_node(...)			alloc_hooks(kmalloc_array_node_noprof(__VA_ARGS__))
 
 #define kcalloc_node(_n, _size, _flags, _node)	\
@@ -1304,73 +1104,42 @@ static inline __alloc_size(1, 2) void *_kmalloc_array_node_noprof(size_t n, size
  */
 #define kmem_cache_zalloc(_k, _flags)		kmem_cache_alloc(_k, (_flags)|__GFP_ZERO)
 
-static inline __alloc_size(1) void *_kzalloc_noprof(size_t size, gfp_t flags, kmalloc_token_t token)
-{
-	return _kmalloc_noprof(size, flags | __GFP_ZERO, token);
-}
-#define kzalloc_noprof(...)			_kzalloc_noprof(__VA_ARGS__, __kmalloc_token(__VA_ARGS__))
-#if 0 /* kernel-doc */
 /**
  * kzalloc - allocate memory. The memory is set to zero.
  * @size: how many bytes of memory are required.
  * @flags: the type of memory to allocate (see kmalloc).
  */
-void *kzalloc(size_t size, gfp_t flags);
-#endif
-#define kzalloc(size, flags)			alloc_hooks(kzalloc_noprof(size, flags))
+static inline __alloc_size(1) void *kzalloc_noprof(size_t size, gfp_t flags)
+{
+	return kmalloc_noprof(size, flags | __GFP_ZERO);
+}
+#define kzalloc(...)				alloc_hooks(kzalloc_noprof(__VA_ARGS__))
 #define kzalloc_node(_size, _flags, _node)	kmalloc_node(_size, (_flags)|__GFP_ZERO, _node)
 
-void *__kvmalloc_node_noprof(DECL_KMALLOC_PARAMS(size, b, token), unsigned long align,
-			     gfp_t flags, int node) __alloc_size(1);
-#define kvmalloc_node_align_noprof(_size, _align, _flags, _node)	\
-	__kvmalloc_node_noprof(PASS_KMALLOC_PARAMS(_size, NULL, __kmalloc_token(_size)), _align, _flags, _node)
-#define kvmalloc_node_align(...)		\
-	alloc_hooks(kvmalloc_node_align_noprof(__VA_ARGS__))
-#if 0 /* kernel-doc */
-/**
- * kvmalloc_node - attempt to allocate physically contiguous memory, but upon
- * failure, fall back to non-contiguous (vmalloc) allocation.
- * @size: size of the request.
- * @flags: gfp mask for the allocation - must be compatible (superset) with GFP_KERNEL.
- * @node: numa node to allocate from
- *
- * Only alignments up to those guaranteed by kmalloc() will be honored. Please see
- * Documentation/core-api/memory-allocation.rst for more details.
- *
- * Uses kmalloc to get the memory but if the allocation fails then falls back
- * to the vmalloc allocator. Use kvfree for freeing the memory.
- *
- * GFP_NOWAIT and GFP_ATOMIC are supported, the __GFP_NORETRY modifier is not.
- * __GFP_RETRY_MAYFAIL is supported, and it should be used only if kmalloc is
- * preferable to the vmalloc fallback, due to visible performance drawbacks.
- *
- * Return: pointer to the allocated memory of %NULL in case of failure
- */
-void *kvmalloc_node(size_t size, gfp_t flags, int node);
-#endif
-#define kvmalloc_node(size, flags, node)	kvmalloc_node_align(size, 1, flags, node)
+void *__kvmalloc_node_noprof(DECL_BUCKET_PARAMS(size, b), gfp_t flags, int node) __alloc_size(1);
 #define kvmalloc_node_noprof(size, flags, node)	\
-	kvmalloc_node_align_noprof(size, 1, flags, node)
-#define kvmalloc(...)				kvmalloc_node(__VA_ARGS__, NUMA_NO_NODE)
+	__kvmalloc_node_noprof(PASS_BUCKET_PARAMS(size, NULL), flags, node)
+#define kvmalloc_node(...)			alloc_hooks(kvmalloc_node_noprof(__VA_ARGS__))
+
+#define kvmalloc(_size, _flags)			kvmalloc_node(_size, _flags, NUMA_NO_NODE)
 #define kvmalloc_noprof(_size, _flags)		kvmalloc_node_noprof(_size, _flags, NUMA_NO_NODE)
 #define kvzalloc(_size, _flags)			kvmalloc(_size, (_flags)|__GFP_ZERO)
 
 #define kvzalloc_node(_size, _flags, _node)	kvmalloc_node(_size, (_flags)|__GFP_ZERO, _node)
-
 #define kmem_buckets_valloc(_b, _size, _flags)	\
-	alloc_hooks(__kvmalloc_node_noprof(PASS_KMALLOC_PARAMS(_size, _b, __kmalloc_token(_size)), 1, _flags, NUMA_NO_NODE))
+	alloc_hooks(__kvmalloc_node_noprof(PASS_BUCKET_PARAMS(_size, _b), _flags, NUMA_NO_NODE))
 
 static inline __alloc_size(1, 2) void *
-_kvmalloc_array_node_noprof(size_t n, size_t size, gfp_t flags, int node, kmalloc_token_t token)
+kvmalloc_array_node_noprof(size_t n, size_t size, gfp_t flags, int node)
 {
 	size_t bytes;
 
 	if (unlikely(check_mul_overflow(n, size, &bytes)))
 		return NULL;
 
-	return __kvmalloc_node_noprof(PASS_KMALLOC_PARAMS(bytes, NULL, token), 1, flags, node);
+	return kvmalloc_node_noprof(bytes, flags, node);
 }
-#define kvmalloc_array_node_noprof(...)		_kvmalloc_array_node_noprof(__VA_ARGS__, __kmalloc_token(__VA_ARGS__))
+
 #define kvmalloc_array_noprof(...)		kvmalloc_array_node_noprof(__VA_ARGS__, NUMA_NO_NODE)
 #define kvcalloc_node_noprof(_n,_s,_f,_node)	kvmalloc_array_node_noprof(_n,_s,(_f)|__GFP_ZERO,_node)
 #define kvcalloc_noprof(...)			kvcalloc_node_noprof(__VA_ARGS__, NUMA_NO_NODE)
@@ -1379,72 +1148,16 @@ _kvmalloc_array_node_noprof(size_t n, size_t size, gfp_t flags, int node, kmallo
 #define kvcalloc_node(...)			alloc_hooks(kvcalloc_node_noprof(__VA_ARGS__))
 #define kvcalloc(...)				alloc_hooks(kvcalloc_noprof(__VA_ARGS__))
 
-void *kvrealloc_node_align_noprof(const void *p, DECL_TOKEN_PARAMS(size, token), unsigned long align,
-				  gfp_t flags, int nid) __realloc_size(2);
-#if 0 /* kernel-doc */
-/**
- * kvrealloc_node_align - reallocate memory; contents remain unchanged
- * @p: object to reallocate memory for
- * @size: the size to reallocate
- * @align: desired alignment
- * @flags: the flags for the page level allocator
- * @nid: NUMA node id
- *
- * If @p is %NULL, kvrealloc() behaves exactly like kvmalloc(). If @size is 0
- * and @p is not a %NULL pointer, the object pointed to is freed.
- *
- * Only alignments up to those guaranteed by kmalloc() will be honored. Please see
- * Documentation/core-api/memory-allocation.rst for more details.
- *
- * If __GFP_ZERO logic is requested, callers must ensure that, starting with the
- * initial memory allocation, every subsequent call to this API for the same
- * memory allocation is flagged with __GFP_ZERO. Otherwise, it is possible that
- * __GFP_ZERO is not fully honored by this API.
- *
- * In any case, the contents of the object pointed to are preserved up to the
- * lesser of the new and old sizes.
- *
- * This function must not be called concurrently with itself or kvfree() for the
- * same memory allocation.
- *
- * Return: pointer to the allocated memory or %NULL in case of error
- */
-void *kvrealloc_node_align(const void *p, size_t size, unsigned long align, gfp_t flags, int nid);
-#endif
-#define kvrealloc_node_align(p, size, align, flags, nid)	\
-	alloc_hooks(kvrealloc_node_align_noprof(p, PASS_TOKEN_PARAMS(size, __kmalloc_token(size)), align, flags, nid))
-#define kvrealloc_node(_p, _s, _f, _n)		kvrealloc_node_align(_p, _s, 1, _f, _n)
-#define kvrealloc(...)				kvrealloc_node(__VA_ARGS__, NUMA_NO_NODE)
+void *kvrealloc_noprof(const void *p, size_t size, gfp_t flags)
+		__realloc_size(2);
+#define kvrealloc(...)				alloc_hooks(kvrealloc_noprof(__VA_ARGS__))
 
 extern void kvfree(const void *addr);
 DEFINE_FREE(kvfree, void *, if (!IS_ERR_OR_NULL(_T)) kvfree(_T))
 
-extern void kvfree_atomic(const void *addr);
-DEFINE_FREE(kvfree_atomic, void *, if (!IS_ERR_OR_NULL(_T)) kvfree_atomic(_T))
-
 extern void kvfree_sensitive(const void *addr, size_t len);
 
 unsigned int kmem_cache_size(struct kmem_cache *s);
-
-#ifndef CONFIG_KVFREE_RCU_BATCHED
-static inline void kvfree_rcu_barrier(void)
-{
-	rcu_barrier();
-}
-
-static inline void kvfree_rcu_barrier_on_cache(struct kmem_cache *s)
-{
-	rcu_barrier();
-}
-
-static inline void kfree_rcu_scheduler_running(void) { }
-#else
-void kvfree_rcu_barrier(void);
-
-void kvfree_rcu_barrier_on_cache(struct kmem_cache *s);
-
-void kfree_rcu_scheduler_running(void);
-#endif
 
 /**
  * kmalloc_size_roundup - Report allocation bucket size for the given size
@@ -1463,6 +1176,5 @@ void kfree_rcu_scheduler_running(void);
 size_t kmalloc_size_roundup(size_t size);
 
 void __init kmem_cache_init_late(void);
-void __init kvfree_rcu_init(void);
 
 #endif	/* _LINUX_SLAB_H */

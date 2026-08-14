@@ -13,7 +13,6 @@
 #include <linux/device.h>
 #include <linux/errno.h>
 #include <linux/fs.h>
-#include <linux/hex.h>
 #include <linux/limits.h>
 #include <linux/mm.h>
 #include <linux/slab.h>
@@ -139,25 +138,6 @@ int string_get_size(u64 size, u64 blk_size, const enum string_size_units units,
 }
 EXPORT_SYMBOL(string_get_size);
 
-int parse_int_array(const char *buf, size_t count, int **array)
-{
-	int *ints, nints;
-
-	get_options(buf, 0, &nints);
-	if (!nints)
-		return -ENOENT;
-
-	ints = kzalloc_objs(*ints, nints + 1);
-	if (!ints)
-		return -ENOMEM;
-
-	get_options(buf, nints + 1, ints);
-	*array = ints;
-
-	return 0;
-}
-EXPORT_SYMBOL(parse_int_array);
-
 /**
  * parse_int_array_user - Split string into a sequence of integers
  * @from:	The user space buffer to read from
@@ -173,14 +153,30 @@ EXPORT_SYMBOL(parse_int_array);
  */
 int parse_int_array_user(const char __user *from, size_t count, int **array)
 {
+	int *ints, nints;
 	char *buf;
-	int ret;
+	int ret = 0;
 
 	buf = memdup_user_nul(from, count);
 	if (IS_ERR(buf))
 		return PTR_ERR(buf);
 
-	ret = parse_int_array(buf, count, array);
+	get_options(buf, 0, &nints);
+	if (!nints) {
+		ret = -ENOENT;
+		goto free_buf;
+	}
+
+	ints = kcalloc(nints + 1, sizeof(*ints), GFP_KERNEL);
+	if (!ints) {
+		ret = -ENOMEM;
+		goto free_buf;
+	}
+
+	get_options(buf, nints + 1, ints);
+	*array = ints;
+
+free_buf:
 	kfree(buf);
 	return ret;
 }
@@ -752,7 +748,7 @@ EXPORT_SYMBOL_GPL(kstrdup_and_replace);
  * kasprintf_strarray - allocate and fill array of sequential strings
  * @gfp: flags for the slab allocator
  * @prefix: prefix to be used
- * @n: number of strings to be allocated and filled
+ * @n: amount of lines to be allocated and filled
  *
  * Allocates and fills @n strings using pattern "%s-%zu", where prefix
  * is provided by caller. The caller is responsible to free them with
@@ -765,7 +761,7 @@ char **kasprintf_strarray(gfp_t gfp, const char *prefix, size_t n)
 	char **names;
 	size_t i;
 
-	names = kcalloc(n, sizeof(char *), gfp);
+	names = kcalloc(n + 1, sizeof(char *), gfp);
 	if (!names)
 		return NULL;
 
@@ -805,7 +801,7 @@ void kfree_strarray(char **array, size_t n)
 EXPORT_SYMBOL_GPL(kfree_strarray);
 
 struct strarray {
-	char **array __counted_by_ptr(n);
+	char **array;
 	size_t n;
 };
 
@@ -824,13 +820,13 @@ char **devm_kasprintf_strarray(struct device *dev, const char *prefix, size_t n)
 	if (!ptr)
 		return ERR_PTR(-ENOMEM);
 
-	ptr->n = n;
 	ptr->array = kasprintf_strarray(GFP_KERNEL, prefix, n);
 	if (!ptr->array) {
 		devres_free(ptr);
 		return ERR_PTR(-ENOMEM);
 	}
 
+	ptr->n = n;
 	devres_add(dev, ptr);
 
 	return ptr->array;

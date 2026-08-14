@@ -38,7 +38,7 @@ u8 debug_monitors_arch(void)
 /*
  * MDSCR access routines.
  */
-static void mdscr_write(u64 mdscr)
+static void mdscr_write(u32 mdscr)
 {
 	unsigned long flags;
 	flags = local_daif_save();
@@ -47,7 +47,7 @@ static void mdscr_write(u64 mdscr)
 }
 NOKPROBE_SYMBOL(mdscr_write);
 
-static u64 mdscr_read(void)
+static u32 mdscr_read(void)
 {
 	return read_sysreg(mdscr_el1);
 }
@@ -83,16 +83,16 @@ static DEFINE_PER_CPU(int, kde_ref_count);
 
 void enable_debug_monitors(enum dbg_active_el el)
 {
-	u64 mdscr, enable = 0;
+	u32 mdscr, enable = 0;
 
 	WARN_ON(preemptible());
 
 	if (this_cpu_inc_return(mde_ref_count) == 1)
-		enable = MDSCR_EL1_MDE;
+		enable = DBG_MDSCR_MDE;
 
 	if (el == DBG_ACTIVE_EL1 &&
 	    this_cpu_inc_return(kde_ref_count) == 1)
-		enable |= MDSCR_EL1_KDE;
+		enable |= DBG_MDSCR_KDE;
 
 	if (enable && debug_enabled) {
 		mdscr = mdscr_read();
@@ -104,16 +104,16 @@ NOKPROBE_SYMBOL(enable_debug_monitors);
 
 void disable_debug_monitors(enum dbg_active_el el)
 {
-	u64 mdscr, disable = 0;
+	u32 mdscr, disable = 0;
 
 	WARN_ON(preemptible());
 
 	if (this_cpu_dec_return(mde_ref_count) == 0)
-		disable = ~MDSCR_EL1_MDE;
+		disable = ~DBG_MDSCR_MDE;
 
 	if (el == DBG_ACTIVE_EL1 &&
 	    this_cpu_dec_return(kde_ref_count) == 0)
-		disable &= ~MDSCR_EL1_KDE;
+		disable &= ~DBG_MDSCR_KDE;
 
 	if (disable) {
 		mdscr = mdscr_read();
@@ -167,7 +167,7 @@ static void send_user_sigtrap(int si_code)
 	if (WARN_ON(!user_mode(regs)))
 		return;
 
-	if (!regs_irqs_disabled(regs))
+	if (interrupts_enabled(regs))
 		local_irq_enable();
 
 	arm64_force_sig_fault(SIGTRAP, si_code, instruction_pointer(regs),
@@ -212,7 +212,7 @@ static int call_el1_break_hook(struct pt_regs *regs, unsigned long esr)
 	if (esr_brk_comment(esr) == BUG_BRK_IMM)
 		return bug_brk_handler(regs, esr);
 
-	if (IS_ENABLED(CONFIG_CFI) && esr_is_cfi_brk(esr))
+	if (IS_ENABLED(CONFIG_CFI_CLANG) && esr_is_cfi_brk(esr))
 		return cfi_brk_handler(regs, esr);
 
 	if (esr_brk_comment(esr) == FAULT_BRK_IMM)
@@ -348,7 +348,7 @@ void kernel_enable_single_step(struct pt_regs *regs)
 {
 	WARN_ON(!irqs_disabled());
 	set_regs_spsr_ss(regs);
-	mdscr_write(mdscr_read() | MDSCR_EL1_SS);
+	mdscr_write(mdscr_read() | DBG_MDSCR_SS);
 	enable_debug_monitors(DBG_ACTIVE_EL1);
 }
 NOKPROBE_SYMBOL(kernel_enable_single_step);
@@ -356,7 +356,7 @@ NOKPROBE_SYMBOL(kernel_enable_single_step);
 void kernel_disable_single_step(void)
 {
 	WARN_ON(!irqs_disabled());
-	mdscr_write(mdscr_read() & ~MDSCR_EL1_SS);
+	mdscr_write(mdscr_read() & ~DBG_MDSCR_SS);
 	disable_debug_monitors(DBG_ACTIVE_EL1);
 }
 NOKPROBE_SYMBOL(kernel_disable_single_step);
@@ -364,18 +364,13 @@ NOKPROBE_SYMBOL(kernel_disable_single_step);
 int kernel_active_single_step(void)
 {
 	WARN_ON(!irqs_disabled());
-	return mdscr_read() & MDSCR_EL1_SS;
+	return mdscr_read() & DBG_MDSCR_SS;
 }
 NOKPROBE_SYMBOL(kernel_active_single_step);
 
 void kernel_rewind_single_step(struct pt_regs *regs)
 {
 	set_regs_spsr_ss(regs);
-}
-
-void kernel_fastforward_single_step(struct pt_regs *regs)
-{
-	clear_regs_spsr_ss(regs);
 }
 
 /* ptrace API */

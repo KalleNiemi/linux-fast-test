@@ -5,6 +5,7 @@
 
 #include <linux/gpio/consumer.h>
 #include <linux/module.h>
+#include <linux/mod_devicetable.h>
 #include <linux/platform_device.h>
 
 #include <linux/delay.h>
@@ -92,7 +93,8 @@ static int siox_gpio_probe(struct platform_device *pdev)
 
 	smaster = devm_siox_master_alloc(dev, sizeof(*ddata));
 	if (!smaster)
-		return -ENOMEM;
+		return dev_err_probe(dev, -ENOMEM,
+				     "failed to allocate siox master\n");
 
 	platform_set_drvdata(pdev, smaster);
 	ddata = siox_master_get_devdata(smaster);

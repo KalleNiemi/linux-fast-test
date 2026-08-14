@@ -16,7 +16,6 @@
 #include <drm/drm_fourcc.h>
 #include <drm/drm_framebuffer.h>
 #include <drm/drm_gem_dma_helper.h>
-#include <drm/drm_print.h>
 
 #include "sti_compositor.h"
 #include "sti_gdp.h"
@@ -618,7 +617,7 @@ static int sti_gdp_get_dst(struct device *dev, int dst, int src)
 }
 
 static int sti_gdp_atomic_check(struct drm_plane *drm_plane,
-				struct drm_atomic_commit *state)
+				struct drm_atomic_state *state)
 {
 	struct drm_plane_state *new_plane_state = drm_atomic_get_new_plane_state(state,
 										 drm_plane);
@@ -705,7 +704,7 @@ static int sti_gdp_atomic_check(struct drm_plane *drm_plane,
 }
 
 static void sti_gdp_atomic_update(struct drm_plane *drm_plane,
-				  struct drm_atomic_commit *state)
+				  struct drm_atomic_state *state)
 {
 	struct drm_plane_state *oldstate = drm_atomic_get_old_plane_state(state,
 									  drm_plane);
@@ -873,7 +872,7 @@ end:
 }
 
 static void sti_gdp_atomic_disable(struct drm_plane *drm_plane,
-				   struct drm_atomic_commit *state)
+				   struct drm_atomic_state *state)
 {
 	struct drm_plane_state *oldstate = drm_atomic_get_old_plane_state(state,
 									  drm_plane);

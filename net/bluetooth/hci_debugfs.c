@@ -1,8 +1,11 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
    BlueZ - Bluetooth protocol stack for Linux
 
    Copyright (C) 2014 Intel Corporation
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License version 2 as
+   published by the Free Software Foundation;
 
    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
    OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -35,7 +38,7 @@ static ssize_t __name ## _read(struct file *file,			      \
 	struct hci_dev *hdev = file->private_data;			      \
 	char buf[3];							      \
 									      \
-	buf[0] = test_bit(__quirk, hdev->quirk_flags) ? 'Y' : 'N';	      \
+	buf[0] = test_bit(__quirk, &hdev->quirks) ? 'Y' : 'N';		      \
 	buf[1] = '\n';							      \
 	buf[2] = '\0';							      \
 	return simple_read_from_buffer(user_buf, count, ppos, buf, 2);	      \
@@ -56,10 +59,10 @@ static ssize_t __name ## _write(struct file *file,			      \
 	if (err)							      \
 		return err;						      \
 									      \
-	if (enable == test_bit(__quirk, hdev->quirk_flags))		      \
+	if (enable == test_bit(__quirk, &hdev->quirks))			      \
 		return -EALREADY;					      \
 									      \
-	change_bit(__quirk, hdev->quirk_flags);				      \
+	change_bit(__quirk, &hdev->quirks);				      \
 									      \
 	return count;							      \
 }									      \
@@ -1353,7 +1356,7 @@ static ssize_t vendor_diag_write(struct file *file, const char __user *user_buf,
 	 * for the vendor callback. Instead just store the desired value and
 	 * the setting will be programmed when the controller gets powered on.
 	 */
-	if (hci_test_quirk(hdev, HCI_QUIRK_NON_PERSISTENT_DIAG) &&
+	if (test_bit(HCI_QUIRK_NON_PERSISTENT_DIAG, &hdev->quirks) &&
 	    (!test_bit(HCI_RUNNING, &hdev->flags) ||
 	     hci_dev_test_flag(hdev, HCI_USER_CHANNEL)))
 		goto done;

@@ -418,7 +418,7 @@ struct spmi_device *spmi_device_alloc(struct spmi_controller *ctrl)
 {
 	struct spmi_device *sdev;
 
-	sdev = kzalloc_obj(*sdev);
+	sdev = kzalloc(sizeof(*sdev), GFP_KERNEL);
 	if (!sdev)
 		return NULL;
 
@@ -450,7 +450,7 @@ struct spmi_controller *spmi_controller_alloc(struct device *parent,
 	if (WARN_ON(!parent))
 		return ERR_PTR(-EINVAL);
 
-	ctrl = kzalloc_flex(*ctrl, priv, size);
+	ctrl = kzalloc(sizeof(*ctrl) + size, GFP_KERNEL);
 	if (!ctrl)
 		return ERR_PTR(-ENOMEM);
 
@@ -459,7 +459,7 @@ struct spmi_controller *spmi_controller_alloc(struct device *parent,
 	ctrl->dev.bus = &spmi_bus_type;
 	ctrl->dev.parent = parent;
 	ctrl->dev.of_node = parent->of_node;
-	spmi_controller_set_drvdata(ctrl, ctrl->priv);
+	spmi_controller_set_drvdata(ctrl, &ctrl[1]);
 
 	id = ida_alloc(&ctrl_ida, GFP_KERNEL);
 	if (id < 0) {
@@ -517,7 +517,7 @@ static void of_spmi_register_devices(struct spmi_controller *ctrl)
 		if (!sdev)
 			continue;
 
-		device_set_node(&sdev->dev, of_fwnode_handle(node));
+		sdev->dev.of_node = node;
 		sdev->usid = (u8)reg[0];
 
 		err = spmi_device_add(sdev);

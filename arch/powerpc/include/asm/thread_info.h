@@ -41,7 +41,7 @@
 
 #define THREAD_ALIGN		(1 << THREAD_ALIGN_SHIFT)
 
-#ifndef __ASSEMBLER__
+#ifndef __ASSEMBLY__
 #include <linux/cache.h>
 #include <asm/processor.h>
 #include <asm/accounting.h>
@@ -57,8 +57,6 @@ struct thread_info {
 #ifdef CONFIG_SMP
 	unsigned int	cpu;
 #endif
-	unsigned long	exit_flags;		/* Exit Flags for entry/exit */
-	unsigned long	syscall_work;		/* SYSCALL_WORK_ flags */
 	unsigned long	local_flags;		/* private flags for thread */
 #ifdef CONFIG_LIVEPATCH_64
 	unsigned long *livepatch_sp;
@@ -91,7 +89,7 @@ extern int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src
 void arch_setup_new_exec(void);
 #define arch_setup_new_exec arch_setup_new_exec
 
-#endif /* __ASSEMBLER__ */
+#endif /* __ASSEMBLY__ */
 
 /*
  * thread information flag bit numbers
@@ -105,7 +103,6 @@ void arch_setup_new_exec(void);
 #define TIF_PATCH_PENDING	6	/* pending live patching update */
 #define TIF_SYSCALL_AUDIT	7	/* syscall auditing active */
 #define TIF_SINGLESTEP		8	/* singlestepping active */
-#define TIF_NEED_RESCHED_LAZY	9       /* Scheduler driven lazy preemption */
 #define TIF_SECCOMP		10	/* secure computing */
 #define TIF_RESTOREALL		11	/* Restore all regs (implies NOERROR) */
 #define TIF_NOERROR		12	/* Force successful syscall return */
@@ -125,7 +122,6 @@ void arch_setup_new_exec(void);
 #define _TIF_SYSCALL_TRACE	(1<<TIF_SYSCALL_TRACE)
 #define _TIF_SIGPENDING		(1<<TIF_SIGPENDING)
 #define _TIF_NEED_RESCHED	(1<<TIF_NEED_RESCHED)
-#define _TIF_NEED_RESCHED_LAZY	(1<<TIF_NEED_RESCHED_LAZY)
 #define _TIF_NOTIFY_SIGNAL	(1<<TIF_NOTIFY_SIGNAL)
 #define _TIF_POLLING_NRFLAG	(1<<TIF_POLLING_NRFLAG)
 #define _TIF_32BIT		(1<<TIF_32BIT)
@@ -146,23 +142,24 @@ void arch_setup_new_exec(void);
 				 _TIF_SYSCALL_EMU)
 
 #define _TIF_USER_WORK_MASK	(_TIF_SIGPENDING | _TIF_NEED_RESCHED | \
-				 _TIF_NEED_RESCHED_LAZY | _TIF_NOTIFY_RESUME | \
-				 _TIF_UPROBE | _TIF_RESTORE_TM | \
-				 _TIF_PATCH_PENDING | _TIF_NOTIFY_SIGNAL)
-
+				 _TIF_NOTIFY_RESUME | _TIF_UPROBE | \
+				 _TIF_RESTORE_TM | _TIF_PATCH_PENDING | \
+				 _TIF_NOTIFY_SIGNAL)
 #define _TIF_PERSYSCALL_MASK	(_TIF_RESTOREALL|_TIF_NOERROR)
 
 /* Bits in local_flags */
 /* Don't move TLF_NAPPING without adjusting the code in entry_32.S */
 #define TLF_NAPPING		0	/* idle thread enabled NAP mode */
 #define TLF_SLEEPING		1	/* suspend code enabled SLEEP mode */
+#define TLF_LAZY_MMU		3	/* tlb_batch is active */
 #define TLF_RUNLATCH		4	/* Is the runlatch enabled? */
 
 #define _TLF_NAPPING		(1 << TLF_NAPPING)
 #define _TLF_SLEEPING		(1 << TLF_SLEEPING)
+#define _TLF_LAZY_MMU		(1 << TLF_LAZY_MMU)
 #define _TLF_RUNLATCH		(1 << TLF_RUNLATCH)
 
-#ifndef __ASSEMBLER__
+#ifndef __ASSEMBLY__
 
 static inline void clear_thread_local_flags(unsigned int flags)
 {
@@ -233,7 +230,7 @@ static inline int arch_within_stack_frames(const void * const stack,
 extern void *emergency_ctx[];
 #endif
 
-#endif	/* !__ASSEMBLER__ */
+#endif	/* !__ASSEMBLY__ */
 
 #endif /* __KERNEL__ */
 

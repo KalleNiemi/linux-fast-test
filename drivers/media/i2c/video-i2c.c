@@ -16,6 +16,7 @@
 #include <linux/kthread.h>
 #include <linux/i2c.h>
 #include <linux/list.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/pm_runtime.h>
@@ -263,8 +264,18 @@ static int amg88xx_set_power(struct video_i2c_data *data, bool on)
 
 #if IS_REACHABLE(CONFIG_HWMON)
 
+static const u32 amg88xx_temp_config[] = {
+	HWMON_T_INPUT,
+	0
+};
+
+static const struct hwmon_channel_info amg88xx_temp = {
+	.type = hwmon_temp,
+	.config = amg88xx_temp_config,
+};
+
 static const struct hwmon_channel_info * const amg88xx_info[] = {
-	HWMON_CHANNEL_INFO(temp, HWMON_T_INPUT),
+	&amg88xx_temp,
 	NULL
 };
 
@@ -287,6 +298,7 @@ static int amg88xx_read(struct device *dev, enum hwmon_sensor_types type,
 		return tmp;
 
 	tmp = regmap_bulk_read(data->regmap, AMG88XX_REG_TTHL, &buf, 2);
+	pm_runtime_mark_last_busy(regmap_get_device(data->regmap));
 	pm_runtime_put_autosuspend(regmap_get_device(data->regmap));
 	if (tmp)
 		return tmp;
@@ -453,9 +465,8 @@ static int video_i2c_thread_vid_cap(void *priv)
 		spin_lock(&data->slock);
 
 		if (!list_empty(&data->vid_cap_active)) {
-			vid_cap_buf = list_first_entry(&data->vid_cap_active,
-						       struct video_i2c_buffer,
-						       list);
+			vid_cap_buf = list_last_entry(&data->vid_cap_active,
+						 struct video_i2c_buffer, list);
 			list_del(&vid_cap_buf->list);
 		}
 
@@ -526,6 +537,7 @@ static int start_streaming(struct vb2_queue *vq, unsigned int count)
 		return 0;
 
 error_rpm_put:
+	pm_runtime_mark_last_busy(dev);
 	pm_runtime_put_autosuspend(dev);
 error_del_list:
 	video_i2c_del_list(vq, VB2_BUF_STATE_QUEUED);
@@ -542,6 +554,7 @@ static void stop_streaming(struct vb2_queue *vq)
 
 	kthread_stop(data->kthread_vid_cap);
 	data->kthread_vid_cap = NULL;
+	pm_runtime_mark_last_busy(regmap_get_device(data->regmap));
 	pm_runtime_put_autosuspend(regmap_get_device(data->regmap));
 
 	video_i2c_del_list(vq, VB2_BUF_STATE_ERROR);
@@ -553,6 +566,8 @@ static const struct vb2_ops video_i2c_video_qops = {
 	.buf_queue		= buffer_queue,
 	.start_streaming	= start_streaming,
 	.stop_streaming		= stop_streaming,
+	.wait_prepare		= vb2_ops_wait_prepare,
+	.wait_finish		= vb2_ops_wait_finish,
 };
 
 static int video_i2c_querycap(struct file *file, void  *priv,
@@ -750,7 +765,7 @@ static int video_i2c_probe(struct i2c_client *client)
 	struct vb2_queue *queue;
 	int ret = -ENODEV;
 
-	data = kzalloc_obj(*data);
+	data = kzalloc(sizeof(*data), GFP_KERNEL);
 	if (!data)
 		return -ENOMEM;
 
@@ -783,13 +798,13 @@ static int video_i2c_probe(struct i2c_client *client)
 	queue->min_queued_buffers = 1;
 	queue->ops = &video_i2c_video_qops;
 	queue->mem_ops = &vb2_vmalloc_memops;
-	queue->lock = &data->queue_lock;
 
 	ret = vb2_queue_init(queue);
 	if (ret < 0)
 		goto error_unregister_device;
 
 	data->vdev.queue = queue;
+	data->vdev.queue->lock = &data->queue_lock;
 
 	snprintf(data->vdev.name, sizeof(data->vdev.name),
 				 "I2C %d-%d Transport Video",
@@ -850,6 +865,7 @@ static int video_i2c_probe(struct i2c_client *client)
 	if (ret < 0)
 		goto error_pm_disable;
 
+	pm_runtime_mark_last_busy(&client->dev);
 	pm_runtime_put_autosuspend(&client->dev);
 
 	return 0;
@@ -888,7 +904,7 @@ static void video_i2c_remove(struct i2c_client *client)
 	if (data->chip->set_power)
 		data->chip->set_power(data, false);
 
-	vb2_video_unregister_device(&data->vdev);
+	video_unregister_device(&data->vdev);
 }
 
 #ifdef CONFIG_PM
@@ -921,9 +937,9 @@ static const struct dev_pm_ops video_i2c_pm_ops = {
 };
 
 static const struct i2c_device_id video_i2c_id_table[] = {
-	{ .name = "amg88xx", .driver_data = (kernel_ulong_t)&video_i2c_chip[AMG88XX] },
-	{ .name = "mlx90640", .driver_data = (kernel_ulong_t)&video_i2c_chip[MLX90640] },
-	{ }
+	{ "amg88xx", (kernel_ulong_t)&video_i2c_chip[AMG88XX] },
+	{ "mlx90640", (kernel_ulong_t)&video_i2c_chip[MLX90640] },
+	{}
 };
 MODULE_DEVICE_TABLE(i2c, video_i2c_id_table);
 

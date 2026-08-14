@@ -12,7 +12,7 @@
 #include <asm/msr-index.h>
 #include <asm/unwind_hints.h>
 #include <asm/percpu.h>
-#include <asm/ptrace-abi.h>
+#include <asm/current.h>
 
 /*
  * Call depth tracking for Intel SKL CPUs to address the RSB underflow
@@ -78,21 +78,21 @@
 #include <asm/asm-offsets.h>
 
 #define CREDIT_CALL_DEPTH					\
-	movq	$-1, PER_CPU_VAR(__x86_call_depth);
+	movq	$-1, PER_CPU_VAR(pcpu_hot + X86_call_depth);
 
 #define RESET_CALL_DEPTH					\
 	xor	%eax, %eax;					\
 	bts	$63, %rax;					\
-	movq	%rax, PER_CPU_VAR(__x86_call_depth);
+	movq	%rax, PER_CPU_VAR(pcpu_hot + X86_call_depth);
 
 #define RESET_CALL_DEPTH_FROM_CALL				\
 	movb	$0xfc, %al;					\
 	shl	$56, %rax;					\
-	movq	%rax, PER_CPU_VAR(__x86_call_depth);		\
+	movq	%rax, PER_CPU_VAR(pcpu_hot + X86_call_depth);	\
 	CALL_THUNKS_DEBUG_INC_CALLS
 
 #define INCREMENT_CALL_DEPTH					\
-	sarq	$5, PER_CPU_VAR(__x86_call_depth);		\
+	sarq	$5, PER_CPU_VAR(pcpu_hot + X86_call_depth);	\
 	CALL_THUNKS_DEBUG_INC_CALLS
 
 #else
@@ -210,18 +210,33 @@
  * The LFENCE fixes this by ensuring step 5 is never reached speculatively.
  * Note that this LFENCE only occurs if safe-RET was actually interrupted (so
  * it's outside of the normal path).
+ *
+ * (The 128 below is RIP offset, used as a naked number here for ease of
+ * backporting).
  */
 #define __HANDLE_INTR_SAFERET(name, pt_regs)		\
-	cmpq	$(name), RIP+pt_regs;			\
+	cmpq	$(name), 128+pt_regs;			\
 	jb	1f;					\
-	cmpq	$(name)+5, RIP+pt_regs;			\
+	cmpq	$(name)+5, 128+pt_regs;			\
 	ja	1f;					\
 	lfence;						\
 	leaq	pt_regs, %rdi;				\
 	call	handle_interrupted_saferet;		\
 	1:
 
-#ifdef __ASSEMBLER__
+#ifdef __ASSEMBLY__
+
+/*
+ * This should be used immediately before an indirect jump/call. It tells
+ * objtool the subsequent indirect jump/call is vouched safe for retpoline
+ * builds.
+ */
+.macro ANNOTATE_RETPOLINE_SAFE
+.Lhere_\@:
+	.pushsection .discard.retpoline_safe
+	.long .Lhere_\@
+	.popsection
+.endm
 
 /*
  * (ab)use RETPOLINE_SAFE on RET to annotate away 'bare' RET instructions
@@ -314,7 +329,7 @@
  * typically has NO_MELTDOWN).
  *
  * While retbleed_untrain_ret() doesn't clobber anything but requires stack,
- * write_ibpb() will clobber AX, CX, DX.
+ * entry_ibpb() will clobber AX, CX, DX.
  *
  * As such, this must be placed after every *SWITCH_TO_KERNEL_CR3 at a point
  * where we have a stack but before any RET instruction.
@@ -324,7 +339,7 @@
 	VALIDATE_UNRET_END
 	CALL_UNTRAIN_RET
 	ALTERNATIVE_2 "",						\
-		      "call write_ibpb", \ibpb_feature,			\
+		      "call entry_ibpb", \ibpb_feature,			\
 		     __stringify(\call_depth_insns), X86_FEATURE_CALL_DEPTH
 #endif
 .endm
@@ -361,26 +376,24 @@
  * CFLAGS.ZF.
  * Note: Only the memory operand variant of VERW clears the CPU buffers.
  */
+.macro __CLEAR_CPU_BUFFERS feature
 #ifdef CONFIG_X86_64
-#define VERW	verw x86_verw_sel(%rip)
+	ALTERNATIVE "", "verw x86_verw_sel(%rip)", \feature
 #else
-/*
- * In 32bit mode, the memory operand must be a %cs reference. The data segments
- * may not be usable (vm86 mode), and the stack segment may not be flat (ESPFIX32).
- */
-#define VERW	verw %cs:x86_verw_sel
+	/*
+	 * In 32bit mode, the memory operand must be a %cs reference. The data
+	 * segments may not be usable (vm86 mode), and the stack segment may not
+	 * be flat (ESPFIX32).
+	 */
+	ALTERNATIVE "", "verw %cs:x86_verw_sel", \feature
 #endif
+.endm
 
-/*
- * Provide a stringified VERW macro for simple usage, and a non-stringified
- * VERW macro for use in more elaborate sequences, e.g. to encode a conditional
- * VERW within an ALTERNATIVE.
- */
-#define __CLEAR_CPU_BUFFERS	__stringify(VERW)
-
-/* If necessary, emit VERW on exit-to-userspace to clear CPU buffers. */
 #define CLEAR_CPU_BUFFERS \
-	ALTERNATIVE "", __CLEAR_CPU_BUFFERS, X86_FEATURE_CLEAR_CPU_BUF
+	__CLEAR_CPU_BUFFERS X86_FEATURE_CLEAR_CPU_BUF
+
+#define VM_CLEAR_CPU_BUFFERS \
+	__CLEAR_CPU_BUFFERS X86_FEATURE_CLEAR_CPU_BUF_VM
 
 #ifdef CONFIG_X86_64
 .macro CLEAR_BRANCH_HISTORY
@@ -388,14 +401,20 @@
 .endm
 
 .macro CLEAR_BRANCH_HISTORY_VMEXIT
-	ALTERNATIVE "", "call clear_bhb_loop", X86_FEATURE_CLEAR_BHB_VMEXIT
+	ALTERNATIVE "", "call clear_bhb_loop", X86_FEATURE_CLEAR_BHB_LOOP_ON_VMEXIT
 .endm
 #else
 #define CLEAR_BRANCH_HISTORY
 #define CLEAR_BRANCH_HISTORY_VMEXIT
 #endif
 
-#else /* __ASSEMBLER__ */
+#else /* __ASSEMBLY__ */
+
+#define ANNOTATE_RETPOLINE_SAFE					\
+	"999:\n\t"						\
+	".pushsection .discard.retpoline_safe\n\t"		\
+	".long 999b\n\t"					\
+	".popsection\n\t"
 
 #define ITS_THUNK_SIZE	64
 
@@ -439,7 +458,7 @@ extern void srso_return_thunk(void);
 extern void srso_alias_return_thunk(void);
 
 extern void entry_untrain_ret(void);
-extern void write_ibpb(void);
+extern void entry_ibpb(void);
 
 #ifdef CONFIG_BPF_JIT
 extern void bpf_arch_ibpb(void);
@@ -460,8 +479,6 @@ extern void call_depth_return_thunk(void);
 	ALTERNATIVE("",						\
 		    __stringify(INCREMENT_CALL_DEPTH),		\
 		    X86_FEATURE_CALL_DEPTH)
-
-DECLARE_PER_CPU_CACHE_HOT(u64, __x86_call_depth);
 
 #ifdef CONFIG_CALL_THUNKS_DEBUG
 DECLARE_PER_CPU(u64, __x86_call_count);
@@ -523,7 +540,7 @@ static inline void call_depth_return_thunk(void) {}
  */
 # define CALL_NOSPEC						\
 	ALTERNATIVE_2(						\
-	ANNOTATE_RETPOLINE_SAFE "\n"				\
+	ANNOTATE_RETPOLINE_SAFE					\
 	"call *%[thunk_target]\n",				\
 	"       jmp    904f;\n"					\
 	"       .align 16\n"					\
@@ -539,7 +556,7 @@ static inline void call_depth_return_thunk(void) {}
 	"904:	call   901b;\n",				\
 	X86_FEATURE_RETPOLINE,					\
 	"lfence;\n"						\
-	ANNOTATE_RETPOLINE_SAFE "\n"				\
+	ANNOTATE_RETPOLINE_SAFE					\
 	"call *%[thunk_target]\n",				\
 	X86_FEATURE_RETPOLINE_LFENCE)
 
@@ -573,7 +590,6 @@ enum spectre_v2_user_mitigation {
 /* The Speculative Store Bypass disable variants */
 enum ssb_mitigation {
 	SPEC_STORE_BYPASS_NONE,
-	SPEC_STORE_BYPASS_AUTO,
 	SPEC_STORE_BYPASS_DISABLE,
 	SPEC_STORE_BYPASS_PRCTL,
 	SPEC_STORE_BYPASS_SECCOMP,
@@ -590,13 +606,13 @@ void alternative_msr_write(unsigned int msr, u64 val, unsigned int feature)
 		: "memory");
 }
 
+extern u64 x86_pred_cmd;
+
 DECLARE_PER_CPU(bool, x86_ibpb_exit_to_user);
 
 static inline void indirect_branch_prediction_barrier(void)
 {
-	asm_inline volatile(ALTERNATIVE("", "call write_ibpb", X86_FEATURE_IBPB)
-			    : ASM_CALL_CONSTRAINT
-			    :: "rax", "rcx", "rdx", "memory");
+	alternative_msr_write(MSR_IA32_PRED_CMD, x86_pred_cmd, X86_FEATURE_USE_IBPB);
 }
 
 /* The Intel SPEC CTRL MSR base value cache */
@@ -633,11 +649,11 @@ DECLARE_STATIC_KEY_FALSE(switch_to_cond_stibp);
 DECLARE_STATIC_KEY_FALSE(switch_mm_cond_ibpb);
 DECLARE_STATIC_KEY_FALSE(switch_mm_always_ibpb);
 
-DECLARE_STATIC_KEY_FALSE(switch_vcpu_ibpb);
-
 DECLARE_STATIC_KEY_FALSE(cpu_buf_idle_clear);
 
 DECLARE_STATIC_KEY_FALSE(switch_mm_cond_l1d_flush);
+
+DECLARE_STATIC_KEY_FALSE(mmio_stale_data_clear);
 
 extern u16 x86_verw_sel;
 
@@ -682,6 +698,6 @@ void srso_safe_ret(void);
 void srso_alias_safe_ret(void);
 void handle_interrupted_saferet(struct pt_regs *regs);
 
-#endif /* __ASSEMBLER__ */
+#endif /* __ASSEMBLY__ */
 
 #endif /* _ASM_X86_NOSPEC_BRANCH_H_ */

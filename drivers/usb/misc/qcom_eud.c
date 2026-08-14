@@ -207,7 +207,8 @@ static int eud_probe(struct platform_device *pdev)
 
 	ret = devm_add_action_or_reset(chip->dev, eud_role_switch_release, chip);
 	if (ret)
-		return ret;
+		return dev_err_probe(chip->dev, ret,
+				"failed to add role switch release action\n");
 
 	chip->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(chip->base))
@@ -253,7 +254,7 @@ MODULE_DEVICE_TABLE(of, eud_dt_match);
 
 static struct platform_driver eud_driver = {
 	.probe	= eud_probe,
-	.remove = eud_remove,
+	.remove_new = eud_remove,
 	.driver	= {
 		.name = "qcom_eud",
 		.dev_groups = eud_groups,

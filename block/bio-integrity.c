@@ -7,113 +7,19 @@
  */
 
 #include <linux/blk-integrity.h>
-#include <linux/t10-pi.h>
+#include <linux/mempool.h>
+#include <linux/export.h>
+#include <linux/bio.h>
+#include <linux/workqueue.h>
+#include <linux/slab.h>
 #include "blk.h"
 
-struct bio_integrity_alloc {
-	struct bio_integrity_payload	bip;
-	struct bio_vec			bvecs[];
-};
+static struct kmem_cache *bip_slab;
+static struct workqueue_struct *kintegrityd_wq;
 
-static mempool_t integrity_buf_pool;
-
-static bool bi_offload_capable(struct blk_integrity *bi)
+void blk_flush_integrity(void)
 {
-	return bi->metadata_size == bi->pi_tuple_size;
-}
-
-unsigned int __bio_integrity_action(struct bio *bio)
-{
-	struct blk_integrity *bi = blk_get_integrity(bio->bi_bdev->bd_disk);
-
-	if (WARN_ON_ONCE(bio_has_crypt_ctx(bio)))
-		return 0;
-
-	switch (bio_op(bio)) {
-	case REQ_OP_READ:
-		if (bi->flags & BLK_INTEGRITY_NOVERIFY) {
-			if (bi_offload_capable(bi))
-				return 0;
-			return BI_ACT_BUFFER;
-		}
-		return BI_ACT_BUFFER | BI_ACT_CHECK;
-	case REQ_OP_WRITE:
-	case REQ_OP_ZONE_APPEND:
-		/*
-		 * Flush masquerading as write?
-		 */
-		if (!bio_sectors(bio))
-			return 0;
-
-		/*
-		 * Zero the memory allocated to not leak uninitialized kernel
-		 * memory to disk for non-integrity metadata where nothing else
-		 * initializes the memory.
-		 */
-		if (bi->flags & BLK_INTEGRITY_NOGENERATE) {
-			if (bi_offload_capable(bi))
-				return 0;
-			return BI_ACT_BUFFER | BI_ACT_ZERO;
-		}
-
-		if (bi->metadata_size > bi->pi_tuple_size)
-			return BI_ACT_BUFFER | BI_ACT_CHECK | BI_ACT_ZERO;
-		return BI_ACT_BUFFER | BI_ACT_CHECK;
-	default:
-		return 0;
-	}
-}
-EXPORT_SYMBOL_GPL(__bio_integrity_action);
-
-void bio_integrity_alloc_buf(struct bio *bio, gfp_t gfp, bool zero_buffer)
-{
-	struct blk_integrity *bi = blk_get_integrity(bio->bi_bdev->bd_disk);
-	struct bio_integrity_payload *bip = bio_integrity(bio);
-	unsigned int len = bio_integrity_bytes(bi, bio_sectors(bio));
-	void *buf;
-
-	buf = kmalloc(len, gfp | __GFP_NOWARN | (zero_buffer ? __GFP_ZERO : 0));
-	if (unlikely(!buf)) {
-		struct page *page;
-
-		page = mempool_alloc(&integrity_buf_pool, gfp);
-		if (zero_buffer)
-			memset(page_address(page), 0, len);
-		bvec_set_page(&bip->bip_vec[0], page, len, 0);
-		bip->bip_flags |= BIP_MEMPOOL;
-	} else {
-		bvec_set_page(&bip->bip_vec[0], virt_to_page(buf), len,
-				offset_in_page(buf));
-	}
-
-	bip->bip_vcnt = 1;
-	bip->bip_iter.bi_size = len;
-}
-
-void bio_integrity_free_buf(struct bio_integrity_payload *bip)
-{
-	struct bio_vec *bv = &bip->bip_vec[0];
-
-	if (bip->bip_flags & BIP_MEMPOOL)
-		mempool_free(bv->bv_page, &integrity_buf_pool);
-	else
-		kfree(bvec_virt(bv));
-}
-
-void bio_integrity_setup_default(struct bio *bio)
-{
-	struct blk_integrity *bi = blk_get_integrity(bio->bi_bdev->bd_disk);
-	struct bio_integrity_payload *bip = bio_integrity(bio);
-
-	bip_set_seed(bip, bio->bi_iter.bi_sector);
-
-	if (bi->csum_type) {
-		bip->bip_flags |= BIP_CHECK_GUARD;
-		if (bi->csum_type == BLK_INTEGRITY_CSUM_IP)
-			bip->bip_flags |= BIP_IP_CHECKSUM;
-	}
-	if (bi->flags & BLK_INTEGRITY_REF_TAG)
-		bip->bip_flags |= BIP_CHECK_REFTAG;
+	flush_workqueue(kintegrityd_wq);
 }
 
 /**
@@ -124,21 +30,19 @@ void bio_integrity_setup_default(struct bio *bio)
  */
 void bio_integrity_free(struct bio *bio)
 {
-	kfree(bio_integrity(bio));
+	struct bio_integrity_payload *bip = bio_integrity(bio);
+	struct bio_set *bs = bio->bi_pool;
+
+	if (bs && mempool_initialized(&bs->bio_integrity_pool)) {
+		if (bip->bip_vec)
+			bvec_free(&bs->bvec_integrity_pool, bip->bip_vec,
+				  bip->bip_max_vcnt);
+		mempool_free(bip, &bs->bio_integrity_pool);
+	} else {
+		kfree(bip);
+	}
 	bio->bi_integrity = NULL;
 	bio->bi_opf &= ~REQ_INTEGRITY;
-}
-
-void bio_integrity_init(struct bio *bio, struct bio_integrity_payload *bip,
-		struct bio_vec *bvecs, unsigned int nr_vecs)
-{
-	memset(bip, 0, sizeof(*bip));
-	bip->bip_max_vcnt = nr_vecs;
-	if (nr_vecs)
-		bip->bip_vec = bvecs;
-
-	bio->bi_integrity = bip;
-	bio->bi_opf |= REQ_INTEGRITY;
 }
 
 /**
@@ -155,16 +59,48 @@ struct bio_integrity_payload *bio_integrity_alloc(struct bio *bio,
 						  gfp_t gfp_mask,
 						  unsigned int nr_vecs)
 {
-	struct bio_integrity_alloc *bia;
+	struct bio_integrity_payload *bip;
+	struct bio_set *bs = bio->bi_pool;
+	unsigned inline_vecs;
 
 	if (WARN_ON_ONCE(bio_has_crypt_ctx(bio)))
 		return ERR_PTR(-EOPNOTSUPP);
 
-	bia = kmalloc_flex(*bia, bvecs, nr_vecs, gfp_mask);
-	if (unlikely(!bia))
+	if (!bs || !mempool_initialized(&bs->bio_integrity_pool)) {
+		bip = kmalloc(struct_size(bip, bip_inline_vecs, nr_vecs), gfp_mask);
+		inline_vecs = nr_vecs;
+	} else {
+		bip = mempool_alloc(&bs->bio_integrity_pool, gfp_mask);
+		inline_vecs = BIO_INLINE_VECS;
+	}
+
+	if (unlikely(!bip))
 		return ERR_PTR(-ENOMEM);
-	bio_integrity_init(bio, &bia->bip, bia->bvecs, nr_vecs);
-	return &bia->bip;
+
+	memset(bip, 0, sizeof(*bip));
+
+	/* always report as many vecs as asked explicitly, not inline vecs */
+	bip->bip_max_vcnt = nr_vecs;
+	if (nr_vecs > inline_vecs) {
+		bip->bip_vec = bvec_alloc(&bs->bvec_integrity_pool,
+					  &bip->bip_max_vcnt, gfp_mask);
+		if (!bip->bip_vec)
+			goto err;
+	} else if (nr_vecs) {
+		bip->bip_vec = bip->bip_inline_vecs;
+	}
+
+	bip->bip_bio = bio;
+	bio->bi_integrity = bip;
+	bio->bi_opf |= REQ_INTEGRITY;
+
+	return bip;
+err:
+	if (bs && mempool_initialized(&bs->bio_integrity_pool))
+		mempool_free(bip, &bs->bio_integrity_pool);
+	else
+		kfree(bip);
+	return ERR_PTR(-ENOMEM);
 }
 EXPORT_SYMBOL(bio_integrity_alloc);
 
@@ -229,11 +165,12 @@ int bio_integrity_add_page(struct bio *bio, struct page *page,
 
 	if (bip->bip_vcnt > 0) {
 		struct bio_vec *bv = &bip->bip_vec[bip->bip_vcnt - 1];
+		bool same_page = false;
 
 		if (!zone_device_pages_compatible(bv->bv_page, page))
 			return 0;
-		if (zone_device_pages_have_same_pgmap(bv->bv_page, page) &&
-		    bvec_try_merge_hw_page(q, bv, page, len, offset)) {
+		if (bvec_try_merge_hw_page(q, bv, page, len, offset,
+					   &same_page)) {
 			bip->bip_iter.bi_size += len;
 			return len;
 		}
@@ -384,7 +321,7 @@ int bio_integrity_map_user(struct bio *bio, struct iov_iter *iter)
 	if (nr_vecs > BIO_MAX_VECS)
 		return -E2BIG;
 	if (nr_vecs > UIO_FASTIOV) {
-		bvec = kzalloc_objs(*bvec, nr_vecs);
+		bvec = kcalloc(nr_vecs, sizeof(*bvec), GFP_KERNEL);
 		if (!bvec)
 			return -ENOMEM;
 		pages = NULL;
@@ -447,53 +384,142 @@ free_bvec:
 	return ret;
 }
 
-static void bio_uio_meta_to_bip(struct bio *bio, struct uio_meta *meta)
+/**
+ * bio_integrity_prep - Prepare bio for integrity I/O
+ * @bio:	bio to prepare
+ *
+ * Description:  Checks if the bio already has an integrity payload attached.
+ * If it does, the payload has been generated by another kernel subsystem,
+ * and we just pass it through. Otherwise allocates integrity payload.
+ * The bio must have data direction, target device and start sector set priot
+ * to calling.  In the WRITE case, integrity metadata will be generated using
+ * the block device's integrity function.  In the READ case, the buffer
+ * will be prepared for DMA and a suitable end_io handler set up.
+ */
+bool bio_integrity_prep(struct bio *bio)
 {
-	struct bio_integrity_payload *bip = bio_integrity(bio);
-
-	if (meta->flags & IO_INTEGRITY_CHK_GUARD)
-		bip->bip_flags |= BIP_CHECK_GUARD;
-	if (meta->flags & IO_INTEGRITY_CHK_APPTAG)
-		bip->bip_flags |= BIP_CHECK_APPTAG;
-	if (meta->flags & IO_INTEGRITY_CHK_REFTAG)
-		bip->bip_flags |= BIP_CHECK_REFTAG;
-
-	bip->app_tag = meta->app_tag;
-}
-
-int bio_integrity_map_iter(struct bio *bio, struct uio_meta *meta)
-{
+	struct bio_integrity_payload *bip;
 	struct blk_integrity *bi = blk_get_integrity(bio->bi_bdev->bd_disk);
-	unsigned int integrity_bytes;
-	int ret;
-	struct iov_iter it;
+	unsigned int len;
+	void *buf;
+	gfp_t gfp = GFP_NOIO;
 
 	if (!bi)
-		return -EINVAL;
-	/*
-	 * original meta iterator can be bigger.
-	 * process integrity info corresponding to current data buffer only.
-	 */
-	it = meta->iter;
-	integrity_bytes = bio_integrity_bytes(bi, bio_sectors(bio));
-	if (it.count < integrity_bytes)
-		return -EINVAL;
+		return true;
 
-	/* should fit into two bytes */
-	BUILD_BUG_ON(IO_INTEGRITY_VALID_FLAGS >= (1 << 16));
+	if (!bio_sectors(bio))
+		return true;
 
-	if (meta->flags && (meta->flags & ~IO_INTEGRITY_VALID_FLAGS))
-		return -EINVAL;
+	/* Already protected? */
+	if (bio_integrity(bio))
+		return true;
 
-	it.count = integrity_bytes;
-	ret = bio_integrity_map_user(bio, &it);
-	if (!ret) {
-		bio_uio_meta_to_bip(bio, meta);
-		bip_set_seed(bio_integrity(bio), meta->seed);
-		iov_iter_advance(&meta->iter, integrity_bytes);
-		meta->seed += bio_integrity_intervals(bi, bio_sectors(bio));
+	switch (bio_op(bio)) {
+	case REQ_OP_READ:
+		if (bi->flags & BLK_INTEGRITY_NOVERIFY)
+			return true;
+		break;
+	case REQ_OP_WRITE:
+		if (bi->flags & BLK_INTEGRITY_NOGENERATE)
+			return true;
+
+		/*
+		 * Zero the memory allocated to not leak uninitialized kernel
+		 * memory to disk for non-integrity metadata where nothing else
+		 * initializes the memory.
+		 */
+		if (bi->csum_type == BLK_INTEGRITY_CSUM_NONE)
+			gfp |= __GFP_ZERO;
+		break;
+	default:
+		return true;
 	}
-	return ret;
+
+	/* Allocate kernel buffer for protection data */
+	len = bio_integrity_bytes(bi, bio_sectors(bio));
+	buf = kmalloc(len, gfp);
+	if (unlikely(buf == NULL)) {
+		goto err_end_io;
+	}
+
+	bip = bio_integrity_alloc(bio, GFP_NOIO, 1);
+	if (IS_ERR(bip)) {
+		kfree(buf);
+		goto err_end_io;
+	}
+
+	bip->bip_flags |= BIP_BLOCK_INTEGRITY;
+	bip_set_seed(bip, bio->bi_iter.bi_sector);
+
+	if (bi->csum_type == BLK_INTEGRITY_CSUM_IP)
+		bip->bip_flags |= BIP_IP_CHECKSUM;
+
+	if (bio_integrity_add_page(bio, virt_to_page(buf), len,
+			offset_in_page(buf)) < len) {
+		printk(KERN_ERR "could not attach integrity payload\n");
+		goto err_end_io;
+	}
+
+	/* Auto-generate integrity metadata if this is a write */
+	if (bio_data_dir(bio) == WRITE)
+		blk_integrity_generate(bio);
+	else
+		bip->bio_iter = bio->bi_iter;
+	return true;
+
+err_end_io:
+	bio->bi_status = BLK_STS_RESOURCE;
+	bio_endio(bio);
+	return false;
+}
+EXPORT_SYMBOL(bio_integrity_prep);
+
+/**
+ * bio_integrity_verify_fn - Integrity I/O completion worker
+ * @work:	Work struct stored in bio to be verified
+ *
+ * Description: This workqueue function is called to complete a READ
+ * request.  The function verifies the transferred integrity metadata
+ * and then calls the original bio end_io function.
+ */
+static void bio_integrity_verify_fn(struct work_struct *work)
+{
+	struct bio_integrity_payload *bip =
+		container_of(work, struct bio_integrity_payload, bip_work);
+	struct bio *bio = bip->bip_bio;
+
+	blk_integrity_verify(bio);
+
+	kfree(bvec_virt(bip->bip_vec));
+	bio_integrity_free(bio);
+	bio_endio(bio);
+}
+
+/**
+ * __bio_integrity_endio - Integrity I/O completion function
+ * @bio:	Protected bio
+ *
+ * Description: Completion for integrity I/O
+ *
+ * Normally I/O completion is done in interrupt context.  However,
+ * verifying I/O integrity is a time-consuming task which must be run
+ * in process context.	This function postpones completion
+ * accordingly.
+ */
+bool __bio_integrity_endio(struct bio *bio)
+{
+	struct blk_integrity *bi = blk_get_integrity(bio->bi_bdev->bd_disk);
+	struct bio_integrity_payload *bip = bio_integrity(bio);
+
+	if (bio_op(bio) == REQ_OP_READ && !bio->bi_status && bi->csum_type) {
+		INIT_WORK(&bip->bip_work, bio_integrity_verify_fn);
+		queue_work(kintegrityd_wq, &bip->bip_work);
+		return false;
+	}
+
+	kfree(bvec_virt(bip->bip_vec));
+	bio_integrity_free(bio);
+	return true;
 }
 
 /**
@@ -552,17 +578,48 @@ int bio_integrity_clone(struct bio *bio, struct bio *bio_src,
 
 	bip->bip_vec = bip_src->bip_vec;
 	bip->bip_iter = bip_src->bip_iter;
-	bip->bip_flags = bip_src->bip_flags & BIP_CLONE_FLAGS;
-	bip->app_tag = bip_src->app_tag;
+	bip->bip_flags = bip_src->bip_flags & ~BIP_BLOCK_INTEGRITY;
 
 	return 0;
 }
 
-static int __init bio_integrity_initfn(void)
+int bioset_integrity_create(struct bio_set *bs, int pool_size)
 {
-	if (mempool_init_page_pool(&integrity_buf_pool, BIO_POOL_SIZE,
-			get_order(BLK_INTEGRITY_MAX_SIZE)))
-		panic("bio: can't create integrity buf pool\n");
+	if (mempool_initialized(&bs->bio_integrity_pool))
+		return 0;
+
+	if (mempool_init_slab_pool(&bs->bio_integrity_pool,
+				   pool_size, bip_slab))
+		return -1;
+
+	if (biovec_init_pool(&bs->bvec_integrity_pool, pool_size)) {
+		mempool_exit(&bs->bio_integrity_pool);
+		return -1;
+	}
+
 	return 0;
 }
-subsys_initcall(bio_integrity_initfn);
+EXPORT_SYMBOL(bioset_integrity_create);
+
+void bioset_integrity_free(struct bio_set *bs)
+{
+	mempool_exit(&bs->bio_integrity_pool);
+	mempool_exit(&bs->bvec_integrity_pool);
+}
+
+void __init bio_integrity_init(void)
+{
+	/*
+	 * kintegrityd won't block much but may burn a lot of CPU cycles.
+	 * Make it highpri CPU intensive wq with max concurrency of 1.
+	 */
+	kintegrityd_wq = alloc_workqueue("kintegrityd", WQ_MEM_RECLAIM |
+					 WQ_HIGHPRI | WQ_CPU_INTENSIVE, 1);
+	if (!kintegrityd_wq)
+		panic("Failed to create kintegrityd\n");
+
+	bip_slab = kmem_cache_create("bio_integrity_payload",
+				     sizeof(struct bio_integrity_payload) +
+				     sizeof(struct bio_vec) * BIO_INLINE_VECS,
+				     0, SLAB_HWCACHE_ALIGN|SLAB_PANIC, NULL);
+}

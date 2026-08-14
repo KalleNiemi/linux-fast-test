@@ -36,7 +36,7 @@
 
 #define DMABUF_ENQUEUE_TIMEOUT_MS 5000
 
-MODULE_IMPORT_NS("DMA_BUF");
+MODULE_IMPORT_NS(DMA_BUF);
 
 struct iio_dmabuf_priv {
 	struct list_head entry;
@@ -750,7 +750,7 @@ static int iio_storage_bytes_for_si(struct iio_dev *indio_dev,
 	bytes = scan_type->storagebits / 8;
 
 	if (scan_type->repeat > 1)
-		bytes *= roundup_pow_of_two(scan_type->repeat);
+		bytes *= scan_type->repeat;
 
 	return bytes;
 }
@@ -764,9 +764,7 @@ static int iio_storage_bytes_for_timestamp(struct iio_dev *indio_dev)
 }
 
 static int iio_compute_scan_bytes(struct iio_dev *indio_dev,
-				  const unsigned long *mask, bool timestamp,
-				  unsigned int *scan_bytes,
-				  unsigned int *timestamp_offset)
+				  const unsigned long *mask, bool timestamp)
 {
 	unsigned int bytes = 0;
 	int length, i, largest = 0;
@@ -788,17 +786,12 @@ static int iio_compute_scan_bytes(struct iio_dev *indio_dev,
 			return length;
 
 		bytes = ALIGN(bytes, length);
-
-		if (timestamp_offset)
-			*timestamp_offset = bytes;
-
 		bytes += length;
 		largest = max(largest, length);
 	}
 
-	*scan_bytes = ALIGN(bytes, largest);
-
-	return 0;
+	bytes = ALIGN(bytes, largest);
+	return bytes;
 }
 
 static void iio_buffer_activate(struct iio_dev *indio_dev,
@@ -843,23 +836,18 @@ static int iio_buffer_disable(struct iio_buffer *buffer,
 	return buffer->access->disable(buffer, indio_dev);
 }
 
-static int iio_buffer_update_bytes_per_datum(struct iio_dev *indio_dev,
-					     struct iio_buffer *buffer)
+static void iio_buffer_update_bytes_per_datum(struct iio_dev *indio_dev,
+					      struct iio_buffer *buffer)
 {
 	unsigned int bytes;
-	int ret;
 
 	if (!buffer->access->set_bytes_per_datum)
-		return 0;
+		return;
 
-	ret = iio_compute_scan_bytes(indio_dev, buffer->scan_mask,
-				     buffer->scan_timestamp, &bytes, NULL);
-	if (ret)
-		return ret;
+	bytes = iio_compute_scan_bytes(indio_dev, buffer->scan_mask,
+				       buffer->scan_timestamp);
 
 	buffer->access->set_bytes_per_datum(buffer, bytes);
-
-	return 0;
 }
 
 static int iio_buffer_request_update(struct iio_dev *indio_dev,
@@ -867,10 +855,7 @@ static int iio_buffer_request_update(struct iio_dev *indio_dev,
 {
 	int ret;
 
-	ret = iio_buffer_update_bytes_per_datum(indio_dev, buffer);
-	if (ret)
-		return ret;
-
+	iio_buffer_update_bytes_per_datum(indio_dev, buffer);
 	if (buffer->access->request_update) {
 		ret = buffer->access->request_update(buffer);
 		if (ret) {
@@ -897,7 +882,6 @@ struct iio_device_config {
 	unsigned int watermark;
 	const unsigned long *scan_mask;
 	unsigned int scan_bytes;
-	unsigned int scan_timestamp_offset;
 	bool scan_timestamp;
 };
 
@@ -914,7 +898,6 @@ static int iio_verify_update(struct iio_dev *indio_dev,
 	struct iio_buffer *buffer;
 	bool scan_timestamp;
 	unsigned int modes;
-	int ret;
 
 	if (insert_buffer &&
 	    bitmap_empty(insert_buffer->scan_mask, masklength)) {
@@ -1002,12 +985,8 @@ static int iio_verify_update(struct iio_dev *indio_dev,
 		scan_mask = compound_mask;
 	}
 
-	ret = iio_compute_scan_bytes(indio_dev, scan_mask, scan_timestamp,
-				     &config->scan_bytes,
-				     &config->scan_timestamp_offset);
-	if (ret)
-		return ret;
-
+	config->scan_bytes = iio_compute_scan_bytes(indio_dev,
+						    scan_mask, scan_timestamp);
 	config->scan_mask = scan_mask;
 	config->scan_timestamp = scan_timestamp;
 
@@ -1047,7 +1026,7 @@ static int iio_buffer_add_demux(struct iio_buffer *buffer,
 	    (*p)->to + (*p)->length == out_loc) {
 		(*p)->length += length;
 	} else {
-		*p = kmalloc_obj(**p);
+		*p = kmalloc(sizeof(**p), GFP_KERNEL);
 		if (!(*p))
 			return -ENOMEM;
 		(*p)->from = in_loc;
@@ -1160,9 +1139,8 @@ static int iio_enable_buffers(struct iio_dev *indio_dev,
 	int ret;
 
 	indio_dev->active_scan_mask = config->scan_mask;
-	ACCESS_PRIVATE(indio_dev, scan_timestamp) = config->scan_timestamp;
+	indio_dev->scan_timestamp = config->scan_timestamp;
 	indio_dev->scan_bytes = config->scan_bytes;
-	ACCESS_PRIVATE(indio_dev, scan_timestamp_offset) = config->scan_timestamp_offset;
 	iio_dev_opaque->currentmode = config->mode;
 
 	iio_update_demux(indio_dev);
@@ -1502,7 +1480,7 @@ static struct attribute *iio_buffer_wrap_attr(struct iio_buffer *buffer,
 	struct device_attribute *dattr = to_dev_attr(attr);
 	struct iio_dev_attr *iio_attr;
 
-	iio_attr = kzalloc_obj(*iio_attr);
+	iio_attr = kzalloc(sizeof(*iio_attr), GFP_KERNEL);
 	if (!iio_attr)
 		return NULL;
 
@@ -1531,7 +1509,7 @@ static int iio_buffer_register_legacy_sysfs_groups(struct iio_dev *indio_dev,
 	struct attribute **attrs;
 	int ret;
 
-	attrs = kzalloc_objs(*attrs, buffer_attrcount + 1);
+	attrs = kcalloc(buffer_attrcount + 1, sizeof(*attrs), GFP_KERNEL);
 	if (!attrs)
 		return -ENOMEM;
 
@@ -1545,7 +1523,7 @@ static int iio_buffer_register_legacy_sysfs_groups(struct iio_dev *indio_dev,
 	if (ret)
 		goto error_free_buffer_attrs;
 
-	attrs = kzalloc_objs(*attrs, scan_el_attrcount + 1);
+	attrs = kcalloc(scan_el_attrcount + 1, sizeof(*attrs), GFP_KERNEL);
 	if (!attrs) {
 		ret = -ENOMEM;
 		goto error_free_buffer_attrs;
@@ -1587,7 +1565,9 @@ static void iio_buffer_dmabuf_release(struct kref *ref)
 	struct iio_buffer *buffer = priv->buffer;
 	struct dma_buf *dmabuf = attach->dmabuf;
 
-	dma_buf_unmap_attachment_unlocked(attach, priv->sgt, priv->dir);
+	dma_resv_lock(dmabuf->resv, NULL);
+	dma_buf_unmap_attachment(attach, priv->sgt, priv->dir);
+	dma_resv_unlock(dmabuf->resv);
 
 	buffer->access->detach_dmabuf(buffer, priv->block);
 
@@ -1698,7 +1678,7 @@ static int iio_buffer_attach_dmabuf(struct iio_dev_buffer_pair *ib,
 	if (copy_from_user(&fd, user_fd, sizeof(fd)))
 		return -EFAULT;
 
-	priv = kzalloc_obj(*priv);
+	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
 
@@ -1886,7 +1866,7 @@ static int iio_buffer_enqueue_dmabuf(struct iio_dev_buffer_pair *ib,
 
 	priv = attach->importer_priv;
 
-	fence = kmalloc_obj(*fence);
+	fence = kmalloc(sizeof(*fence), GFP_KERNEL);
 	if (!fence) {
 		ret = -ENOMEM;
 		goto err_attachment_put;
@@ -2060,7 +2040,7 @@ static long iio_device_buffer_getfd(struct iio_dev *indio_dev, unsigned long arg
 		goto error_iio_dev_put;
 	}
 
-	ib = kzalloc_obj(*ib);
+	ib = kzalloc(sizeof(*ib), GFP_KERNEL);
 	if (!ib) {
 		ret = -ENOMEM;
 		goto error_clear_busy_bit;
@@ -2207,7 +2187,7 @@ static int __iio_buffer_alloc_sysfs_and_mask(struct iio_buffer *buffer,
 	}
 
 	attrn = buffer_attrcount + scan_el_attrcount;
-	attr = kzalloc_objs(*attr, attrn + 1);
+	attr = kcalloc(attrn + 1, sizeof(*attr), GFP_KERNEL);
 	if (!attr) {
 		ret = -ENOMEM;
 		goto error_free_scan_mask;
@@ -2406,9 +2386,6 @@ static int iio_push_to_buffer(struct iio_buffer *buffer, const void *data)
  * iio_push_to_buffers() - push to a registered buffer.
  * @indio_dev:		iio_dev structure for device.
  * @data:		Full scan.
- *
- * Context: Any context.
- * Return: 0 on success, negative error code on failure.
  */
 int iio_push_to_buffers(struct iio_dev *indio_dev, const void *data)
 {
@@ -2438,18 +2415,13 @@ EXPORT_SYMBOL_GPL(iio_push_to_buffers);
  * not require space for the timestamp, or 8 byte alignment of data.
  * It does however require an allocation on first call and additional
  * copies on all calls, so should be avoided if possible.
- *
- * Context: May sleep.
- * Return: 0 on success, negative error code on failure.
  */
 int iio_push_to_buffers_with_ts_unaligned(struct iio_dev *indio_dev,
 					  const void *data,
 					  size_t data_sz,
-					  s64 timestamp)
+					  int64_t timestamp)
 {
 	struct iio_dev_opaque *iio_dev_opaque = to_iio_dev_opaque(indio_dev);
-
-	might_sleep();
 
 	/*
 	 * Conservative estimate - we can always safely copy the minimum

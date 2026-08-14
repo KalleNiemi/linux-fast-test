@@ -12,15 +12,31 @@
 
 #include <linux/preempt.h>
 #include <linux/time64.h>
-#include <asm/tod_types.h>
 #include <asm/lowcore.h>
-#include <asm/machine.h>
-#include <asm/asm.h>
 
 /* The value of the TOD clock for 1.1.1970. */
 #define TOD_UNIX_EPOCH 0x7d91048bca000000ULL
 
 extern u64 clock_comparator_max;
+
+union tod_clock {
+	__uint128_t val;
+	struct {
+		__uint128_t ei	:  8; /* epoch index */
+		__uint128_t tod : 64; /* bits 0-63 of tod clock */
+		__uint128_t	: 40;
+		__uint128_t pf	: 16; /* programmable field */
+	};
+	struct {
+		__uint128_t eitod : 72; /* epoch index + bits 0-63 tod clock */
+		__uint128_t	  : 56;
+	};
+	struct {
+		__uint128_t us	: 60; /* micro-seconds */
+		__uint128_t sus	: 12; /* sub-microseconds */
+		__uint128_t	: 56;
+	};
+} __packed;
 
 /* Inline functions for clock register access. */
 static inline int set_tod_clock(__u64 time)
@@ -28,12 +44,11 @@ static inline int set_tod_clock(__u64 time)
 	int cc;
 
 	asm volatile(
-		"	sck	%[time]\n"
-		CC_IPM(cc)
-		: CC_OUT(cc, cc)
-		: [time] "Q" (time)
-		: CC_CLOBBER);
-	return CC_TRANSFORM(cc);
+		"   sck   %1\n"
+		"   ipm   %0\n"
+		"   srl   %0,28\n"
+		: "=d" (cc) : "Q" (time) : "cc");
+	return cc;
 }
 
 static inline int store_tod_clock_ext_cc(union tod_clock *clk)
@@ -41,12 +56,11 @@ static inline int store_tod_clock_ext_cc(union tod_clock *clk)
 	int cc;
 
 	asm volatile(
-		"	stcke	%[clk]\n"
-		CC_IPM(cc)
-		: CC_OUT(cc, cc), [clk] "=Q" (*clk)
-		:
-		: CC_CLOBBER);
-	return CC_TRANSFORM(cc);
+		"   stcke  %1\n"
+		"   ipm   %0\n"
+		"   srl   %0,28\n"
+		: "=d" (cc), "=Q" (*clk) : : "cc");
+	return cc;
 }
 
 static __always_inline void store_tod_clock_ext(union tod_clock *tod)
@@ -63,7 +77,7 @@ static inline void set_tod_programmable_field(u16 val)
 {
 	asm volatile(
 		"	lgr	0,%[val]\n"
-		"	sckpf"
+		"	sckpf\n"
 		:
 		: [val] "d" ((unsigned long)val)
 		: "0");
@@ -79,7 +93,6 @@ extern unsigned char ptff_function_mask[16];
 #define PTFF_QAF	0x00	/* query available functions */
 #define PTFF_QTO	0x01	/* query tod offset */
 #define PTFF_QSI	0x02	/* query steering information */
-#define PTFF_QPT	0x03	/* query physical clock */
 #define PTFF_QUI	0x04	/* query UTC information */
 #define PTFF_ATO	0x40	/* adjust tod offset */
 #define PTFF_STO	0x41	/* set tod offset */
@@ -136,11 +149,12 @@ struct ptff_qui {
 		"	lgr	0,%[reg0]\n"				\
 		"	lgr	1,%[reg1]\n"				\
 		"	ptff\n"						\
-		CC_IPM(rc)						\
-		: CC_OUT(rc, rc), "+m" (*(struct addrtype *)reg1)	\
+		"	ipm	%[rc]\n"				\
+		"	srl	%[rc],28\n"				\
+		: [rc] "=&d" (rc), "+m" (*(struct addrtype *)reg1)	\
 		: [reg0] "d" (reg0), [reg1] "d" (reg1)			\
-		: CC_CLOBBER_LIST("0", "1"));				\
-	CC_TRANSFORM(rc);						\
+		: "cc", "0", "1");					\
+	rc;								\
 })
 
 static inline unsigned long local_tick_disable(void)
@@ -235,11 +249,6 @@ static __always_inline unsigned long tod_to_ns(unsigned long todval)
 	return ((todval >> 9) * 125) + (((todval & 0x1ff) * 125) >> 9);
 }
 
-static __always_inline u128 eitod_to_ns(u128 todval)
-{
-	return (todval * 125) >> 9;
-}
-
 /**
  * tod_after - compare two 64 bit TOD values
  * @a: first 64 bit TOD timestamp
@@ -249,7 +258,7 @@ static __always_inline u128 eitod_to_ns(u128 todval)
  */
 static inline int tod_after(unsigned long a, unsigned long b)
 {
-	if (machine_has_scc())
+	if (MACHINE_HAS_SCC)
 		return (long) a > (long) b;
 	return a > b;
 }
@@ -263,7 +272,7 @@ static inline int tod_after(unsigned long a, unsigned long b)
  */
 static inline int tod_after_eq(unsigned long a, unsigned long b)
 {
-	if (machine_has_scc())
+	if (MACHINE_HAS_SCC)
 		return (long) a >= (long) b;
 	return a >= b;
 }

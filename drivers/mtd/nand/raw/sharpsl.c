@@ -132,7 +132,7 @@ static int sharpsl_nand_probe(struct platform_device *pdev)
 	}
 
 	/* Allocate memory for MTD device structure and private data */
-	sharpsl = kzalloc_obj(struct sharpsl_nand);
+	sharpsl = kzalloc(sizeof(struct sharpsl_nand), GFP_KERNEL);
 	if (!sharpsl)
 		return -ENOMEM;
 
@@ -234,7 +234,7 @@ static struct platform_driver sharpsl_nand_driver = {
 		.name	= "sharpsl-nand",
 	},
 	.probe		= sharpsl_nand_probe,
-	.remove		= sharpsl_nand_remove,
+	.remove_new	= sharpsl_nand_remove,
 };
 
 module_platform_driver(sharpsl_nand_driver);

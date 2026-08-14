@@ -160,7 +160,6 @@ struct dlm_proto_ops {
 	bool try_new_addr;
 	const char *name;
 	int proto;
-	int how;
 
 	void (*sockopts)(struct socket *sock);
 	int (*bind)(struct socket *sock);
@@ -271,8 +270,7 @@ static struct connection *__find_con(int nodeid, int r)
 {
 	struct connection *con;
 
-	hlist_for_each_entry_srcu(con, &connection_hash[r], list,
-			srcu_read_lock_held(&connections_srcu)) {
+	hlist_for_each_entry_rcu(con, &connection_hash[r], list) {
 		if (con->nodeid == nodeid)
 			return con;
 	}
@@ -306,7 +304,7 @@ static struct connection *nodeid2con(int nodeid, gfp_t alloc)
 	if (con || !alloc)
 		return con;
 
-	con = kzalloc_obj(*con, alloc);
+	con = kzalloc(sizeof(*con), alloc);
 	if (!con)
 		return NULL;
 
@@ -427,8 +425,7 @@ static int addr_to_nodeid(struct sockaddr_storage *addr, int *nodeid,
 
 	idx = srcu_read_lock(&connections_srcu);
 	for (i = 0; i < CONN_HASH_SIZE; i++) {
-		hlist_for_each_entry_srcu(con, &connection_hash[i], list,
-				srcu_read_lock_held(&connections_srcu)) {
+		hlist_for_each_entry_rcu(con, &connection_hash[i], list) {
 			WARN_ON_ONCE(!con->addr_count);
 
 			spin_lock(&con->addrs_lock);
@@ -536,7 +533,7 @@ static void lowcomms_state_change(struct sock *sk)
 	/* SCTP layer is not calling sk_data_ready when the connection
 	 * is done, so we catch the signal through here.
 	 */
-	if (sk->sk_shutdown & RCV_SHUTDOWN)
+	if (sk->sk_shutdown == RCV_SHUTDOWN)
 		lowcomms_data_ready(sk);
 }
 
@@ -664,18 +661,18 @@ static void add_sock(struct socket *sock, struct connection *con)
 
 /* Add the port number to an IPv6 or 4 sockaddr and return the address
    length */
-static void make_sockaddr(struct sockaddr_storage *saddr, __be16 port,
+static void make_sockaddr(struct sockaddr_storage *saddr, uint16_t port,
 			  int *addr_len)
 {
 	saddr->ss_family =  dlm_local_addr[0].ss_family;
 	if (saddr->ss_family == AF_INET) {
 		struct sockaddr_in *in4_addr = (struct sockaddr_in *)saddr;
-		in4_addr->sin_port = port;
+		in4_addr->sin_port = cpu_to_be16(port);
 		*addr_len = sizeof(struct sockaddr_in);
 		memset(&in4_addr->sin_zero, 0, sizeof(in4_addr->sin_zero));
 	} else {
 		struct sockaddr_in6 *in6_addr = (struct sockaddr_in6 *)saddr;
-		in6_addr->sin6_port = port;
+		in6_addr->sin6_port = cpu_to_be16(port);
 		*addr_len = sizeof(struct sockaddr_in6);
 	}
 	memset((char *)saddr + *addr_len, 0, sizeof(struct sockaddr_storage) - *addr_len);
@@ -813,7 +810,7 @@ static void shutdown_connection(struct connection *con, bool and_other)
 		return;
 	}
 
-	ret = kernel_sock_shutdown(con->sock, dlm_proto_ops->how);
+	ret = kernel_sock_shutdown(con->sock, SHUT_WR);
 	up_read(&con->sock_lock);
 	if (ret) {
 		log_print("Connection %p failed to shutdown: %d will force close",
@@ -840,7 +837,7 @@ static struct processqueue_entry *new_processqueue_entry(int nodeid,
 {
 	struct processqueue_entry *pentry;
 
-	pentry = kmalloc_obj(*pentry, GFP_NOFS);
+	pentry = kmalloc(sizeof(*pentry), GFP_NOFS);
 	if (!pentry)
 		return NULL;
 
@@ -1054,7 +1051,7 @@ static int accept_from_sock(void)
 		struct connection *othercon = newcon->othercon;
 
 		if (!othercon) {
-			othercon = kzalloc_obj(*othercon, GFP_NOFS);
+			othercon = kzalloc(sizeof(*othercon), GFP_NOFS);
 			if (!othercon) {
 				log_print("failed to allocate incoming socket");
 				up_write(&newcon->sock_lock);
@@ -1125,10 +1122,10 @@ static void writequeue_entry_complete(struct writequeue_entry *e, int completed)
 /*
  * sctp_bind_addrs - bind a SCTP socket to all our addresses
  */
-static int sctp_bind_addrs(struct socket *sock, __be16 port)
+static int sctp_bind_addrs(struct socket *sock, uint16_t port)
 {
 	struct sockaddr_storage localaddr;
-	struct sockaddr_unsized *addr = (struct sockaddr_unsized *)&localaddr;
+	struct sockaddr *addr = (struct sockaddr *)&localaddr;
 	int i, addr_len, result = 0;
 
 	for (i = 0; i < dlm_local_count; i++) {
@@ -1601,7 +1598,7 @@ static int dlm_connect(struct connection *con)
 
 	log_print_ratelimited("connecting to %d", con->nodeid);
 	make_sockaddr(&addr, dlm_config.ci_tcp_port, &addr_len);
-	result = kernel_connect(sock, (struct sockaddr_unsized *)&addr, addr_len, 0);
+	result = kernel_connect(sock, (struct sockaddr *)&addr, addr_len, 0);
 	switch (result) {
 	case -EINPROGRESS:
 		/* not an error */
@@ -1705,7 +1702,7 @@ static int work_start(void)
 		return -ENOMEM;
 	}
 
-	process_workqueue = alloc_workqueue("dlm_process", WQ_HIGHPRI | WQ_BH | WQ_PERCPU, 0);
+	process_workqueue = alloc_workqueue("dlm_process", WQ_HIGHPRI | WQ_BH, 0);
 	if (!process_workqueue) {
 		log_print("can't start dlm_process");
 		destroy_workqueue(io_workqueue);
@@ -1731,8 +1728,7 @@ void dlm_lowcomms_shutdown(void)
 
 	idx = srcu_read_lock(&connections_srcu);
 	for (i = 0; i < CONN_HASH_SIZE; i++) {
-		hlist_for_each_entry_srcu(con, &connection_hash[i], list,
-				srcu_read_lock_held(&connections_srcu)) {
+		hlist_for_each_entry_rcu(con, &connection_hash[i], list) {
 			shutdown_connection(con, true);
 			stop_connection_io(con);
 			flush_workqueue(process_workqueue);
@@ -1816,7 +1812,7 @@ static int dlm_tcp_bind(struct socket *sock)
 	memcpy(&src_addr, &dlm_local_addr[0], sizeof(src_addr));
 	make_sockaddr(&src_addr, 0, &addr_len);
 
-	result = kernel_bind(sock, (struct sockaddr_unsized *)&src_addr,
+	result = kernel_bind(sock, (struct sockaddr *)&src_addr,
 			     addr_len);
 	if (result < 0) {
 		/* This *may* not indicate a critical error */
@@ -1855,14 +1851,13 @@ static int dlm_tcp_listen_bind(struct socket *sock)
 
 	/* Bind to our port */
 	make_sockaddr(&dlm_local_addr[0], dlm_config.ci_tcp_port, &addr_len);
-	return kernel_bind(sock, (struct sockaddr_unsized *)&dlm_local_addr[0],
+	return kernel_bind(sock, (struct sockaddr *)&dlm_local_addr[0],
 			   addr_len);
 }
 
 static const struct dlm_proto_ops dlm_tcp_ops = {
 	.name = "TCP",
 	.proto = IPPROTO_TCP,
-	.how = SHUT_WR,
 	.sockopts = dlm_tcp_sockopts,
 	.bind = dlm_tcp_bind,
 	.listen_validate = dlm_tcp_listen_validate,
@@ -1901,7 +1896,6 @@ static void dlm_sctp_sockopts(struct socket *sock)
 static const struct dlm_proto_ops dlm_sctp_ops = {
 	.name = "SCTP",
 	.proto = IPPROTO_SCTP,
-	.how = SHUT_RDWR,
 	.try_new_addr = true,
 	.sockopts = dlm_sctp_sockopts,
 	.bind = dlm_sctp_bind,
@@ -1971,8 +1965,7 @@ void dlm_lowcomms_exit(void)
 
 	idx = srcu_read_lock(&connections_srcu);
 	for (i = 0; i < CONN_HASH_SIZE; i++) {
-		hlist_for_each_entry_srcu(con, &connection_hash[i], list,
-				srcu_read_lock_held(&connections_srcu)) {
+		hlist_for_each_entry_rcu(con, &connection_hash[i], list) {
 			spin_lock(&connections_lock);
 			hlist_del_rcu(&con->list);
 			spin_unlock(&connections_lock);

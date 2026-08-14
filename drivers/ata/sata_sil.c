@@ -112,13 +112,14 @@ static void sil_thaw(struct ata_port *ap);
 
 
 static const struct pci_device_id sil_pci_tbl[] = {
-	{ PCI_VDEVICE(CMD, 0x3112), .driver_data = sil_3112 },
-	{ PCI_VDEVICE(CMD, 0x0240), .driver_data = sil_3112 },
-	{ PCI_VDEVICE(CMD, 0x3512), .driver_data = sil_3512 },
-	{ PCI_VDEVICE(CMD, 0x3114), .driver_data = sil_3114 },
-	{ PCI_VDEVICE(ATI, 0x436e), .driver_data = sil_3112 },
-	{ PCI_VDEVICE(ATI, 0x4379), .driver_data = sil_3112_no_sata_irq },
-	{ PCI_VDEVICE(ATI, 0x437a), .driver_data = sil_3112_no_sata_irq },
+	{ PCI_VDEVICE(CMD, 0x3112), sil_3112 },
+	{ PCI_VDEVICE(CMD, 0x0240), sil_3112 },
+	{ PCI_VDEVICE(CMD, 0x3512), sil_3512 },
+	{ PCI_VDEVICE(CMD, 0x3114), sil_3114 },
+	{ PCI_VDEVICE(ATI, 0x436e), sil_3112 },
+	{ PCI_VDEVICE(ATI, 0x4379), sil_3112_no_sata_irq },
+	{ PCI_VDEVICE(ATI, 0x437a), sil_3112_no_sata_irq },
+
 	{ }	/* terminate list */
 };
 
@@ -350,7 +351,7 @@ static int sil_set_mode(struct ata_link *link, struct ata_device **r_failed)
 	u32 tmp, dev_mode[2] = { };
 	int rc;
 
-	rc = ata_set_mode(link, r_failed);
+	rc = ata_do_set_mode(link, r_failed);
 	if (rc)
 		return rc;
 

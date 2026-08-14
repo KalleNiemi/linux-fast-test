@@ -3,6 +3,17 @@
  * Support for Medifield PNW Camera Imaging ISP subsystem.
  *
  * Copyright (c) 2010 Intel Corporation. All Rights Reserved.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License version
+ * 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ *
  */
 #include <linux/module.h>
 #include <linux/uaccess.h>
@@ -161,6 +172,13 @@ static int isp_subdev_subscribe_event(struct v4l2_subdev *sd,
 	return v4l2_event_subscribe(fh, sub, 16, NULL);
 }
 
+static int isp_subdev_unsubscribe_event(struct v4l2_subdev *sd,
+					struct v4l2_fh *fh,
+					struct v4l2_event_subscription *sub)
+{
+	return v4l2_event_unsubscribe(fh, sub);
+}
+
 /*
  * isp_subdev_enum_mbus_code - Handle pixel format enumeration
  * @sd: pointer to v4l2 subdev structure
@@ -180,8 +198,8 @@ static int isp_subdev_enum_mbus_code(struct v4l2_subdev *sd,
 	return 0;
 }
 
-static int isp_subdev_validate_rect(struct v4l2_subdev *sd, u32 pad,
-				    u32 target)
+static int isp_subdev_validate_rect(struct v4l2_subdev *sd, uint32_t pad,
+				    uint32_t target)
 {
 	switch (pad) {
 	case ATOMISP_SUBDEV_PAD_SINK:
@@ -203,8 +221,8 @@ static int isp_subdev_validate_rect(struct v4l2_subdev *sd, u32 pad,
 
 struct v4l2_rect *atomisp_subdev_get_rect(struct v4l2_subdev *sd,
 	struct v4l2_subdev_state *sd_state,
-	u32 which, u32 pad,
-	u32 target)
+	u32 which, uint32_t pad,
+	uint32_t target)
 {
 	struct atomisp_sub_device *isp_sd = v4l2_get_subdevdata(sd);
 
@@ -229,8 +247,8 @@ struct v4l2_rect *atomisp_subdev_get_rect(struct v4l2_subdev *sd,
 
 struct v4l2_mbus_framefmt
 *atomisp_subdev_get_ffmt(struct v4l2_subdev *sd,
-			 struct v4l2_subdev_state *sd_state, u32 which,
-			 u32 pad)
+			 struct v4l2_subdev_state *sd_state, uint32_t which,
+			 uint32_t pad)
 {
 	struct atomisp_sub_device *isp_sd = v4l2_get_subdevdata(sd);
 
@@ -242,7 +260,7 @@ struct v4l2_mbus_framefmt
 
 static void isp_get_fmt_rect(struct v4l2_subdev *sd,
 			     struct v4l2_subdev_state *sd_state,
-			     u32 which,
+			     uint32_t which,
 			     struct v4l2_mbus_framefmt **ffmt,
 			     struct v4l2_rect *crop[ATOMISP_SUBDEV_PADS_NUM],
 			     struct v4l2_rect *comp[ATOMISP_SUBDEV_PADS_NUM])
@@ -291,7 +309,7 @@ static const char *atomisp_pad_str(unsigned int pad)
 
 int atomisp_subdev_set_selection(struct v4l2_subdev *sd,
 				 struct v4l2_subdev_state *sd_state,
-				 u32 which, u32 pad, u32 target,
+				 u32 which, uint32_t pad, uint32_t target,
 				 u32 flags, struct v4l2_rect *r)
 {
 	struct atomisp_sub_device *isp_sd = v4l2_get_subdevdata(sd);
@@ -467,7 +485,7 @@ static int isp_subdev_set_selection(struct v4l2_subdev *sd,
 
 void atomisp_subdev_set_ffmt(struct v4l2_subdev *sd,
 			     struct v4l2_subdev_state *sd_state,
-			     u32 which,
+			     uint32_t which,
 			     u32 pad, struct v4l2_mbus_framefmt *ffmt)
 {
 	struct atomisp_sub_device *isp_sd = v4l2_get_subdevdata(sd);
@@ -568,7 +586,7 @@ static int isp_subdev_set_format(struct v4l2_subdev *sd,
 static const struct v4l2_subdev_core_ops isp_subdev_v4l2_core_ops = {
 	.ioctl = isp_subdev_ioctl,
 	.subscribe_event = isp_subdev_subscribe_event,
-	.unsubscribe_event = v4l2_event_subdev_unsubscribe,
+	.unsubscribe_event = isp_subdev_unsubscribe_event,
 };
 
 /* V4L2 subdev pad operations */
@@ -808,7 +826,7 @@ static int isp_subdev_init_entities(struct atomisp_sub_device *asd)
 	int ret;
 
 	v4l2_subdev_init(sd, &isp_subdev_v4l2_ops);
-	strscpy(sd->name, "Atom ISP");
+	sprintf(sd->name, "Atom ISP");
 	v4l2_set_subdevdata(sd, asd);
 	sd->flags |= V4L2_SUBDEV_FL_HAS_EVENTS | V4L2_SUBDEV_FL_HAS_DEVNODE;
 

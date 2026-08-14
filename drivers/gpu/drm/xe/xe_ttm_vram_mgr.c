@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: MIT
 /*
  * Copyright © 2021-2022 Intel Corporation
- * Copyright (C) 2021-2022 Red Hat
+ * Copyright (C) 2021-2002 Red Hat
  */
 
 #include <drm/drm_managed.h>
-#include <drm/drm_drv.h>
 #include <drm/drm_buddy.h>
 
 #include <drm/ttm/ttm_placement.h>
@@ -13,9 +12,9 @@
 
 #include "xe_bo.h"
 #include "xe_device.h"
+#include "xe_gt.h"
 #include "xe_res_cursor.h"
 #include "xe_ttm_vram_mgr.h"
-#include "xe_vram_types.h"
 
 static inline struct gpu_buddy_block *
 xe_ttm_vram_mgr_first_block(struct list_head *list)
@@ -54,7 +53,7 @@ static int xe_ttm_vram_mgr_new(struct ttm_resource_manager *man,
 	struct xe_ttm_vram_mgr *mgr = to_xe_ttm_vram_mgr(man);
 	struct xe_ttm_vram_mgr_resource *vres;
 	struct gpu_buddy *mm = &mgr->mm;
-	u64 size, min_page_size;
+	u64 size, remaining_size, min_page_size;
 	unsigned long lpfn;
 	int err;
 
@@ -65,7 +64,7 @@ static int xe_ttm_vram_mgr_new(struct ttm_resource_manager *man,
 	if (tbo->base.size >> PAGE_SHIFT > (lpfn - place->fpfn))
 		return -E2BIG; /* don't trigger eviction for the impossible */
 
-	vres = kzalloc_obj(*vres);
+	vres = kzalloc(sizeof(*vres), GFP_KERNEL);
 	if (!vres)
 		return -ENOMEM;
 
@@ -81,9 +80,6 @@ static int xe_ttm_vram_mgr_new(struct ttm_resource_manager *man,
 
 	if (place->flags & TTM_PL_FLAG_TOPDOWN)
 		vres->flags |= GPU_BUDDY_TOPDOWN_ALLOCATION;
-
-	if (place->flags & TTM_PL_FLAG_CONTIGUOUS)
-		vres->flags |= GPU_BUDDY_CONTIGUOUS_ALLOCATION;
 
 	if (place->fpfn || lpfn != man->size >> PAGE_SHIFT)
 		vres->flags |= GPU_BUDDY_RANGE_ALLOCATION;
@@ -103,6 +99,17 @@ static int xe_ttm_vram_mgr_new(struct ttm_resource_manager *man,
 		goto error_fini;
 	}
 
+	if (WARN_ON(min_page_size > SZ_2G)) { /* FIXME: sg limit */
+		err = -EINVAL;
+		goto error_fini;
+	}
+
+	if (WARN_ON((size > SZ_2G &&
+		     (vres->base.placement & TTM_PL_FLAG_CONTIGUOUS)))) {
+		err = -EINVAL;
+		goto error_fini;
+	}
+
 	if (WARN_ON(!IS_ALIGNED(size, min_page_size))) {
 		err = -EINVAL;
 		goto error_fini;
@@ -110,15 +117,43 @@ static int xe_ttm_vram_mgr_new(struct ttm_resource_manager *man,
 
 	mutex_lock(&mgr->lock);
 	if (lpfn <= mgr->visible_size >> PAGE_SHIFT && size > mgr->visible_avail) {
+		mutex_unlock(&mgr->lock);
 		err = -ENOSPC;
-		goto error_unlock;
+		goto error_fini;
 	}
 
-	err = gpu_buddy_alloc_blocks(mm, (u64)place->fpfn << PAGE_SHIFT,
-				     (u64)lpfn << PAGE_SHIFT, size,
-				     min_page_size, &vres->blocks, vres->flags);
-	if (err)
-		goto error_unlock;
+	if (place->fpfn + (size >> PAGE_SHIFT) != place->lpfn &&
+	    place->flags & TTM_PL_FLAG_CONTIGUOUS) {
+		size = roundup_pow_of_two(size);
+		min_page_size = size;
+
+		lpfn = max_t(unsigned long, place->fpfn + (size >> PAGE_SHIFT), lpfn);
+	}
+
+	remaining_size = size;
+	do {
+		/*
+		 * Limit maximum size to 2GiB due to SG table limitations.
+		 * FIXME: Should maybe be handled as part of sg construction.
+		 */
+		u64 alloc_size = min_t(u64, remaining_size, SZ_2G);
+
+		err = gpu_buddy_alloc_blocks(mm, (u64)place->fpfn << PAGE_SHIFT,
+					     (u64)lpfn << PAGE_SHIFT,
+					     alloc_size,
+					     min_page_size,
+					     &vres->blocks,
+					     vres->flags);
+		if (err)
+			goto error_free_blocks;
+
+		remaining_size -= alloc_size;
+	} while (remaining_size);
+
+	if (place->flags & TTM_PL_FLAG_CONTIGUOUS) {
+		if (!gpu_buddy_block_trim(mm, NULL, vres->base.size, &vres->blocks))
+			size = vres->base.size;
+	}
 
 	if (lpfn <= mgr->visible_size >> PAGE_SHIFT) {
 		vres->used_visible_size = size;
@@ -160,7 +195,9 @@ static int xe_ttm_vram_mgr_new(struct ttm_resource_manager *man,
 
 	*res = &vres->base;
 	return 0;
-error_unlock:
+
+error_free_blocks:
+	gpu_buddy_free_list(mm, &vres->blocks, 0);
 	mutex_unlock(&mgr->lock);
 error_fini:
 	ttm_resource_fini(man, &vres->base);
@@ -274,7 +311,7 @@ static const struct ttm_resource_manager_func xe_ttm_vram_mgr_func = {
 	.debug	= xe_ttm_vram_mgr_debug
 };
 
-static void xe_ttm_vram_mgr_fini(struct drm_device *dev, void *arg)
+static void ttm_vram_mgr_fini(struct drm_device *dev, void *arg)
 {
 	struct xe_device *xe = to_xe_device(dev);
 	struct xe_ttm_vram_mgr *mgr = arg;
@@ -292,6 +329,8 @@ static void xe_ttm_vram_mgr_fini(struct drm_device *dev, void *arg)
 	ttm_resource_manager_cleanup(&mgr->manager);
 
 	ttm_set_driver_manager(&xe->ttm, mgr->mem_type, NULL);
+
+	mutex_destroy(&mgr->lock);
 }
 
 int __xe_ttm_vram_mgr_init(struct xe_device *xe, struct xe_ttm_vram_mgr *mgr,
@@ -299,19 +338,11 @@ int __xe_ttm_vram_mgr_init(struct xe_device *xe, struct xe_ttm_vram_mgr *mgr,
 			   u64 default_page_size)
 {
 	struct ttm_resource_manager *man = &mgr->manager;
-	const char *name;
 	int err;
-
-	name = mem_type == XE_PL_VRAM0 ? "vram0" : "vram1";
-	man->cg = drmm_cgroup_register_region(&xe->drm, name, size);
-	if (IS_ERR(man->cg))
-		return PTR_ERR(man->cg);
 
 	man->func = &xe_ttm_vram_mgr_func;
 	mgr->mem_type = mem_type;
-	err = drmm_mutex_init(&xe->drm, &mgr->lock);
-	if (err)
-		return err;
+	mutex_init(&mgr->lock);
 	mgr->default_page_size = default_page_size;
 	mgr->visible_size = io_size;
 	mgr->visible_avail = io_size;
@@ -321,27 +352,20 @@ int __xe_ttm_vram_mgr_init(struct xe_device *xe, struct xe_ttm_vram_mgr *mgr,
 	if (err)
 		return err;
 
-	gpu_buddy_driver_set_lock(&mgr->mm, &mgr->lock);
 	ttm_set_driver_manager(&xe->ttm, mem_type, &mgr->manager);
 	ttm_resource_manager_set_used(&mgr->manager, true);
 
-	return drmm_add_action_or_reset(&xe->drm, xe_ttm_vram_mgr_fini, mgr);
+	return drmm_add_action_or_reset(&xe->drm, ttm_vram_mgr_fini, mgr);
 }
 
-/**
- * xe_ttm_vram_mgr_init - initialize TTM VRAM region
- * @xe: pointer to Xe device
- * @vram: pointer to xe_vram_region that contains the memory region attributes
- *
- * Initialize the Xe TTM for given @vram region using the given parameters.
- *
- * Returns 0 for success, negative error code otherwise.
- */
-int xe_ttm_vram_mgr_init(struct xe_device *xe, struct xe_vram_region *vram)
+int xe_ttm_vram_mgr_init(struct xe_tile *tile, struct xe_ttm_vram_mgr *mgr)
 {
-	return __xe_ttm_vram_mgr_init(xe, &vram->ttm, vram->placement,
-				      xe_vram_region_usable_size(vram),
-				      xe_vram_region_io_size(vram),
+	struct xe_device *xe = tile_to_xe(tile);
+	struct xe_mem_region *vram = &tile->mem.vram;
+
+	mgr->vram = vram;
+	return __xe_ttm_vram_mgr_init(xe, mgr, XE_PL_VRAM0 + tile->id,
+				      vram->usable_size, vram->io_size,
 				      PAGE_SIZE);
 }
 
@@ -362,7 +386,7 @@ int xe_ttm_vram_mgr_alloc_sgt(struct xe_device *xe,
 	if (vres->used_visible_size < res->size)
 		return -EOPNOTSUPP;
 
-	*sgt = kmalloc_obj(**sgt);
+	*sgt = kmalloc(sizeof(**sgt), GFP_KERNEL);
 	if (!*sgt)
 		return -ENOMEM;
 
@@ -370,8 +394,7 @@ int xe_ttm_vram_mgr_alloc_sgt(struct xe_device *xe,
 	xe_res_first(res, offset, length, &cursor);
 	while (cursor.remaining) {
 		num_entries++;
-		/* Limit maximum size to 2GiB due to SG table limitations. */
-		xe_res_next(&cursor, min_t(u64, cursor.size, SZ_2G));
+		xe_res_next(&cursor, cursor.size);
 	}
 
 	r = sg_alloc_table(*sgt, num_entries, GFP_KERNEL);
@@ -390,8 +413,8 @@ int xe_ttm_vram_mgr_alloc_sgt(struct xe_device *xe,
 	 */
 	xe_res_first(res, offset, length, &cursor);
 	for_each_sgtable_sg((*sgt), sg, i) {
-		phys_addr_t phys = cursor.start + xe_vram_region_io_start(tile->mem.vram);
-		size_t size = min_t(u64, cursor.size, SZ_2G);
+		phys_addr_t phys = cursor.start + tile->mem.vram.io_start;
+		size_t size = cursor.size;
 		dma_addr_t addr;
 
 		addr = dma_map_resource(dev, phys, size, dir,
@@ -404,7 +427,7 @@ int xe_ttm_vram_mgr_alloc_sgt(struct xe_device *xe,
 		sg_dma_address(sg) = addr;
 		sg_dma_len(sg) = size;
 
-		xe_res_next(&cursor, size);
+		xe_res_next(&cursor, cursor.size);
 	}
 
 	return 0;

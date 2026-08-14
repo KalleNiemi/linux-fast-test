@@ -8,6 +8,7 @@
 #include <soc/mscc/ocelot_sys.h>
 #include <soc/mscc/ocelot.h>
 #include <linux/mdio/mdio-mscc-miim.h>
+#include <linux/mod_devicetable.h>
 #include <linux/of_mdio.h>
 #include <linux/pcs-lynx.h>
 #include <linux/dsa/ocelot.h>
@@ -1013,7 +1014,7 @@ MODULE_DEVICE_TABLE(of, seville_of_match);
 
 static struct platform_driver seville_vsc9953_driver = {
 	.probe		= seville_probe,
-	.remove		= seville_remove,
+	.remove_new	= seville_remove,
 	.shutdown	= seville_shutdown,
 	.driver = {
 		.name		= "mscc_seville",

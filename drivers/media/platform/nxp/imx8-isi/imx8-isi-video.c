@@ -792,11 +792,7 @@ static void mxc_isi_video_queue_first_buffers(struct mxc_isi_video *video)
 		struct mxc_isi_buffer *buf;
 		struct list_head *list;
 
-		/*
-		 * Queue buffers: prioritize pending buffers, then discard
-		 * buffers.
-		 */
-		list = (i < 2 - discard) ? &video->out_pending : &video->out_discard;
+		list = i < discard ? &video->out_discard : &video->out_pending;
 		buf = list_first_entry(list, struct mxc_isi_buffer, list);
 
 		mxc_isi_channel_set_outbuf(video->pipe, buf->dma_addrs, buf_id);
@@ -973,6 +969,8 @@ static int mxc_isi_vb2_prepare_streaming(struct vb2_queue *q)
 	if (ret)
 		goto err_stop;
 
+	video->is_streaming = true;
+
 	return 0;
 
 err_stop:
@@ -1037,6 +1035,8 @@ static void mxc_isi_vb2_unprepare_streaming(struct vb2_queue *q)
 	mxc_isi_video_free_discard_buffers(video);
 	video_device_pipeline_stop(&video->vdev);
 	mxc_isi_pipe_release(video->pipe);
+
+	video->is_streaming = false;
 }
 
 static const struct vb2_ops mxc_isi_vb2_qops = {
@@ -1044,6 +1044,8 @@ static const struct vb2_ops mxc_isi_vb2_qops = {
 	.buf_init		= mxc_isi_vb2_buffer_init,
 	.buf_prepare		= mxc_isi_vb2_buffer_prepare,
 	.buf_queue		= mxc_isi_vb2_buffer_queue,
+	.wait_prepare		= vb2_ops_wait_prepare,
+	.wait_finish		= vb2_ops_wait_finish,
 	.prepare_streaming	= mxc_isi_vb2_prepare_streaming,
 	.start_streaming	= mxc_isi_vb2_start_streaming,
 	.stop_streaming		= mxc_isi_vb2_stop_streaming,
@@ -1317,7 +1319,7 @@ void mxc_isi_video_suspend(struct mxc_isi_pipe *pipe)
 {
 	struct mxc_isi_video *video = &pipe->video;
 
-	if (!vb2_is_streaming(&video->vb2_q))
+	if (!video->is_streaming)
 		return;
 
 	mxc_isi_pipe_disable(pipe);
@@ -1348,7 +1350,7 @@ int mxc_isi_video_resume(struct mxc_isi_pipe *pipe)
 {
 	struct mxc_isi_video *video = &pipe->video;
 
-	if (!vb2_is_streaming(&video->vb2_q))
+	if (!video->is_streaming)
 		return 0;
 
 	mxc_isi_video_init_channel(video);

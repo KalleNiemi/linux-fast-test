@@ -8,11 +8,9 @@ kafs-y := \
 	addr_prefs.o \
 	callback.o \
 	cell.o \
-	cm_security.o \
 	cmservice.o \
 	dir.o \
 	dir_edit.o \
-	dir_search.o \
 	dir_silly.o \
 	dynroot.o \
 	file.o \
@@ -30,7 +28,6 @@ kafs-y := \
 	server.o \
 	server_list.o \
 	super.o \
-	symlink.o \
 	validation.o \
 	vlclient.o \
 	vl_alias.o \

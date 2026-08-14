@@ -205,7 +205,8 @@ static int backend_unmap(struct xen_front_pgdir_shbuf *buf)
 	if (!buf->pages || !buf->backend_map_handles || !buf->grefs)
 		return 0;
 
-	unmap_ops = kzalloc_objs(*unmap_ops, buf->num_pages);
+	unmap_ops = kcalloc(buf->num_pages, sizeof(*unmap_ops),
+			    GFP_KERNEL);
 	if (!unmap_ops)
 		return -ENOMEM;
 
@@ -249,12 +250,13 @@ static int backend_map(struct xen_front_pgdir_shbuf *buf)
 	unsigned char *ptr;
 	int ret, cur_gref, cur_dir_page, cur_page, grefs_left;
 
-	map_ops = kzalloc_objs(*map_ops, buf->num_pages);
+	map_ops = kcalloc(buf->num_pages, sizeof(*map_ops), GFP_KERNEL);
 	if (!map_ops)
 		return -ENOMEM;
 
-	buf->backend_map_handles = kzalloc_objs(*buf->backend_map_handles,
-						buf->num_pages);
+	buf->backend_map_handles = kcalloc(buf->num_pages,
+					   sizeof(*buf->backend_map_handles),
+					   GFP_KERNEL);
 	if (!buf->backend_map_handles) {
 		kfree(map_ops);
 		return -ENOMEM;
@@ -445,10 +447,8 @@ static int grant_references(struct xen_front_pgdir_shbuf *buf)
 		unsigned long frame;
 
 		cur_ref = gnttab_claim_grant_reference(&priv_gref_head);
-		if (cur_ref < 0) {
-			ret = cur_ref;
-			goto out_free_refs;
-		}
+		if (cur_ref < 0)
+			return cur_ref;
 
 		frame = xen_page_to_gfn(virt_to_page(buf->directory +
 						     PAGE_SIZE * i));
@@ -459,13 +459,11 @@ static int grant_references(struct xen_front_pgdir_shbuf *buf)
 	if (buf->ops->grant_refs_for_buffer) {
 		ret = buf->ops->grant_refs_for_buffer(buf, &priv_gref_head, j);
 		if (ret)
-			goto out_free_refs;
+			return ret;
 	}
 
-	ret = 0;
-out_free_refs:
 	gnttab_free_grant_references(priv_gref_head);
-	return ret;
+	return 0;
 }
 
 /*
@@ -476,7 +474,7 @@ out_free_refs:
  */
 static int alloc_storage(struct xen_front_pgdir_shbuf *buf)
 {
-	buf->grefs = kzalloc_objs(*buf->grefs, buf->num_grefs);
+	buf->grefs = kcalloc(buf->num_grefs, sizeof(*buf->grefs), GFP_KERNEL);
 	if (!buf->grefs)
 		return -ENOMEM;
 

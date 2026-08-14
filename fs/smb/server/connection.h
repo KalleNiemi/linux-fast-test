@@ -7,7 +7,6 @@
 #define __KSMBD_CONNECTION_H__
 
 #include <linux/list.h>
-#include <linux/inet.h>
 #include <linux/ip.h>
 #include <net/sock.h>
 #include <net/tcp.h>
@@ -21,8 +20,6 @@
 #include "smb_common.h"
 #include "ksmbd_work.h"
 
-struct smbdirect_buffer_descriptor_v1;
-
 #define KSMBD_SOCKET_BACKLOG		16
 
 enum {
@@ -35,7 +32,7 @@ enum {
 	KSMBD_SESS_RELEASING
 };
 
-struct ksmbd_conn_stats {
+struct ksmbd_stats {
 	atomic_t			open_files_count;
 	atomic64_t			request_served;
 };
@@ -81,7 +78,7 @@ struct ksmbd_conn {
 	struct list_head		requests;
 	struct list_head		async_requests;
 	int				connection_type;
-	struct ksmbd_conn_stats		stats;
+	struct ksmbd_stats		stats;
 	char				ClientGUID[SMB2_CLIENT_GUID_SIZE];
 	struct ntlmssp_auth		ntlmssp;
 
@@ -115,9 +112,6 @@ struct ksmbd_conn {
 
 	__le16				cipher_type;
 	__le16				compress_algorithm;
-	/* Negotiated SMB 3.1.1 compression capabilities. */
-	bool				compress_chained;
-	bool				compress_pattern;
 	bool				posix_ext_supported;
 	bool				signing_negotiated;
 	__le16				signing_algorithm;
@@ -133,6 +127,7 @@ struct ksmbd_conn_ops {
 };
 
 struct ksmbd_transport_ops {
+	int (*prepare)(struct ksmbd_transport *t);
 	void (*disconnect)(struct ksmbd_transport *t);
 	void (*shutdown)(struct ksmbd_transport *t);
 	int (*read)(struct ksmbd_transport *t, char *buf,
@@ -142,11 +137,11 @@ struct ksmbd_transport_ops {
 		      unsigned int remote_key);
 	int (*rdma_read)(struct ksmbd_transport *t,
 			 void *buf, unsigned int len,
-			 struct smbdirect_buffer_descriptor_v1 *desc,
+			 struct smb2_buffer_desc_v1 *desc,
 			 unsigned int desc_len);
 	int (*rdma_write)(struct ksmbd_transport *t,
 			  void *buf, unsigned int len,
-			  struct smbdirect_buffer_descriptor_v1 *desc,
+			  struct smb2_buffer_desc_v1 *desc,
 			  unsigned int desc_len);
 	void (*free_transport)(struct ksmbd_transport *kt);
 };
@@ -177,11 +172,11 @@ bool ksmbd_conn_lookup_dialect(struct ksmbd_conn *c);
 int ksmbd_conn_write(struct ksmbd_work *work);
 int ksmbd_conn_rdma_read(struct ksmbd_conn *conn,
 			 void *buf, unsigned int buflen,
-			 struct smbdirect_buffer_descriptor_v1 *desc,
+			 struct smb2_buffer_desc_v1 *desc,
 			 unsigned int desc_len);
 int ksmbd_conn_rdma_write(struct ksmbd_conn *conn,
 			  void *buf, unsigned int buflen,
-			  struct smbdirect_buffer_descriptor_v1 *desc,
+			  struct smb2_buffer_desc_v1 *desc,
 			  unsigned int desc_len);
 void ksmbd_conn_enqueue_request(struct ksmbd_work *work);
 void ksmbd_conn_try_dequeue_request(struct ksmbd_work *work);
@@ -200,23 +195,9 @@ void ksmbd_conn_r_count_dec(struct ksmbd_conn *conn);
  * This is a hack. We will move status to a proper place once we land
  * a multi-sessions support.
  */
-static inline bool ksmbd_conn_new(struct ksmbd_conn *conn)
-{
-	return READ_ONCE(conn->status) == KSMBD_SESS_NEW;
-}
-
 static inline bool ksmbd_conn_good(struct ksmbd_conn *conn)
 {
 	return READ_ONCE(conn->status) == KSMBD_SESS_GOOD;
-}
-
-static inline unsigned int
-ksmbd_max_allowed_pdu_size(struct ksmbd_conn *conn)
-{
-	if (ksmbd_conn_good(conn))
-		return SMB3_MAX_MSGSIZE + conn->vals->max_write_size;
-
-	return SMB3_MAX_MSGSIZE;
 }
 
 static inline bool ksmbd_conn_need_negotiate(struct ksmbd_conn *conn)

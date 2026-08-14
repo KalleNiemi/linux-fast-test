@@ -244,7 +244,7 @@ int afs_fs_probe_fileserver(struct afs_net *net, struct afs_server *server,
 
 	_enter("%pU", &server->uuid);
 
-	estate = kzalloc_obj(*estate);
+	estate = kzalloc(sizeof(*estate), GFP_KERNEL);
 	if (!estate)
 		return -ENOMEM;
 
@@ -534,6 +534,6 @@ dont_wait:
  */
 void afs_fs_probe_cleanup(struct afs_net *net)
 {
-	if (timer_delete_sync(&net->fs_probe_timer))
+	if (del_timer_sync(&net->fs_probe_timer))
 		afs_dec_servers_outstanding(net);
 }

@@ -20,7 +20,6 @@
 #include <drm/drm_fourcc.h>
 #include <drm/drm_framebuffer.h>
 #include <drm/drm_gem_dma_helper.h>
-#include <drm/drm_print.h>
 
 #include "sti_compositor.h"
 #include "sti_drv.h"
@@ -745,7 +744,7 @@ static bool sti_hqvdp_check_hw_scaling(struct sti_hqvdp *hqvdp,
 
 	inv_zy = DIV_ROUND_UP(src_h, dst_h);
 
-	return inv_zy <= lfw;
+	return (inv_zy <= lfw) ? true : false;
 }
 
 /**
@@ -1020,7 +1019,7 @@ out:
 }
 
 static int sti_hqvdp_atomic_check(struct drm_plane *drm_plane,
-				  struct drm_atomic_commit *state)
+				  struct drm_atomic_state *state)
 {
 	struct drm_plane_state *new_plane_state = drm_atomic_get_new_plane_state(state,
 										 drm_plane);
@@ -1115,7 +1114,7 @@ static int sti_hqvdp_atomic_check(struct drm_plane *drm_plane,
 }
 
 static void sti_hqvdp_atomic_update(struct drm_plane *drm_plane,
-				    struct drm_atomic_commit *state)
+				    struct drm_atomic_state *state)
 {
 	struct drm_plane_state *oldstate = drm_atomic_get_old_plane_state(state,
 									  drm_plane);
@@ -1249,7 +1248,7 @@ static void sti_hqvdp_atomic_update(struct drm_plane *drm_plane,
 }
 
 static void sti_hqvdp_atomic_disable(struct drm_plane *drm_plane,
-				     struct drm_atomic_commit *state)
+				     struct drm_atomic_state *state)
 {
 	struct drm_plane_state *oldstate = drm_atomic_get_old_plane_state(state,
 									  drm_plane);
@@ -1357,6 +1356,7 @@ static int sti_hqvdp_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct device_node *vtg_np;
 	struct sti_hqvdp *hqvdp;
+	struct resource *res;
 
 	DRM_DEBUG_DRIVER("\n");
 
@@ -1367,10 +1367,17 @@ static int sti_hqvdp_probe(struct platform_device *pdev)
 	}
 
 	hqvdp->dev = dev;
-	hqvdp->regs = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(hqvdp->regs)) {
+
+	/* Get Memory resources */
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res) {
+		DRM_ERROR("Get memory resource failed\n");
+		return -ENXIO;
+	}
+	hqvdp->regs = devm_ioremap(dev, res->start, resource_size(res));
+	if (!hqvdp->regs) {
 		DRM_ERROR("Register mapping failed\n");
-		return PTR_ERR(hqvdp->regs);
+		return -ENXIO;
 	}
 
 	/* Get clock resources */
@@ -1413,7 +1420,7 @@ struct platform_driver sti_hqvdp_driver = {
 		.of_match_table = hqvdp_of_match,
 	},
 	.probe = sti_hqvdp_probe,
-	.remove = sti_hqvdp_remove,
+	.remove_new = sti_hqvdp_remove,
 };
 
 MODULE_AUTHOR("Benjamin Gaignard <benjamin.gaignard@st.com>");

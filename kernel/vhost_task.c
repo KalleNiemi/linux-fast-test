@@ -123,6 +123,7 @@ struct vhost_task *vhost_task_create(bool (*fn)(void *),
 	struct kernel_clone_args args = {
 		.flags		= CLONE_FS | CLONE_UNTRACED | CLONE_VM |
 				  CLONE_THREAD | CLONE_SIGHAND,
+		.exit_signal	= 0,
 		.fn		= vhost_task_fn,
 		.name		= name,
 		.user_worker	= 1,
@@ -131,7 +132,7 @@ struct vhost_task *vhost_task_create(bool (*fn)(void *),
 	struct vhost_task *vtsk;
 	struct task_struct *tsk;
 
-	vtsk = kzalloc_obj(*vtsk);
+	vtsk = kzalloc(sizeof(*vtsk), GFP_KERNEL);
 	if (!vtsk)
 		return ERR_PTR(-ENOMEM);
 	init_completion(&vtsk->exited);
@@ -145,7 +146,7 @@ struct vhost_task *vhost_task_create(bool (*fn)(void *),
 	tsk = copy_process(NULL, 0, NUMA_NO_NODE, &args);
 	if (IS_ERR(tsk)) {
 		kfree(vtsk);
-		return ERR_CAST(tsk);
+		return ERR_PTR(PTR_ERR(tsk));
 	}
 
 	vtsk->task = get_task_struct(tsk);

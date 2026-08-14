@@ -2,7 +2,7 @@
 ALSA SoC Layer
 ==============
 
-The documentation is split into the following sections:-
+The documentation is spilt into the following sections:-
 
 .. toctree::
    :maxdepth: 2
@@ -18,4 +18,3 @@ The documentation is split into the following sections:-
    jack
    dpcm
    codec-to-codec
-   usb

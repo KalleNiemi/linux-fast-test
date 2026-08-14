@@ -9,6 +9,7 @@
 #include <linux/errno.h>
 #include <linux/iio/iio.h>
 #include <linux/minmax.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/serdev.h>
 #include <linux/types.h>
@@ -428,4 +429,4 @@ module_serdev_device_driver(sps30_serial_driver);
 MODULE_AUTHOR("Tomasz Duszynski <tomasz.duszynski@octakon.com>");
 MODULE_DESCRIPTION("Sensirion SPS30 particulate matter sensor serial driver");
 MODULE_LICENSE("GPL v2");
-MODULE_IMPORT_NS("IIO_SPS30");
+MODULE_IMPORT_NS(IIO_SPS30);

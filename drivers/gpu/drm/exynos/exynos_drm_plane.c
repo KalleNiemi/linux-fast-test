@@ -9,7 +9,6 @@
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_blend.h>
 #include <drm/drm_framebuffer.h>
-#include <drm/drm_print.h>
 #include <drm/exynos_drm.h>
 
 #include "exynos_drm_crtc.h"
@@ -59,7 +58,7 @@ static void exynos_plane_mode_set(struct exynos_drm_plane_state *exynos_state)
 	struct drm_plane_state *state = &exynos_state->base;
 	struct drm_crtc *crtc = state->crtc;
 	struct drm_crtc_state *crtc_state =
-		drm_atomic_get_new_crtc_state(state->state, crtc);
+			drm_atomic_get_existing_crtc_state(state->state, crtc);
 	struct drm_display_mode *mode = &crtc_state->adjusted_mode;
 	int crtc_x, crtc_y;
 	unsigned int crtc_w, crtc_h;
@@ -134,7 +133,7 @@ static void exynos_drm_plane_reset(struct drm_plane *plane)
 		plane->state = NULL;
 	}
 
-	exynos_state = kzalloc_obj(*exynos_state);
+	exynos_state = kzalloc(sizeof(*exynos_state), GFP_KERNEL);
 	if (exynos_state) {
 		__drm_atomic_helper_plane_reset(plane, &exynos_state->base);
 		plane->state->zpos = exynos_plane->config->zpos;
@@ -148,7 +147,7 @@ exynos_drm_plane_duplicate_state(struct drm_plane *plane)
 	struct exynos_drm_plane_state *copy;
 
 	exynos_state = to_exynos_plane_state(plane->state);
-	copy = kzalloc_obj(*exynos_state);
+	copy = kzalloc(sizeof(*exynos_state), GFP_KERNEL);
 	if (!copy)
 		return NULL;
 
@@ -230,7 +229,7 @@ exynos_drm_plane_check_size(const struct exynos_drm_plane_config *config,
 }
 
 static int exynos_plane_atomic_check(struct drm_plane *plane,
-				     struct drm_atomic_commit *state)
+				     struct drm_atomic_state *state)
 {
 	struct drm_plane_state *new_plane_state = drm_atomic_get_new_plane_state(state,
 										 plane);
@@ -254,7 +253,7 @@ static int exynos_plane_atomic_check(struct drm_plane *plane,
 }
 
 static void exynos_plane_atomic_update(struct drm_plane *plane,
-				       struct drm_atomic_commit *state)
+				       struct drm_atomic_state *state)
 {
 	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state,
 								           plane);
@@ -269,7 +268,7 @@ static void exynos_plane_atomic_update(struct drm_plane *plane,
 }
 
 static void exynos_plane_atomic_disable(struct drm_plane *plane,
-					struct drm_atomic_commit *state)
+					struct drm_atomic_state *state)
 {
 	struct drm_plane_state *old_state = drm_atomic_get_old_plane_state(state, plane);
 	struct exynos_drm_plane *exynos_plane = to_exynos_plane(plane);

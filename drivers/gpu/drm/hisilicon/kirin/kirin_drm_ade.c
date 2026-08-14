@@ -25,11 +25,9 @@
 #include <drm/drm_crtc.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_fb_dma_helper.h>
-#include <drm/drm_fbdev_dma.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_framebuffer.h>
 #include <drm/drm_gem_dma_helper.h>
-#include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_vblank.h>
 #include <drm/drm_gem_framebuffer_helper.h>
@@ -438,7 +436,7 @@ static void ade_dump_regs(void __iomem *base) { }
 #endif
 
 static void ade_crtc_atomic_enable(struct drm_crtc *crtc,
-				   struct drm_atomic_commit *state)
+				   struct drm_atomic_state *state)
 {
 	struct kirin_crtc *kcrtc = to_kirin_crtc(crtc);
 	struct ade_hw_ctx *ctx = kcrtc->hw_ctx;
@@ -461,7 +459,7 @@ static void ade_crtc_atomic_enable(struct drm_crtc *crtc,
 }
 
 static void ade_crtc_atomic_disable(struct drm_crtc *crtc,
-				    struct drm_atomic_commit *state)
+				    struct drm_atomic_state *state)
 {
 	struct kirin_crtc *kcrtc = to_kirin_crtc(crtc);
 	struct ade_hw_ctx *ctx = kcrtc->hw_ctx;
@@ -487,7 +485,7 @@ static void ade_crtc_mode_set_nofb(struct drm_crtc *crtc)
 }
 
 static void ade_crtc_atomic_begin(struct drm_crtc *crtc,
-				  struct drm_atomic_commit *state)
+				  struct drm_atomic_state *state)
 {
 	struct kirin_crtc *kcrtc = to_kirin_crtc(crtc);
 	struct ade_hw_ctx *ctx = kcrtc->hw_ctx;
@@ -500,7 +498,7 @@ static void ade_crtc_atomic_begin(struct drm_crtc *crtc,
 }
 
 static void ade_crtc_atomic_flush(struct drm_crtc *crtc,
-				  struct drm_atomic_commit *state)
+				  struct drm_atomic_state *state)
 
 {
 	struct kirin_crtc *kcrtc = to_kirin_crtc(crtc);
@@ -759,7 +757,7 @@ static void ade_disable_channel(struct kirin_plane *kplane)
 }
 
 static int ade_plane_atomic_check(struct drm_plane *plane,
-				  struct drm_atomic_commit *state)
+				  struct drm_atomic_state *state)
 {
 	struct drm_plane_state *new_plane_state = drm_atomic_get_new_plane_state(state,
 										 plane);
@@ -806,7 +804,7 @@ static int ade_plane_atomic_check(struct drm_plane *plane,
 }
 
 static void ade_plane_atomic_update(struct drm_plane *plane,
-				    struct drm_atomic_commit *state)
+				    struct drm_atomic_state *state)
 {
 	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state,
 									   plane);
@@ -820,7 +818,7 @@ static void ade_plane_atomic_update(struct drm_plane *plane,
 }
 
 static void ade_plane_atomic_disable(struct drm_plane *plane,
-				     struct drm_atomic_commit *state)
+				     struct drm_atomic_state *state)
 {
 	struct kirin_plane *kplane = to_kirin_plane(plane);
 
@@ -845,6 +843,7 @@ static struct drm_plane_funcs ade_plane_funcs = {
 static void *ade_hw_ctx_alloc(struct platform_device *pdev,
 			      struct drm_crtc *crtc)
 {
+	struct resource *res;
 	struct device *dev = &pdev->dev;
 	struct device_node *np = pdev->dev.of_node;
 	struct ade_hw_ctx *ctx = NULL;
@@ -856,7 +855,8 @@ static void *ade_hw_ctx_alloc(struct platform_device *pdev,
 		return ERR_PTR(-ENOMEM);
 	}
 
-	ctx->base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	ctx->base = devm_ioremap_resource(dev, res);
 	if (IS_ERR(ctx->base)) {
 		DRM_ERROR("failed to remap ade io base\n");
 		return ERR_PTR(-EIO);
@@ -925,9 +925,9 @@ static const struct drm_driver ade_driver = {
 	.driver_features = DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
 	.fops = &ade_fops,
 	DRM_GEM_DMA_DRIVER_OPS,
-	DRM_FBDEV_DMA_DRIVER_OPS,
 	.name = "kirin",
 	.desc = "Hisilicon Kirin620 SoC DRM Driver",
+	.date = "20150718",
 	.major = 1,
 	.minor = 0,
 };

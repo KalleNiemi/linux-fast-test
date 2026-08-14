@@ -14,7 +14,7 @@
  *                     FREQUENCY TABLE HELPERS                       *
  *********************************************************************/
 
-static bool policy_has_boost_freq(struct cpufreq_policy *policy)
+bool policy_has_boost_freq(struct cpufreq_policy *policy)
 {
 	struct cpufreq_frequency_table *pos, *table = policy->freq_table;
 
@@ -27,45 +27,49 @@ static bool policy_has_boost_freq(struct cpufreq_policy *policy)
 
 	return false;
 }
+EXPORT_SYMBOL_GPL(policy_has_boost_freq);
 
-int cpufreq_frequency_table_cpuinfo(struct cpufreq_policy *policy)
+int cpufreq_frequency_table_cpuinfo(struct cpufreq_policy *policy,
+				    struct cpufreq_frequency_table *table)
 {
-	struct cpufreq_frequency_table *pos, *table = policy->freq_table;
+	struct cpufreq_frequency_table *pos;
 	unsigned int min_freq = ~0;
 	unsigned int max_freq = 0;
-	unsigned int freq, i;
+	unsigned int freq;
 
-	cpufreq_for_each_valid_entry_idx(pos, table, i) {
+	cpufreq_for_each_valid_entry(pos, table) {
 		freq = pos->frequency;
 
 		if ((!cpufreq_boost_enabled() || !policy->boost_enabled)
 		    && (pos->flags & CPUFREQ_BOOST_FREQ))
 			continue;
 
-		pr_debug("table entry %u: %u kHz\n", i, freq);
+		pr_debug("table entry %u: %u kHz\n", (int)(pos - table), freq);
 		if (freq < min_freq)
 			min_freq = freq;
 		if (freq > max_freq)
 			max_freq = freq;
 	}
 
-	policy->cpuinfo.min_freq = min_freq;
+	policy->min = policy->cpuinfo.min_freq = min_freq;
+	policy->max = max_freq;
 	/*
 	 * If the driver has set its own cpuinfo.max_freq above max_freq, leave
 	 * it as is.
 	 */
 	if (policy->cpuinfo.max_freq < max_freq)
-		policy->cpuinfo.max_freq = max_freq;
+		policy->max = policy->cpuinfo.max_freq = max_freq;
 
-	if (min_freq == ~0)
+	if (policy->min == ~0)
 		return -EINVAL;
 	else
 		return 0;
 }
 
-int cpufreq_frequency_table_verify(struct cpufreq_policy_data *policy)
+int cpufreq_frequency_table_verify(struct cpufreq_policy_data *policy,
+				   struct cpufreq_frequency_table *table)
 {
-	struct cpufreq_frequency_table *pos, *table = policy->freq_table;
+	struct cpufreq_frequency_table *pos;
 	unsigned int freq, prev_smaller = 0;
 	bool found = false;
 
@@ -107,7 +111,7 @@ int cpufreq_generic_frequency_table_verify(struct cpufreq_policy_data *policy)
 	if (!policy->freq_table)
 		return -ENODEV;
 
-	return cpufreq_frequency_table_verify(policy);
+	return cpufreq_frequency_table_verify(policy, policy->freq_table);
 }
 EXPORT_SYMBOL_GPL(cpufreq_generic_frequency_table_verify);
 
@@ -125,7 +129,7 @@ int cpufreq_table_index_unsorted(struct cpufreq_policy *policy,
 	};
 	struct cpufreq_frequency_table *pos;
 	struct cpufreq_frequency_table *table = policy->freq_table;
-	unsigned int freq, diff, i;
+	unsigned int freq, diff, i = 0;
 	int index;
 
 	pr_debug("request for target %u kHz (relation: %u) for cpu %u\n",
@@ -272,6 +276,7 @@ static ssize_t scaling_available_frequencies_show(struct cpufreq_policy *policy,
 	return show_available_freqs(policy, buf, false);
 }
 cpufreq_attr_available_freq(scaling_available);
+EXPORT_SYMBOL_GPL(cpufreq_freq_attr_scaling_available_freqs);
 
 /*
  * scaling_boost_frequencies_show - show available boost frequencies for
@@ -283,6 +288,13 @@ static ssize_t scaling_boost_frequencies_show(struct cpufreq_policy *policy,
 	return show_available_freqs(policy, buf, true);
 }
 cpufreq_attr_available_freq(scaling_boost);
+EXPORT_SYMBOL_GPL(cpufreq_freq_attr_scaling_boost_freqs);
+
+struct freq_attr *cpufreq_generic_attr[] = {
+	&cpufreq_freq_attr_scaling_available_freqs,
+	NULL,
+};
+EXPORT_SYMBOL_GPL(cpufreq_generic_attr);
 
 static int set_freq_table_sorted(struct cpufreq_policy *policy)
 {
@@ -351,17 +363,9 @@ int cpufreq_table_validate_and_sort(struct cpufreq_policy *policy)
 		return 0;
 	}
 
-	ret = cpufreq_frequency_table_cpuinfo(policy);
+	ret = cpufreq_frequency_table_cpuinfo(policy, policy->freq_table);
 	if (ret)
 		return ret;
-
-	/* Driver's may have set this field already */
-	if (policy_has_boost_freq(policy))
-		policy->boost_supported = true;
-
-	if (policy->freq_table_sorted == CPUFREQ_TABLE_SORTED_ASCENDING ||
-	    policy->freq_table_sorted == CPUFREQ_TABLE_SORTED_DESCENDING)
-		return 0;
 
 	return set_freq_table_sorted(policy);
 }

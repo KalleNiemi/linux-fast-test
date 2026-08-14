@@ -22,7 +22,6 @@
 #include <linux/pci.h>
 #include <linux/console.h>
 #include <linux/backlight.h>
-#include <linux/string_choices.h>
 #ifdef CONFIG_BOOTX_TEXT
 #include <asm/btext.h>
 #endif
@@ -58,12 +57,9 @@
 #define MAX_CURS		32
 
 static const struct pci_device_id nvidiafb_pci_tbl[] = {
-	{
-		PCI_DEVICE(PCI_VENDOR_ID_NVIDIA, PCI_ANY_ID),
-		.class = PCI_BASE_CLASS_DISPLAY << 16,
-		.class_mask = 0xff0000
-	},
-	{ }
+	{PCI_VENDOR_ID_NVIDIA, PCI_ANY_ID, PCI_ANY_ID, PCI_ANY_ID,
+	 PCI_BASE_CLASS_DISPLAY << 16, 0xff0000, 0},
+	{ 0, }
 };
 MODULE_DEVICE_TABLE(pci, nvidiafb_pci_tbl);
 
@@ -626,7 +622,7 @@ static int nvidiafb_set_par(struct fb_info *info)
 		else
 			par->FPDither = !!(NV_RD32(par->PRAMDAC, 0x083C) & 1);
 		printk(KERN_INFO PFX "Flat panel dithering %s\n",
-		       str_enabled_disabled(par->FPDither));
+		       par->FPDither ? "enabled" : "disabled");
 	}
 
 	info->fix.visual = (info->var.bits_per_pixel == 8) ?
@@ -1489,7 +1485,7 @@ static int nvidiafb_setup(char *options)
 			flatpanel = 1;
 		} else if (!strncmp(this_opt, "hwcur", 5)) {
 			hwcur = 1;
-		} else if (!strncmp(this_opt, "noaccel", 7)) {
+		} else if (!strncmp(this_opt, "noaccel", 6)) {
 			noaccel = 1;
 		} else if (!strncmp(this_opt, "noscale", 7)) {
 			noscale = 1;

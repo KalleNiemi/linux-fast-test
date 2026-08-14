@@ -490,6 +490,8 @@ static int ipmi_ssif_thread(void *data)
 		/* Wait for something to do */
 		result = wait_for_completion_interruptible(
 						&ssif_info->wake_thread);
+		if (ssif_info->stopping)
+			break;
 		if (result == -ERESTARTSYS)
 			continue;
 		init_completion(&ssif_info->wake_thread);
@@ -548,8 +550,7 @@ static void start_resend(struct ssif_info *ssif_info);
 
 static void retry_timeout(struct timer_list *t)
 {
-	struct ssif_info *ssif_info = timer_container_of(ssif_info, t,
-							 retry_timer);
+	struct ssif_info *ssif_info = from_timer(ssif_info, t, retry_timer);
 	unsigned long oflags, *flags;
 	bool waiting, resend;
 
@@ -573,8 +574,7 @@ static void retry_timeout(struct timer_list *t)
 
 static void watch_timeout(struct timer_list *t)
 {
-	struct ssif_info *ssif_info = timer_container_of(ssif_info, t,
-							 watch_timer);
+	struct ssif_info *ssif_info = from_timer(ssif_info, t, watch_timer);
 	unsigned long oflags, *flags;
 
 	if (ssif_info->stopping)
@@ -608,7 +608,7 @@ static void ssif_alert(struct i2c_client *client, enum i2c_alert_protocol type,
 	flags = ipmi_ssif_lock_cond(ssif_info, &oflags);
 	if (ssif_info->waiting_alert) {
 		ssif_info->waiting_alert = false;
-		timer_delete(&ssif_info->retry_timer);
+		del_timer(&ssif_info->retry_timer);
 		do_get = true;
 	} else if (ssif_info->curr_msg) {
 		ssif_info->got_alert = true;
@@ -1087,7 +1087,8 @@ static void start_next_msg(struct ssif_info *ssif_info, unsigned long *flags)
 	}
 }
 
-static int sender(void *send_info, struct ipmi_smi_msg *msg)
+static void sender(void                *send_info,
+		   struct ipmi_smi_msg *msg)
 {
 	struct ssif_info *ssif_info = send_info;
 	unsigned long oflags, *flags;
@@ -1102,10 +1103,11 @@ static int sender(void *send_info, struct ipmi_smi_msg *msg)
 		struct timespec64 t;
 
 		ktime_get_real_ts64(&t);
-		dev_dbg(&ssif_info->client->dev, "**Enqueue %02x %02x: %ptSp\n",
-			msg->data[0], msg->data[1], &t);
+		dev_dbg(&ssif_info->client->dev,
+			"**Enqueue %02x %02x: %lld.%6.6ld\n",
+			msg->data[0], msg->data[1],
+			(long long)t.tv_sec, (long)t.tv_nsec / NSEC_PER_USEC);
 	}
-	return IPMI_CC_NO_ERROR;
 }
 
 static int get_smi_info(void *send_info, struct ipmi_smi_info *data)
@@ -1285,11 +1287,11 @@ static void shutdown_ssif(void *send_info)
 		schedule_timeout(1);
 
 	ssif_info->stopping = true;
-	timer_delete_sync(&ssif_info->watch_timer);
-	timer_delete_sync(&ssif_info->retry_timer);
+	del_timer_sync(&ssif_info->watch_timer);
+	del_timer_sync(&ssif_info->retry_timer);
 	if (ssif_info->thread) {
+		complete(&ssif_info->wake_thread);
 		kthread_stop(ssif_info->thread);
-		ssif_info->thread = NULL;
 	}
 }
 
@@ -1623,7 +1625,7 @@ static int ssif_add_infos(struct i2c_client *client)
 {
 	struct ssif_addr_info *info;
 
-	info = kzalloc_obj(*info);
+	info = kzalloc(sizeof(*info), GFP_KERNEL);
 	if (!info)
 		return -ENOMEM;
 	info->addr_src = SI_ACPI;
@@ -1689,7 +1691,7 @@ static int ssif_probe(struct i2c_client *client)
 		return -ENOMEM;
 	}
 
-	ssif_info = kzalloc_obj(*ssif_info);
+	ssif_info = kzalloc(sizeof(*ssif_info), GFP_KERNEL);
 	if (!ssif_info) {
 		kfree(resp);
 		mutex_unlock(&ssif_infos_mutex);
@@ -1934,15 +1936,6 @@ static int ssif_probe(struct i2c_client *client)
 
  out:
 	if (rv) {
-		/*
-		 * If ipmi_register_smi() starts the interface, it will
-		 * call shutdown and that will free the thread and set
-		 * it to NULL.  Otherwise it must be freed here.
-		 */
-		if (ssif_info->thread) {
-			kthread_stop(ssif_info->thread);
-			ssif_info->thread = NULL;
-		}
 		if (addr_info)
 			addr_info->client = NULL;
 
@@ -1975,7 +1968,7 @@ static int new_ssif_client(int addr, char *adapter_name,
 		goto out_unlock;
 	}
 
-	addr_info = kzalloc_obj(*addr_info);
+	addr_info = kzalloc(sizeof(*addr_info), GFP_KERNEL);
 	if (!addr_info) {
 		rv = -ENOMEM;
 		goto out_unlock;
@@ -2094,7 +2087,7 @@ static int dmi_ipmi_probe(struct platform_device *pdev)
 #endif
 
 static const struct i2c_device_id ssif_id[] = {
-	{ .name = DEVICE_NAME },
+	{ DEVICE_NAME },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, ssif_id);
@@ -2127,7 +2120,7 @@ static void ssif_platform_remove(struct platform_device *dev)
 }
 
 static const struct platform_device_id ssif_plat_ids[] = {
-    { .name = "dmi-ipmi-ssif" },
+    { "dmi-ipmi-ssif", 0 },
     { }
 };
 MODULE_DEVICE_TABLE(platform, ssif_plat_ids);
@@ -2137,7 +2130,7 @@ static struct platform_driver ipmi_driver = {
 		.name = DEVICE_NAME,
 	},
 	.probe		= ssif_platform_probe,
-	.remove		= ssif_platform_remove,
+	.remove_new	= ssif_platform_remove,
 	.id_table       = ssif_plat_ids
 };
 

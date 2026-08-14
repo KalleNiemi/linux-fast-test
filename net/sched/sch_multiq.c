@@ -36,7 +36,7 @@ multiq_classify(struct sk_buff *skb, struct Qdisc *sch, int *qerr)
 	int err;
 
 	*qerr = NET_XMIT_SUCCESS | __NET_XMIT_BYPASS;
-	err = tcf_classify_qdisc(skb, fl, &res, false);
+	err = tcf_classify(skb, NULL, fl, &res, false);
 #ifdef CONFIG_NET_CLS_ACT
 	switch (err) {
 	case TC_ACT_STOLEN:
@@ -76,7 +76,7 @@ multiq_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 
 	ret = qdisc_enqueue(skb, qdisc, to_free);
 	if (ret == NET_XMIT_SUCCESS) {
-		qdisc_qlen_inc(sch);
+		sch->q.qlen++;
 		return NET_XMIT_SUCCESS;
 	}
 	if (net_xmit_drop_count(ret))
@@ -106,7 +106,7 @@ static struct sk_buff *multiq_dequeue(struct Qdisc *sch)
 			skb = qdisc_dequeue_peeked(qdisc);
 			if (skb) {
 				qdisc_bstats_update(sch, skb);
-				qdisc_qlen_dec(sch);
+				sch->q.qlen--;
 				return skb;
 			}
 		}
@@ -249,7 +249,7 @@ static int multiq_init(struct Qdisc *sch, struct nlattr *opt,
 
 	q->max_bands = qdisc_dev(sch)->num_tx_queues;
 
-	q->queues = kzalloc_objs(struct Qdisc *, q->max_bands);
+	q->queues = kcalloc(q->max_bands, sizeof(struct Qdisc *), GFP_KERNEL);
 	if (!q->queues)
 		return -ENOBUFS;
 	for (i = 0; i < q->max_bands; i++)

@@ -1,10 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
    BlueZ - Bluetooth protocol stack for Linux
    Copyright (C) 2000-2001 Qualcomm Incorporated
    Copyright (C) 2011 ProFUSION Embedded Systems
 
    Written 2000,2001 by Maxim Krasnyansky <maxk@qualcomm.com>
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License version 2 as
+   published by the Free Software Foundation;
 
    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
    OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -114,7 +117,6 @@ bool hci_discovery_active(struct hci_dev *hdev)
 		return false;
 	}
 }
-EXPORT_SYMBOL(hci_discovery_active);
 
 void hci_discovery_set_state(struct hci_dev *hdev, int state)
 {
@@ -259,7 +261,7 @@ u32 hci_inquiry_cache_update(struct hci_dev *hdev, struct inquiry_data *data,
 	}
 
 	/* Entry not in the cache. Add new one. */
-	ie = kzalloc_obj(*ie);
+	ie = kzalloc(sizeof(*ie), GFP_KERNEL);
 	if (!ie) {
 		flags |= MGMT_DEV_FOUND_CONFIRM_NAME;
 		goto done;
@@ -536,9 +538,46 @@ static int hci_dev_do_reset(struct hci_dev *hdev)
 
 	hci_req_sync_lock(hdev);
 
-	ret = hci_dev_close_sync(hdev);
-	if (!ret)
-		ret = hci_dev_open_sync(hdev);
+	/* Drop queues */
+	skb_queue_purge(&hdev->rx_q);
+	skb_queue_purge(&hdev->cmd_q);
+
+	/* Cancel these to avoid queueing non-chained pending work */
+	hci_dev_set_flag(hdev, HCI_CMD_DRAIN_WORKQUEUE);
+	/* Wait for
+	 *
+	 *    if (!hci_dev_test_flag(hdev, HCI_CMD_DRAIN_WORKQUEUE))
+	 *        queue_delayed_work(&hdev->{cmd,ncmd}_timer)
+	 *
+	 * inside RCU section to see the flag or complete scheduling.
+	 */
+	synchronize_rcu();
+	/* Explicitly cancel works in case scheduled after setting the flag. */
+	cancel_delayed_work(&hdev->cmd_timer);
+	cancel_delayed_work(&hdev->ncmd_timer);
+
+	/* Avoid potential lockdep warnings from the *_flush() calls by
+	 * ensuring the workqueue is empty up front.
+	 */
+	drain_workqueue(hdev->workqueue);
+
+	hci_dev_lock(hdev);
+	hci_inquiry_cache_flush(hdev);
+	hci_conn_hash_flush(hdev);
+	hci_dev_unlock(hdev);
+
+	if (hdev->flush)
+		hdev->flush(hdev);
+
+	hci_dev_clear_flag(hdev, HCI_CMD_DRAIN_WORKQUEUE);
+
+	atomic_set(&hdev->cmd_cnt, 1);
+	hdev->acl_cnt = 0;
+	hdev->sco_cnt = 0;
+	hdev->le_cnt = 0;
+	hdev->iso_cnt = 0;
+
+	ret = hci_reset_sync(hdev);
 
 	hci_req_sync_unlock(hdev);
 	return ret;
@@ -757,7 +796,7 @@ int hci_get_dev_list(void __user *arg)
 	if (!dev_num || dev_num > (PAGE_SIZE * 2) / sizeof(*dr))
 		return -EINVAL;
 
-	dl = kzalloc_flex(*dl, dev_req, dev_num);
+	dl = kzalloc(struct_size(dl, dev_req, dev_num), GFP_KERNEL);
 	if (!dl)
 		return -ENOMEM;
 
@@ -1217,9 +1256,11 @@ struct smp_irk *hci_find_irk_by_addr(struct hci_dev *hdev, bdaddr_t *bdaddr,
 		if (addr_type == irk->addr_type &&
 		    bacmp(bdaddr, &irk->bdaddr) == 0) {
 			irk_to_return = irk;
-			break;
+			goto done;
 		}
 	}
+
+done:
 
 	if (irk_to_return && hci_is_blocked_key(hdev, HCI_BLOCKED_KEY_TYPE_IRK,
 						irk_to_return->val)) {
@@ -1246,7 +1287,7 @@ struct link_key *hci_add_link_key(struct hci_dev *hdev, struct hci_conn *conn,
 		key = old_key;
 	} else {
 		old_key_type = conn ? conn->key_type : 0xff;
-		key = kzalloc_obj(*key);
+		key = kzalloc(sizeof(*key), GFP_KERNEL);
 		if (!key)
 			return NULL;
 		list_add_rcu(&key->list, &hdev->link_keys);
@@ -1291,7 +1332,7 @@ struct smp_ltk *hci_add_ltk(struct hci_dev *hdev, bdaddr_t *bdaddr,
 	if (old_key)
 		key = old_key;
 	else {
-		key = kzalloc_obj(*key);
+		key = kzalloc(sizeof(*key), GFP_KERNEL);
 		if (!key)
 			return NULL;
 		list_add_rcu(&key->list, &hdev->long_term_keys);
@@ -1316,7 +1357,7 @@ struct smp_irk *hci_add_irk(struct hci_dev *hdev, bdaddr_t *bdaddr,
 
 	irk = hci_find_irk_by_addr(hdev, bdaddr, addr_type);
 	if (!irk) {
-		irk = kzalloc_obj(*irk);
+		irk = kzalloc(sizeof(*irk), GFP_KERNEL);
 		if (!irk)
 			return NULL;
 
@@ -1434,8 +1475,8 @@ static void hci_cmd_timeout(struct work_struct *work)
 		bt_dev_err(hdev, "command tx timeout");
 	}
 
-	if (hdev->reset)
-		hdev->reset(hdev);
+	if (hdev->cmd_timeout)
+		hdev->cmd_timeout(hdev);
 
 	atomic_set(&hdev->cmd_cnt, 1);
 	queue_work(hdev->workqueue, &hdev->cmd_work);
@@ -1510,7 +1551,7 @@ int hci_add_remote_oob_data(struct hci_dev *hdev, bdaddr_t *bdaddr,
 
 	data = hci_find_remote_oob_data(hdev, bdaddr, bdaddr_type);
 	if (!data) {
-		data = kmalloc_obj(*data);
+		data = kmalloc(sizeof(*data), GFP_KERNEL);
 		if (!data)
 			return -ENOMEM;
 
@@ -1678,7 +1719,7 @@ struct adv_info *hci_add_adv_instance(struct hci_dev *hdev, u8 instance,
 		    instance < 1 || instance > hdev->le_num_of_adv_sets + 1)
 			return ERR_PTR(-EOVERFLOW);
 
-		adv = kzalloc_obj(*adv);
+		adv = kzalloc(sizeof(*adv), GFP_KERNEL);
 		if (!adv)
 			return ERR_PTR(-ENOMEM);
 
@@ -2067,7 +2108,7 @@ int hci_bdaddr_list_add(struct list_head *list, bdaddr_t *bdaddr, u8 type)
 	if (hci_bdaddr_list_lookup(list, bdaddr, type))
 		return -EEXIST;
 
-	entry = kzalloc_obj(*entry);
+	entry = kzalloc(sizeof(*entry), GFP_KERNEL);
 	if (!entry)
 		return -ENOMEM;
 
@@ -2090,7 +2131,7 @@ int hci_bdaddr_list_add_with_irk(struct list_head *list, bdaddr_t *bdaddr,
 	if (hci_bdaddr_list_lookup(list, bdaddr, type))
 		return -EEXIST;
 
-	entry = kzalloc_obj(*entry);
+	entry = kzalloc(sizeof(*entry), GFP_KERNEL);
 	if (!entry)
 		return -ENOMEM;
 
@@ -2119,7 +2160,7 @@ int hci_bdaddr_list_add_with_flags(struct list_head *list, bdaddr_t *bdaddr,
 	if (hci_bdaddr_list_lookup(list, bdaddr, type))
 		return -EEXIST;
 
-	entry = kzalloc_obj(*entry);
+	entry = kzalloc(sizeof(*entry), GFP_KERNEL);
 	if (!entry)
 		return -ENOMEM;
 
@@ -2162,6 +2203,26 @@ int hci_bdaddr_list_del_with_irk(struct list_head *list, bdaddr_t *bdaddr,
 	}
 
 	entry = hci_bdaddr_list_lookup_with_irk(list, bdaddr, type);
+	if (!entry)
+		return -ENOENT;
+
+	list_del(&entry->list);
+	kfree(entry);
+
+	return 0;
+}
+
+int hci_bdaddr_list_del_with_flags(struct list_head *list, bdaddr_t *bdaddr,
+				   u8 type)
+{
+	struct bdaddr_list_with_flags *entry;
+
+	if (!bacmp(bdaddr, BDADDR_ANY)) {
+		hci_bdaddr_list_clear(list);
+		return 0;
+	}
+
+	entry = hci_bdaddr_list_lookup_with_flags(list, bdaddr, type);
 	if (!entry)
 		return -ENOENT;
 
@@ -2236,7 +2297,7 @@ struct hci_conn_params *hci_conn_params_add(struct hci_dev *hdev,
 	if (params)
 		return params;
 
-	params = kzalloc_obj(*params);
+	params = kzalloc(sizeof(*params), GFP_KERNEL);
 	if (!params) {
 		bt_dev_err(hdev, "out of memory");
 		return NULL;
@@ -2613,7 +2674,7 @@ int hci_register_dev(struct hci_dev *hdev)
 	/* Devices that are marked for raw-only usage are unconfigured
 	 * and should not be included in normal operation.
 	 */
-	if (hci_test_quirk(hdev, HCI_QUIRK_RAW_DEVICE))
+	if (test_bit(HCI_QUIRK_RAW_DEVICE, &hdev->quirks))
 		hci_dev_set_flag(hdev, HCI_UNCONFIGURED);
 
 	/* Mark Remote Wakeup connection flag as supported if driver has wakeup
@@ -2745,7 +2806,7 @@ int hci_register_suspend_notifier(struct hci_dev *hdev)
 	int ret = 0;
 
 	if (!hdev->suspend_notifier.notifier_call &&
-	    !hci_test_quirk(hdev, HCI_QUIRK_NO_SUSPEND_NOTIFIER)) {
+	    !test_bit(HCI_QUIRK_NO_SUSPEND_NOTIFIER, &hdev->quirks)) {
 		hdev->suspend_notifier.notifier_call = hci_suspend_notifier;
 		ret = register_pm_notifier(&hdev->suspend_notifier);
 	}
@@ -2914,8 +2975,6 @@ int hci_recv_frame(struct hci_dev *hdev, struct sk_buff *skb)
 		break;
 	case HCI_ISODATA_PKT:
 		break;
-	case HCI_DRV_PKT:
-		break;
 	default:
 		kfree_skb(skb);
 		return -EINVAL;
@@ -3024,15 +3083,6 @@ static int hci_send_frame(struct hci_dev *hdev, struct sk_buff *skb)
 		return -EINVAL;
 	}
 
-	if (hci_skb_pkt_type(skb) == HCI_DRV_PKT) {
-		/* Intercept HCI Drv packet here and don't go with hdev->send
-		 * callback.
-		 */
-		err = hci_drv_process_cmd(hdev, skb);
-		kfree_skb(skb);
-		return err;
-	}
-
 	err = hdev->send(hdev, skb);
 	if (err < 0) {
 		bt_dev_err(hdev, "sending frame failed (%d)", err);
@@ -3041,13 +3091,6 @@ static int hci_send_frame(struct hci_dev *hdev, struct sk_buff *skb)
 	}
 
 	return 0;
-}
-
-static int hci_send_conn_frame(struct hci_dev *hdev, struct hci_conn *conn,
-			       struct sk_buff *skb)
-{
-	hci_conn_tx_queue(conn, skb);
-	return hci_send_frame(hdev, skb);
 }
 
 /* Send HCI command */
@@ -3230,8 +3273,6 @@ static void hci_queue_acl(struct hci_chan *chan, struct sk_buff_head *queue,
 
 		spin_unlock_bh(&queue->lock);
 	}
-
-	bt_dev_dbg(hdev, "chan %p queued %d", chan, skb_queue_len(queue));
 }
 
 void hci_send_acl(struct hci_chan *chan, struct sk_buff *skb, __u16 flags)
@@ -3263,10 +3304,6 @@ void hci_send_sco(struct hci_conn *conn, struct sk_buff *skb)
 	hci_skb_pkt_type(skb) = HCI_SCODATA_PKT;
 
 	skb_queue_tail(&conn->data_q, skb);
-
-	bt_dev_dbg(hdev, "hcon %p queued %d", conn,
-		   skb_queue_len(&conn->data_q));
-
 	queue_work(hdev->workqueue, &hdev->tx_work);
 }
 
@@ -3326,8 +3363,6 @@ static void hci_queue_iso(struct hci_conn *conn, struct sk_buff_head *queue,
 			__skb_queue_tail(queue, skb);
 		} while (list);
 	}
-
-	bt_dev_dbg(hdev, "hcon %p queued %d", conn, skb_queue_len(queue));
 }
 
 void hci_send_iso(struct hci_conn *conn, struct sk_buff *skb)
@@ -3370,7 +3405,8 @@ static inline void hci_quote_sent(struct hci_conn *conn, int num, int *quote)
 	case CIS_LINK:
 	case BIS_LINK:
 	case PA_LINK:
-		cnt = hdev->iso_cnt;
+		cnt = hdev->iso_mtu ? hdev->iso_cnt :
+			hdev->le_mtu ? hdev->le_cnt : hdev->acl_cnt;
 		break;
 	default:
 		cnt = 0;
@@ -3397,10 +3433,6 @@ static struct hci_conn *hci_low_sent(struct hci_dev *hdev, __u8 type,
 		if (c->type != type ||
 		    skb_queue_empty(&c->data_q))
 			continue;
-
-		bt_dev_dbg(hdev, "hcon %p state %s queued %d", c,
-			   state_to_string(c->state),
-			   skb_queue_len(&c->data_q));
 
 		if (c->state != BT_CONNECTED && c->state != BT_CONFIG)
 			continue;
@@ -3560,37 +3592,24 @@ static void hci_prio_recalculate(struct hci_dev *hdev, __u8 type)
 
 static void __check_timeout(struct hci_dev *hdev, unsigned int cnt, u8 type)
 {
-	unsigned long timeout;
+	unsigned long last_tx;
 
 	if (hci_dev_test_flag(hdev, HCI_UNCONFIGURED))
 		return;
 
 	switch (type) {
-	case ACL_LINK:
-		/* tx timeout must be longer than maximum link supervision
-		 * timeout (40.9 seconds)
-		 */
-		timeout = hdev->acl_last_tx + HCI_ACL_TX_TIMEOUT;
-		break;
 	case LE_LINK:
-		/* tx timeout must be longer than maximum link supervision
-		 * timeout (40.9 seconds)
-		 */
-		timeout = hdev->le_last_tx + HCI_ACL_TX_TIMEOUT;
-		break;
-	case CIS_LINK:
-	case BIS_LINK:
-	case PA_LINK:
-		/* tx timeout must be longer than the maximum transport latency
-		 * (8.388607 seconds)
-		 */
-		timeout = hdev->iso_last_tx + HCI_ISO_TX_TIMEOUT;
+		last_tx = hdev->le_last_tx;
 		break;
 	default:
-		return;
+		last_tx = hdev->acl_last_tx;
+		break;
 	}
 
-	if (!cnt && time_after(jiffies, timeout))
+	/* tx timeout must be longer than maximum link supervision timeout
+	 * (40.9 seconds)
+	 */
+	if (!cnt && time_after(jiffies, last_tx + HCI_ACL_TX_TIMEOUT))
 		hci_link_tx_to(hdev, type);
 }
 
@@ -3618,7 +3637,7 @@ static void hci_sched_sco(struct hci_dev *hdev, __u8 type)
 	while (*cnt && (conn = hci_low_sent(hdev, type, &quote))) {
 		while (quote-- && (skb = skb_dequeue(&conn->data_q))) {
 			BT_DBG("skb %p len %d", skb, skb->len);
-			hci_send_conn_frame(hdev, conn, skb);
+			hci_send_frame(hdev, skb);
 
 			conn->sent++;
 			if (conn->sent == ~0)
@@ -3661,7 +3680,7 @@ static void hci_sched_acl_pkt(struct hci_dev *hdev)
 			hci_conn_enter_active_mode(chan->conn,
 						   bt_cb(skb)->force_active);
 
-			hci_send_conn_frame(hdev, chan->conn, skb);
+			hci_send_frame(hdev, skb);
 			hdev->acl_last_tx = jiffies;
 
 			hdev->acl_cnt--;
@@ -3717,7 +3736,7 @@ static void hci_sched_le(struct hci_dev *hdev)
 
 			skb = skb_dequeue(&chan->data_q);
 
-			hci_send_conn_frame(hdev, chan->conn, skb);
+			hci_send_frame(hdev, skb);
 			hdev->le_last_tx = jiffies;
 
 			(*cnt)--;
@@ -3746,16 +3765,12 @@ static void hci_sched_iso(struct hci_dev *hdev, __u8 type)
 	if (!hci_conn_num(hdev, type))
 		return;
 
-	cnt = &hdev->iso_cnt;
-
-	__check_timeout(hdev, *cnt, type);
-
+	cnt = hdev->iso_pkts ? &hdev->iso_cnt :
+		hdev->le_pkts ? &hdev->le_cnt : &hdev->acl_cnt;
 	while (*cnt && (conn = hci_low_sent(hdev, type, &quote))) {
 		while (quote-- && (skb = skb_dequeue(&conn->data_q))) {
 			BT_DBG("skb %p len %d", skb, skb->len);
-
-			hci_send_conn_frame(hdev, conn, skb);
-			hdev->iso_last_tx = jiffies;
+			hci_send_frame(hdev, skb);
 
 			conn->sent++;
 			if (conn->sent == ~0)
@@ -3795,14 +3810,13 @@ static void hci_tx_work(struct work_struct *work)
 static void hci_acldata_packet(struct hci_dev *hdev, struct sk_buff *skb)
 {
 	struct hci_acl_hdr *hdr;
+	struct hci_conn *conn;
 	__u16 handle, flags;
-	int err;
 
 	hdr = skb_pull_data(skb, sizeof(*hdr));
 	if (!hdr) {
 		bt_dev_err(hdev, "ACL packet too small");
-		kfree_skb(skb);
-		return;
+		goto drop;
 	}
 
 	handle = __le16_to_cpu(hdr->handle);
@@ -3814,60 +3828,70 @@ static void hci_acldata_packet(struct hci_dev *hdev, struct sk_buff *skb)
 
 	hdev->stat.acl_rx++;
 
-	err = l2cap_recv_acldata(hdev, handle, skb, flags);
-	if (err == -ENOENT)
+	hci_dev_lock(hdev);
+	conn = hci_conn_hash_lookup_handle(hdev, handle);
+	hci_dev_unlock(hdev);
+
+	if (conn) {
+		hci_conn_enter_active_mode(conn, BT_POWER_FORCE_ACTIVE_OFF);
+
+		/* Send to upper protocol */
+		l2cap_recv_acldata(conn, skb, flags);
+		return;
+	} else {
 		bt_dev_err(hdev, "ACL packet for unknown connection handle %d",
 			   handle);
-	else if (err)
-		bt_dev_dbg(hdev, "ACL packet recv for handle %d failed: %d",
-			   handle, err);
+	}
+
+drop:
+	kfree_skb(skb);
 }
 
 /* SCO data packet */
 static void hci_scodata_packet(struct hci_dev *hdev, struct sk_buff *skb)
 {
-	struct hci_sco_hdr *hdr;
+	struct hci_sco_hdr *hdr = (void *) skb->data;
+	struct hci_conn *conn;
 	__u16 handle, flags;
-	int err;
 
-	hdr = skb_pull_data(skb, sizeof(*hdr));
-	if (!hdr) {
-		bt_dev_err(hdev, "SCO packet too small");
-		kfree_skb(skb);
-		return;
-	}
+	skb_pull(skb, HCI_SCO_HDR_SIZE);
 
 	handle = __le16_to_cpu(hdr->handle);
 	flags  = hci_flags(handle);
 	handle = hci_handle(handle);
 
-	bt_dev_dbg(hdev, "len %d handle 0x%4.4x flags 0x%4.4x", skb->len,
-		   handle, flags);
+	BT_DBG("%s len %d handle 0x%4.4x flags 0x%4.4x", hdev->name, skb->len,
+	       handle, flags);
 
 	hdev->stat.sco_rx++;
 
-	hci_skb_pkt_status(skb) = flags & 0x03;
+	hci_dev_lock(hdev);
+	conn = hci_conn_hash_lookup_handle(hdev, handle);
+	hci_dev_unlock(hdev);
 
-	err = sco_recv_scodata(hdev, handle, skb);
-	if (err == -ENOENT)
+	if (conn) {
+		/* Send to upper protocol */
+		hci_skb_pkt_status(skb) = flags & 0x03;
+		sco_recv_scodata(conn, skb);
+		return;
+	} else {
 		bt_dev_err_ratelimited(hdev, "SCO packet for unknown connection handle %d",
 				       handle);
-	else if (err)
-		bt_dev_dbg(hdev, "SCO packet recv for handle %d failed: %d",
-			   handle, err);
+	}
+
+	kfree_skb(skb);
 }
 
 static void hci_isodata_packet(struct hci_dev *hdev, struct sk_buff *skb)
 {
 	struct hci_iso_hdr *hdr;
+	struct hci_conn *conn;
 	__u16 handle, flags;
-	int err;
 
 	hdr = skb_pull_data(skb, sizeof(*hdr));
 	if (!hdr) {
 		bt_dev_err(hdev, "ISO packet too small");
-		kfree_skb(skb);
-		return;
+		goto drop;
 	}
 
 	handle = __le16_to_cpu(hdr->handle);
@@ -3877,13 +3901,22 @@ static void hci_isodata_packet(struct hci_dev *hdev, struct sk_buff *skb)
 	bt_dev_dbg(hdev, "len %d handle 0x%4.4x flags 0x%4.4x", skb->len,
 		   handle, flags);
 
-	err = iso_recv(hdev, handle, skb, flags);
-	if (err == -ENOENT)
-		bt_dev_err_ratelimited(hdev, "ISO packet for unknown connection handle %d",
-				       handle);
-	else if (err)
-		bt_dev_dbg(hdev, "ISO packet recv for handle %d failed: %d",
-			   handle, err);
+	hci_dev_lock(hdev);
+	conn = hci_conn_hash_lookup_handle(hdev, handle);
+	hci_dev_unlock(hdev);
+
+	if (!conn) {
+		bt_dev_err(hdev, "ISO packet for unknown connection handle %d",
+			   handle);
+		goto drop;
+	}
+
+	/* Send to upper protocol */
+	iso_recv(conn, skb, flags);
+	return;
+
+drop:
+	kfree_skb(skb);
 }
 
 static bool hci_req_is_complete(struct hci_dev *hdev)

@@ -51,11 +51,10 @@ static int __init z_erofs_lzma_init(void)
 
 	/* by default, use # of possible CPUs instead */
 	if (!z_erofs_lzma_nstrms)
-		z_erofs_lzma_nstrms = min_t(unsigned int, num_possible_cpus(),
-				CONFIG_EROFS_FS_ZIP_LZMA_DEFAULT_MAX_STREAMS);
+		z_erofs_lzma_nstrms = num_possible_cpus();
 
 	for (i = 0; i < z_erofs_lzma_nstrms; ++i) {
-		struct z_erofs_lzma *strm = kzalloc_obj(*strm);
+		struct z_erofs_lzma *strm = kzalloc(sizeof(*strm), GFP_KERNEL);
 
 		if (!strm) {
 			z_erofs_lzma_exit();
@@ -147,23 +146,23 @@ again:
 	return err;
 }
 
-static const char *z_erofs_lzma_decompress(struct z_erofs_decompress_req *rq,
-					   struct page **pgpl)
+static int z_erofs_lzma_decompress(struct z_erofs_decompress_req *rq,
+				   struct page **pgpl)
 {
 	struct super_block *sb = rq->sb;
 	struct z_erofs_stream_dctx dctx = { .rq = rq, .no = -1, .ni = 0 };
 	struct xz_buf buf = {};
 	struct z_erofs_lzma *strm;
 	enum xz_ret xz_err;
-	const char *reason;
+	int err;
 
 	/* 1. get the exact LZMA compressed size */
 	dctx.kin = kmap_local_page(*rq->in);
-	reason = z_erofs_fixup_insize(rq, dctx.kin + rq->pageofs_in,
+	err = z_erofs_fixup_insize(rq, dctx.kin + rq->pageofs_in,
 			min(rq->inputsize, sb->s_blocksize - rq->pageofs_in));
-	if (reason) {
+	if (err) {
 		kunmap_local(dctx.kin);
-		return reason;
+		return err;
 	}
 
 	/* 2. get an available lzma context */
@@ -189,9 +188,9 @@ again:
 		dctx.avail_out = buf.out_size - buf.out_pos;
 		dctx.inbuf_sz = buf.in_size;
 		dctx.inbuf_pos = buf.in_pos;
-		reason = z_erofs_stream_switch_bufs(&dctx, (void **)&buf.out,
-						    (void **)&buf.in, pgpl);
-		if (reason)
+		err = z_erofs_stream_switch_bufs(&dctx, (void **)&buf.out,
+						 (void **)&buf.in, pgpl);
+		if (err)
 			break;
 
 		if (buf.out_size == buf.out_pos) {
@@ -208,9 +207,9 @@ again:
 		if (xz_err != XZ_OK) {
 			if (xz_err == XZ_STREAM_END && !rq->outputsize)
 				break;
-			reason = (xz_err == XZ_DATA_ERROR ?
-				"corrupted compressed data" :
-				"unexpected end of stream");
+			erofs_err(sb, "failed to decompress %d in[%u] out[%u]",
+				  xz_err, rq->inputsize, rq->outputsize);
+			err = -EFSCORRUPTED;
 			break;
 		}
 	} while (1);
@@ -224,7 +223,7 @@ again:
 	z_erofs_lzma_head = strm;
 	spin_unlock(&z_erofs_lzma_lock);
 	wake_up(&z_erofs_lzma_wq);
-	return reason;
+	return err;
 }
 
 const struct z_erofs_decompressor z_erofs_lzma_decomp = {

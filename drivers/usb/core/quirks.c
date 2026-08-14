@@ -61,7 +61,8 @@ static int quirks_param_set(const char *value, const struct kernel_param *kp)
 		quirk_list = NULL;
 	}
 
-	quirk_list = kzalloc_objs(struct quirk_entry, quirk_count);
+	quirk_list = kcalloc(quirk_count, sizeof(struct quirk_entry),
+			     GFP_KERNEL);
 	if (!quirk_list) {
 		quirk_count = 0;
 		mutex_unlock(&quirk_mutex);
@@ -142,10 +143,6 @@ static int quirks_param_set(const char *value, const struct kernel_param *kp)
 				break;
 			case 'q':
 				flags |= USB_QUIRK_FORCE_ONE_CONFIG;
-				break;
-			case 'r':
-				flags |= USB_QUIRK_WINDOWS_CONFIG_REQ_SIZE;
-				break;
 			/* Ignore unrecognized flag characters */
 			}
 		}
@@ -425,9 +422,6 @@ static const struct usb_device_id usb_quirk_list[] = {
 	/* Kingston DataTraveler 3.0 */
 	{ USB_DEVICE(0x0951, 0x1666), .driver_info = USB_QUIRK_NO_LPM },
 
-	/* TOSHIBA TransMemory-Mx */
-	{ USB_DEVICE(0x0930, 0x1408), .driver_info = USB_QUIRK_NO_LPM },
-
 	/* NVIDIA Jetson devices in Force Recovery mode */
 	{ USB_DEVICE(0x0955, 0x7018), .driver_info = USB_QUIRK_RESET_RESUME },
 	{ USB_DEVICE(0x0955, 0x7019), .driver_info = USB_QUIRK_RESET_RESUME },
@@ -592,9 +586,6 @@ static const struct usb_device_id usb_quirk_list[] = {
 	{ USB_DEVICE(0x2386, 0x3119), .driver_info = USB_QUIRK_NO_LPM },
 
 	{ USB_DEVICE(0x2386, 0x350e), .driver_info = USB_QUIRK_NO_LPM },
-
-	/* ShanWan Wireless Gamepad */
-	{ USB_DEVICE(0x2563, 0x0575), .driver_info = USB_QUIRK_WINDOWS_CONFIG_REQ_SIZE },
 
 	/* UGREEN 35871 - BOS descriptor fetch hangs at SuperSpeed Plus */
 	{ USB_DEVICE(0x2b89, 0x5871), .driver_info = USB_QUIRK_NO_BOS },

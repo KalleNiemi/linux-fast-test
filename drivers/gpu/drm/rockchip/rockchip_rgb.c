@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (C) Rockchip Electronics Co., Ltd.
+ * Copyright (C) Fuzhou Rockchip Electronics Co.Ltd
  * Author:
  *      Sandy Huang <hjc@rock-chips.com>
  */
@@ -15,7 +15,6 @@
 #include <drm/drm_bridge_connector.h>
 #include <drm/drm_of.h>
 #include <drm/drm_panel.h>
-#include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_simple_kms_helper.h>
 
@@ -162,8 +161,17 @@ struct rockchip_rgb *rockchip_rgb_init(struct device *dev,
 
 	rgb->encoder.crtc_endpoint_id = endpoint_id;
 
+	ret = drm_connector_attach_encoder(connector, encoder);
+	if (ret < 0) {
+		DRM_DEV_ERROR(drm_dev->dev,
+			      "failed to attach encoder: %d\n", ret);
+		goto err_free_connector;
+	}
+
 	return rgb;
 
+err_free_connector:
+	drm_connector_cleanup(connector);
 err_free_encoder:
 	drm_encoder_cleanup(encoder);
 	return ERR_PTR(ret);

@@ -67,8 +67,6 @@
 #include <asm/cpu_has_feature.h>
 #include <asm/kasan.h>
 #include <asm/mce.h>
-#include <asm/systemcfg.h>
-#include <linux/kmsg_dump.h>
 
 #include "setup.h"
 
@@ -324,7 +322,7 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 	seq_putc(m, '\n');
 
 	/* If this is the last cpu, print the summary */
-	if (cpu_id == cpumask_last(cpu_online_mask))
+	if (cpumask_next(cpu_id, cpu_online_mask) >= nr_cpu_ids)
 		show_cpuinfo_summary(m);
 
 	return 0;
@@ -332,7 +330,10 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 
 static void *c_start(struct seq_file *m, loff_t *pos)
 {
-	*pos = cpumask_next(*pos - 1, cpu_online_mask);
+	if (*pos == 0)	/* just in case, cpu 0 is not the first */
+		*pos = cpumask_first(cpu_online_mask);
+	else
+		*pos = cpumask_next(*pos - 1, cpu_online_mask);
 	if ((*pos) < nr_cpu_ids)
 		return (void *)(unsigned long)(*pos + 1);
 	return NULL;
@@ -456,8 +457,11 @@ void __init smp_setup_cpu_maps(void)
 
 	DBG("smp_setup_cpu_maps()\n");
 
-	cpu_to_phys_id = memblock_alloc_or_panic(nr_cpu_ids * sizeof(u32),
+	cpu_to_phys_id = memblock_alloc(nr_cpu_ids * sizeof(u32),
 					__alignof__(u32));
+	if (!cpu_to_phys_id)
+		panic("%s: Failed to allocate %zu bytes align=0x%zx\n",
+		      __func__, nr_cpu_ids * sizeof(u32), __alignof__(u32));
 
 	for_each_node_by_type(dn, "cpu") {
 		const __be32 *intserv;
@@ -556,9 +560,7 @@ void __init smp_setup_cpu_maps(void)
 	out:
 		of_node_put(dn);
 	}
-#endif
-#ifdef CONFIG_PPC64_PROC_SYSTEMCFG
-	systemcfg->processorCount = num_present_cpus();
+	vdso_data->processorCount = num_present_cpus();
 #endif /* CONFIG_PPC64 */
 
         /* Initialize CPU <=> thread mapping/
@@ -743,13 +745,6 @@ static int ppc_panic_fadump_handler(struct notifier_block *this,
 	hard_irq_disable();
 
 	/*
-	 * Invoke kmsg_dump (e.g., pstore) before crash_fadump() as fadump
-	 * runs before panic()'s kmsg_dump_desc() call.
-	 */
-	if (should_fadump_crash())
-		kmsg_dump_desc(KMSG_DUMP_PANIC, (char *)ptr);
-
-	/*
 	 * If firmware-assisted dump has been registered then trigger
 	 * its callback and let the firmware handles everything else.
 	 */
@@ -836,8 +831,8 @@ static int __init check_cache_coherency(void)
 	if (devtree_coherency != KERNEL_COHERENCY) {
 		printk(KERN_ERR
 			"kernel coherency:%s != device tree_coherency:%s\n",
-			str_on_off(KERNEL_COHERENCY),
-			str_on_off(devtree_coherency));
+			KERNEL_COHERENCY ? "on" : "off",
+			devtree_coherency ? "on" : "off");
 		BUG();
 	}
 
@@ -870,10 +865,6 @@ static __init void print_system_info(void)
 		cur_cpu_spec->cpu_user_features,
 		cur_cpu_spec->cpu_user_features2);
 	pr_info("mmu_features      = 0x%08x\n", cur_cpu_spec->mmu_features);
-	pr_info("  possible        = 0x%016lx\n",
-		(unsigned long)MMU_FTRS_POSSIBLE);
-	pr_info("  always          = 0x%016lx\n",
-		(unsigned long)MMU_FTRS_ALWAYS);
 #ifdef CONFIG_PPC64
 	pr_info("firmware_features = 0x%016lx\n", powerpc_firmware_features);
 #ifdef CONFIG_PPC_BOOK3S
@@ -966,6 +957,8 @@ void __init setup_arch(char **cmdline_p)
 
 	/* Parse memory topology */
 	mem_topology_setup();
+	/* Set max_mapnr before paging_init() */
+	set_max_mapnr(max_pfn);
 	high_memory = (void *)__va(max_low_pfn * PAGE_SIZE);
 
 	/*
@@ -1002,6 +995,15 @@ void __init setup_arch(char **cmdline_p)
 	smp_release_cpus();
 
 	initmem_init();
+
+	/*
+	 * Reserve large chunks of memory for use by CMA for fadump, KVM and
+	 * hugetlb. These must be called after initmem_init(), so that
+	 * pageblock_order is initialised.
+	 */
+	fadump_cma_init();
+	kvm_cma_reserve();
+	gigantic_hugetlb_cma_reserve();
 
 	early_memtest(min_low_pfn << PAGE_SHIFT, max_low_pfn << PAGE_SHIFT);
 

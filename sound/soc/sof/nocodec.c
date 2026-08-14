@@ -15,6 +15,7 @@
 
 static struct snd_soc_card sof_nocodec_card = {
 	.name = "nocodec", /* the sof- prefix is added by the core */
+	.topology_shortname = "sof-nocodec",
 	.owner = THIS_MODULE
 };
 
@@ -54,9 +55,10 @@ static int sof_nocodec_bes_setup(struct device *dev,
 		links[i].no_pcm = 1;
 		links[i].cpus->dai_name = drv[i].name;
 		links[i].platforms->name = dev_name(dev->parent);
-
-		links[i].playback_only =  drv[i].playback.channels_min && !drv[i].capture.channels_min;
-		links[i].capture_only  = !drv[i].playback.channels_min &&  drv[i].capture.channels_min;
+		if (drv[i].playback.channels_min)
+			links[i].dpcm_playback = 1;
+		if (drv[i].capture.channels_min)
+			links[i].dpcm_capture = 1;
 
 		links[i].be_hw_params_fixup = sof_pcm_dai_link_fixup;
 	}
@@ -88,9 +90,8 @@ static int sof_nocodec_probe(struct platform_device *pdev)
 	int ret;
 
 	card->dev = &pdev->dev;
+	card->topology_shortname_created = true;
 	mach = pdev->dev.platform_data;
-
-	snd_soc_card_set_topology_name(card, "sof");
 
 	ret = sof_nocodec_setup(card->dev, mach->mach_params.num_dai_drivers,
 				mach->mach_params.dai_drivers);

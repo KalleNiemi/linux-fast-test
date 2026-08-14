@@ -421,7 +421,7 @@ list_set_flush(struct ip_set *set)
 	list_for_each_entry_safe(e, n, &map->members, list)
 		list_set_del(set, e);
 	set->elements = 0;
-	atomic64_set(&set->ext_size, 0);
+	set->ext_size = 0;
 }
 
 static void
@@ -455,7 +455,7 @@ list_set_head(struct ip_set *set, struct sk_buff *skb)
 {
 	const struct list_set *map = set->data;
 	struct nlattr *nested;
-	size_t memsize = list_set_memsize(map, set->dsize) + atomic64_read(&set->ext_size);
+	size_t memsize = list_set_memsize(map, set->dsize) + set->ext_size;
 
 	nested = nla_nest_start(skb, IPSET_ATTR_DATA);
 	if (!nested)
@@ -571,7 +571,7 @@ static const struct ip_set_type_variant set_variant = {
 static void
 list_set_gc(struct timer_list *t)
 {
-	struct list_set *map = timer_container_of(map, t, gc);
+	struct list_set *map = from_timer(map, t, gc);
 	struct ip_set *set = map->set;
 
 	spin_lock_bh(&set->lock);
@@ -598,7 +598,7 @@ init_list_set(struct net *net, struct ip_set *set, u32 size)
 {
 	struct list_set *map;
 
-	map = kzalloc_obj(*map);
+	map = kzalloc(sizeof(*map), GFP_KERNEL);
 	if (!map)
 		return false;
 

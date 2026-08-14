@@ -20,6 +20,12 @@ enum alarmtimer_type {
 	ALARM_BOOTTIME_FREEZER,
 };
 
+enum alarmtimer_restart {
+	ALARMTIMER_NORESTART,
+	ALARMTIMER_RESTART,
+};
+
+
 #define ALARMTIMER_STATE_INACTIVE	0x00
 #define ALARMTIMER_STATE_ENQUEUED	0x01
 
@@ -36,20 +42,17 @@ enum alarmtimer_type {
 struct alarm {
 	struct timerqueue_node	node;
 	struct hrtimer		timer;
-	void			(*function)(struct alarm *, ktime_t now);
+	enum alarmtimer_restart	(*function)(struct alarm *, ktime_t now);
 	enum alarmtimer_type	type;
 	int			state;
 	void			*data;
 };
 
-static __always_inline ktime_t alarm_get_expires(struct alarm *alarm)
-{
-	return alarm->node.expires;
-}
-
 void alarm_init(struct alarm *alarm, enum alarmtimer_type type,
-		void (*function)(struct alarm *, ktime_t));
-bool alarm_start_timer(struct alarm *alarm, ktime_t expires, bool relative);
+		enum alarmtimer_restart (*function)(struct alarm *, ktime_t));
+void alarm_start(struct alarm *alarm, ktime_t start);
+void alarm_start_relative(struct alarm *alarm, ktime_t start);
+void alarm_restart(struct alarm *alarm);
 int alarm_try_to_cancel(struct alarm *alarm);
 int alarm_cancel(struct alarm *alarm);
 

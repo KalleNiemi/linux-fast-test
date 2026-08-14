@@ -273,7 +273,7 @@ goku_alloc_request(struct usb_ep *_ep, gfp_t gfp_flags)
 
 	if (!_ep)
 		return NULL;
-	req = kzalloc_obj(*req, gfp_flags);
+	req = kzalloc(sizeof *req, gfp_flags);
 	if (!req)
 		return NULL;
 
@@ -1616,8 +1616,7 @@ pm_next:
 		if (stat & INT_USBRESET) {		/* hub reset done */
 			ACK(INT_USBRESET);
 			INFO(dev, "USB reset done, gadget %s\n",
-				dev->driver ? dev->driver->driver.name :
-					      "<not bound>");
+				dev->driver->driver.name);
 		}
 		// and INT_ERR on some endpoint's crc/bitstuff/... problem
 	}
@@ -1756,7 +1755,7 @@ static int goku_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	}
 
 	/* alloc, and start init */
-	dev = kzalloc_obj(*dev);
+	dev = kzalloc (sizeof *dev, GFP_KERNEL);
 	if (!dev) {
 		retval = -ENOMEM;
 		goto err;

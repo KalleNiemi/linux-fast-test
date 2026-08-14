@@ -170,7 +170,7 @@ static struct sa_info *sa1100_setup_mtd(struct platform_device *pdev,
 	/*
 	 * Allocate the map_info structs in one go.
 	 */
-	info = kzalloc_flex(*info, subdev, nr);
+	info = kzalloc(struct_size(info, subdev, nr), GFP_KERNEL);
 	if (!info) {
 		ret = -ENOMEM;
 		goto out;
@@ -222,7 +222,7 @@ static struct sa_info *sa1100_setup_mtd(struct platform_device *pdev,
 	} else if (info->num_subdev > 1) {
 		struct mtd_info **cdev;
 
-		cdev = kmalloc_objs(*cdev, nr);
+		cdev = kmalloc_array(nr, sizeof(*cdev), GFP_KERNEL);
 		if (!cdev) {
 			ret = -ENOMEM;
 			goto err;
@@ -293,7 +293,7 @@ static void sa1100_mtd_remove(struct platform_device *pdev)
 
 static struct platform_driver sa1100_mtd_driver = {
 	.probe		= sa1100_mtd_probe,
-	.remove		= sa1100_mtd_remove,
+	.remove_new	= sa1100_mtd_remove,
 	.driver		= {
 		.name	= "sa1100-mtd",
 	},

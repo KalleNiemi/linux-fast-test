@@ -12,6 +12,7 @@
 #include <linux/device.h>
 #include <linux/errno.h>
 #include <linux/i2c.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/types.h>
 
@@ -231,7 +232,7 @@ static int sps30_i2c_probe(struct i2c_client *client)
 }
 
 static const struct i2c_device_id sps30_i2c_id[] = {
-	{ .name = "sps30" },
+	{ "sps30" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, sps30_i2c_id);
@@ -255,4 +256,4 @@ module_i2c_driver(sps30_i2c_driver);
 MODULE_AUTHOR("Tomasz Duszynski <tomasz.duszynski@octakon.com>");
 MODULE_DESCRIPTION("Sensirion SPS30 particulate matter sensor i2c driver");
 MODULE_LICENSE("GPL v2");
-MODULE_IMPORT_NS("IIO_SPS30");
+MODULE_IMPORT_NS(IIO_SPS30);

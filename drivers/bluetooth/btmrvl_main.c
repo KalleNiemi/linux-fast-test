@@ -7,7 +7,6 @@
 
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/string_choices.h>
 #include <net/bluetooth/bluetooth.h>
 #include <net/bluetooth/hci_core.h>
 #include <linux/mmc/sdio_func.h>
@@ -89,7 +88,7 @@ int btmrvl_process_event(struct btmrvl_private *priv, struct sk_buff *skb)
 			else
 				adapter->psmode = 0;
 			BT_DBG("PS Mode:%s",
-			       str_enable_disable(adapter->psmode));
+				(adapter->psmode) ? "Enable" : "Disable");
 		} else {
 			BT_DBG("PS Mode command failed");
 		}
@@ -710,13 +709,13 @@ struct btmrvl_private *btmrvl_add_card(void *card)
 {
 	struct btmrvl_private *priv;
 
-	priv = kzalloc_obj(*priv);
+	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
 	if (!priv) {
 		BT_ERR("Can not allocate priv");
 		goto err_priv;
 	}
 
-	priv->adapter = kzalloc_obj(*priv->adapter);
+	priv->adapter = kzalloc(sizeof(*priv->adapter), GFP_KERNEL);
 	if (!priv->adapter) {
 		BT_ERR("Allocate buffer for btmrvl_adapter failed!");
 		goto err_adapter;

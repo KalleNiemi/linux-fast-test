@@ -385,7 +385,7 @@ static int it913x_probe(struct platform_device *pdev)
 	int ret;
 	char *chip_ver_str;
 
-	dev = kzalloc_obj(struct it913x_dev);
+	dev = kzalloc(sizeof(struct it913x_dev), GFP_KERNEL);
 	if (dev == NULL) {
 		ret = -ENOMEM;
 		dev_err(&pdev->dev, "kzalloc() failed\n");
@@ -444,7 +444,7 @@ static struct platform_driver it913x_driver = {
 		.suppress_bind_attrs	= true,
 	},
 	.probe		= it913x_probe,
-	.remove		= it913x_remove,
+	.remove_new	= it913x_remove,
 	.id_table	= it913x_id_table,
 };
 

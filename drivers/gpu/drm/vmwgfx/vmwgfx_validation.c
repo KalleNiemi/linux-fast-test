@@ -262,8 +262,9 @@ int vmw_validation_add_bo(struct vmw_validation_context *ctx,
 				bo_node->hash.key);
 		}
 		val_buf = &bo_node->base;
-		vmw_bo_reference(vbo);
-		val_buf->bo = &vbo->tbo;
+		val_buf->bo = ttm_bo_get_unless_zero(&vbo->tbo);
+		if (!val_buf->bo)
+			return -ESRCH;
 		val_buf->num_shared = 0;
 		list_add_tail(&val_buf->head, &ctx->bo_list);
 	}
@@ -309,8 +310,7 @@ int vmw_validation_add_resource(struct vmw_validation_context *ctx,
 	}
 	node->res = vmw_resource_reference_unless_doomed(res);
 	if (!node->res) {
-		if (ctx->sw_context)
-			hash_del_rcu(&node->hash.head);
+		hash_del_rcu(&node->hash.head);
 		return -ESRCH;
 	}
 
@@ -658,7 +658,7 @@ void vmw_validation_unref_lists(struct vmw_validation_context *ctx)
 	struct vmw_validation_res_node *val;
 
 	list_for_each_entry(entry, &ctx->bo_list, base.head) {
-		drm_gem_object_put(&entry->base.bo->base);
+		ttm_bo_put(entry->base.bo);
 		entry->base.bo = NULL;
 	}
 

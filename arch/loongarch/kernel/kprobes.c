@@ -60,18 +60,16 @@ NOKPROBE_SYMBOL(arch_prepare_kprobe);
 /* Install breakpoint in text */
 void arch_arm_kprobe(struct kprobe *p)
 {
-	u32 insn = KPROBE_BP_INSN;
-
-	larch_insn_text_copy(p->addr, &insn, LOONGARCH_INSN_SIZE);
+	*p->addr = KPROBE_BP_INSN;
+	flush_insn_slot(p);
 }
 NOKPROBE_SYMBOL(arch_arm_kprobe);
 
 /* Remove breakpoint from text */
 void arch_disarm_kprobe(struct kprobe *p)
 {
-	u32 insn = p->opcode;
-
-	larch_insn_text_copy(p->addr, &insn, LOONGARCH_INSN_SIZE);
+	*p->addr = p->opcode;
+	flush_insn_slot(p);
 }
 NOKPROBE_SYMBOL(arch_disarm_kprobe);
 

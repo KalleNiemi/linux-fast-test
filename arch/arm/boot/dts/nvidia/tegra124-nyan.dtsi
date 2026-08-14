@@ -14,11 +14,6 @@
 		stdout-path = "serial0:115200n8";
 	};
 
-	firmware {
-		#address-cells = <1>;
-		#size-cells = <1>;
-	};
-
 	/*
 	 * Note that recent version of the device tree compiler (starting with
 	 * version 1.4.2) warn about this node containing a reg property, but
@@ -721,7 +716,6 @@
 		regulator-name = "+5V_USB_HS";
 		regulator-min-microvolt = <5000000>;
 		regulator-max-microvolt = <5000000>;
-		regulator-boot-on;
 		gpio = <&gpio TEGRA_GPIO(N, 4) GPIO_ACTIVE_HIGH>;
 		enable-active-high;
 		gpio-open-drain;
@@ -733,7 +727,6 @@
 		regulator-name = "+5V_USB_SS";
 		regulator-min-microvolt = <5000000>;
 		regulator-max-microvolt = <5000000>;
-		regulator-boot-on;
 		gpio = <&gpio TEGRA_GPIO(N, 5) GPIO_ACTIVE_HIGH>;
 		enable-active-high;
 		gpio-open-drain;

@@ -530,7 +530,7 @@ static int img_spfi_probe(struct platform_device *pdev)
 	int ret;
 	u32 max_speed_hz;
 
-	host = devm_spi_alloc_host(&pdev->dev, sizeof(*spfi));
+	host = spi_alloc_host(&pdev->dev, sizeof(*spfi));
 	if (!host)
 		return -ENOMEM;
 	platform_set_drvdata(pdev, host);
@@ -541,32 +541,36 @@ static int img_spfi_probe(struct platform_device *pdev)
 	spin_lock_init(&spfi->lock);
 
 	spfi->regs = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
-	if (IS_ERR(spfi->regs))
-		return PTR_ERR(spfi->regs);
-
+	if (IS_ERR(spfi->regs)) {
+		ret = PTR_ERR(spfi->regs);
+		goto put_spi;
+	}
 	spfi->phys = res->start;
 
 	spfi->irq = platform_get_irq(pdev, 0);
-	if (spfi->irq < 0)
-		return spfi->irq;
-
+	if (spfi->irq < 0) {
+		ret = spfi->irq;
+		goto put_spi;
+	}
 	ret = devm_request_irq(spfi->dev, spfi->irq, img_spfi_irq,
 			       IRQ_TYPE_LEVEL_HIGH, dev_name(spfi->dev), spfi);
 	if (ret)
-		return ret;
+		goto put_spi;
 
 	spfi->sys_clk = devm_clk_get(spfi->dev, "sys");
-	if (IS_ERR(spfi->sys_clk))
-		return PTR_ERR(spfi->sys_clk);
-
+	if (IS_ERR(spfi->sys_clk)) {
+		ret = PTR_ERR(spfi->sys_clk);
+		goto put_spi;
+	}
 	spfi->spfi_clk = devm_clk_get(spfi->dev, "spfi");
-	if (IS_ERR(spfi->spfi_clk))
-		return PTR_ERR(spfi->spfi_clk);
+	if (IS_ERR(spfi->spfi_clk)) {
+		ret = PTR_ERR(spfi->spfi_clk);
+		goto put_spi;
+	}
 
 	ret = clk_prepare_enable(spfi->sys_clk);
 	if (ret)
-		return ret;
-
+		goto put_spi;
 	ret = clk_prepare_enable(spfi->spfi_clk);
 	if (ret)
 		goto disable_pclk;
@@ -583,6 +587,7 @@ static int img_spfi_probe(struct platform_device *pdev)
 	host->mode_bits = SPI_CPOL | SPI_CPHA | SPI_TX_DUAL | SPI_RX_DUAL;
 	if (of_property_read_bool(spfi->dev->of_node, "img,supports-quad-mode"))
 		host->mode_bits |= SPI_TX_QUAD | SPI_RX_QUAD;
+	host->dev.of_node = pdev->dev.of_node;
 	host->bits_per_word_mask = SPI_BPW_MASK(32) | SPI_BPW_MASK(8);
 	host->max_speed_hz = clk_get_rate(spfi->spfi_clk) / 4;
 	host->min_speed_hz = clk_get_rate(spfi->spfi_clk) / 512;
@@ -654,6 +659,8 @@ disable_pm:
 	clk_disable_unprepare(spfi->spfi_clk);
 disable_pclk:
 	clk_disable_unprepare(spfi->sys_clk);
+put_spi:
+	spi_controller_put(host);
 
 	return ret;
 }
@@ -662,6 +669,8 @@ static void img_spfi_remove(struct platform_device *pdev)
 {
 	struct spi_controller *host = platform_get_drvdata(pdev);
 	struct img_spfi *spfi = spi_controller_get_devdata(host);
+
+	spi_controller_get(host);
 
 	spi_unregister_controller(host);
 
@@ -675,6 +684,8 @@ static void img_spfi_remove(struct platform_device *pdev)
 		clk_disable_unprepare(spfi->spfi_clk);
 		clk_disable_unprepare(spfi->sys_clk);
 	}
+
+	spi_controller_put(host);
 }
 
 #ifdef CONFIG_PM
@@ -751,7 +762,7 @@ static struct platform_driver img_spfi_driver = {
 		.of_match_table = of_match_ptr(img_spfi_of_match),
 	},
 	.probe = img_spfi_probe,
-	.remove = img_spfi_remove,
+	.remove_new = img_spfi_remove,
 };
 module_platform_driver(img_spfi_driver);
 

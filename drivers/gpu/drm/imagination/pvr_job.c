@@ -14,7 +14,6 @@
 #include "pvr_stream.h"
 #include "pvr_stream_defs.h"
 #include "pvr_sync.h"
-#include "pvr_trace.h"
 
 #include <drm/drm_exec.h>
 #include <drm/drm_gem.h>
@@ -91,13 +90,20 @@ static int pvr_fw_cmd_init(struct pvr_device *pvr_dev, struct pvr_job *job,
 	void *stream;
 	int err;
 
-	stream = memdup_user(u64_to_user_ptr(stream_userptr), stream_len);
-	if (IS_ERR(stream))
-		return PTR_ERR(stream);
+	stream = kzalloc(stream_len, GFP_KERNEL);
+	if (!stream)
+		return -ENOMEM;
+
+	if (copy_from_user(stream, u64_to_user_ptr(stream_userptr), stream_len)) {
+		err = -EFAULT;
+		goto err_free_stream;
+	}
 
 	err = pvr_job_process_stream(pvr_dev, stream_def, stream, stream_len, job);
 
+err_free_stream:
 	kfree(stream);
+
 	return err;
 }
 
@@ -327,7 +333,7 @@ prepare_job_syncs(struct pvr_file *pvr_file,
 		  struct pvr_job_data *job_data,
 		  struct xarray *signal_array)
 {
-	struct dma_fence *finished_fence;
+	struct dma_fence *done_fence;
 	int err = pvr_sync_signal_array_collect_ops(signal_array,
 						    from_pvr_file(pvr_file),
 						    job_data->sync_op_count,
@@ -360,13 +366,13 @@ prepare_job_syncs(struct pvr_file *pvr_file,
 			return err;
 	}
 
-	/* We need to arm the job to get the job finished fence. */
-	finished_fence = pvr_queue_job_arm(job_data->job);
+	/* We need to arm the job to get the job done fence. */
+	done_fence = pvr_queue_job_arm(job_data->job);
 
 	err = pvr_sync_signal_array_update_fences(signal_array,
 						  job_data->sync_op_count,
 						  job_data->sync_ops,
-						  finished_fence);
+						  done_fence);
 	return err;
 }
 
@@ -416,7 +422,7 @@ create_job(struct pvr_device *pvr_dev,
 	    (args->hwrt.set_handle || args->hwrt.data_index))
 		return ERR_PTR(-EINVAL);
 
-	job = kzalloc_obj(*job);
+	job = kzalloc(sizeof(*job), GFP_KERNEL);
 	if (!job)
 		return ERR_PTR(-ENOMEM);
 
@@ -447,7 +453,7 @@ create_job(struct pvr_device *pvr_dev,
 	if (err)
 		goto err_put_job;
 
-	err = pvr_queue_job_init(job, pvr_file->file->client_id);
+	err = pvr_queue_job_init(job);
 	if (err)
 		goto err_put_job;
 
@@ -511,8 +517,6 @@ static int pvr_job_data_init(struct pvr_device *pvr_dev,
 		}
 
 		job_data_out[i].sync_op_count = job_args[i].sync_ops.count;
-
-		trace_pvr_job_create(pvr_dev, job_data_out[i].job, job_data_out[i].sync_op_count);
 	}
 
 	return 0;
@@ -600,6 +604,8 @@ update_job_resvs_for_each(struct pvr_job_data *job_data, u32 job_count)
 static bool can_combine_jobs(struct pvr_job *a, struct pvr_job *b)
 {
 	struct pvr_job *geom_job = a, *frag_job = b;
+	struct dma_fence *fence;
+	unsigned long index;
 
 	/* Geometry and fragment jobs can be combined if they are queued to the
 	 * same context and targeting the same HWRT.
@@ -610,9 +616,13 @@ static bool can_combine_jobs(struct pvr_job *a, struct pvr_job *b)
 	    a->hwrt != b->hwrt)
 		return false;
 
-	/* We combine when we see an explicit geom -> frag dep. */
-	return drm_sched_job_has_dependency(&frag_job->base,
-					    &geom_job->base.s_fence->scheduled);
+	xa_for_each(&frag_job->base.dependencies, index, fence) {
+		/* We combine when we see an explicit geom -> frag dep. */
+		if (&geom_job->base.s_fence->scheduled == fence)
+			return true;
+	}
+
+	return false;
 }
 
 static struct dma_fence *
@@ -721,8 +731,8 @@ pvr_submit_jobs(struct pvr_device *pvr_dev, struct pvr_file *pvr_file,
 	if (err)
 		return err;
 
-	job_data = kvmalloc_objs(*job_data, args->jobs.count,
-				 GFP_KERNEL | __GFP_ZERO);
+	job_data = kvmalloc_array(args->jobs.count, sizeof(*job_data),
+				  GFP_KERNEL | __GFP_ZERO);
 	if (!job_data) {
 		err = -ENOMEM;
 		goto out_free;

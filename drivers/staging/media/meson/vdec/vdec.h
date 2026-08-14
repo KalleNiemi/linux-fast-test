@@ -282,11 +282,6 @@ struct amvdec_session {
 	void *priv;
 };
 
-static inline struct amvdec_session *file_to_amvdec_session(struct file *filp)
-{
-	return container_of(file_to_v4l2_fh(filp), struct amvdec_session, fh);
-}
-
 u32 amvdec_get_output_size(struct amvdec_session *sess);
 
 #endif

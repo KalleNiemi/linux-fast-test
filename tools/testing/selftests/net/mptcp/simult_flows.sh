@@ -28,14 +28,14 @@ size=0
 
 usage() {
 	echo "Usage: $0 [ -b ] [ -c ] [ -d ] [ -i]"
-	echo -e "\t-b: bail out after first error, otherwise runs all testcases"
+	echo -e "\t-b: bail out after first error, otherwise runs al testcases"
 	echo -e "\t-c: capture packets for each test using tcpdump (default: no capture)"
 	echo -e "\t-d: debug this script"
 	echo -e "\t-i: use 'ip mptcp' instead of 'pm_nl_ctl'"
 }
 
 # This function is used in the cleanup trap
-#shellcheck disable=SC2317,SC2329
+#shellcheck disable=SC2317
 cleanup()
 {
 	rm -f "$cout" "$sout"
@@ -76,13 +76,13 @@ setup()
 
 	ip -net "$ns1" addr add 10.0.1.1/24 dev ns1eth1
 	ip -net "$ns1" addr add dead:beef:1::1/64 dev ns1eth1 nodad
-	ip -net "$ns1" link set ns1eth1 up mtu 1500 gso_max_segs 0
+	ip -net "$ns1" link set ns1eth1 up mtu 1500
 	ip -net "$ns1" route add default via 10.0.1.2
 	ip -net "$ns1" route add default via dead:beef:1::2
 
 	ip -net "$ns1" addr add 10.0.2.1/24 dev ns1eth2
 	ip -net "$ns1" addr add dead:beef:2::1/64 dev ns1eth2 nodad
-	ip -net "$ns1" link set ns1eth2 up mtu 1500 gso_max_segs 0
+	ip -net "$ns1" link set ns1eth2 up mtu 1500
 	ip -net "$ns1" route add default via 10.0.2.2 metric 101
 	ip -net "$ns1" route add default via dead:beef:2::2 metric 101
 
@@ -91,21 +91,21 @@ setup()
 
 	ip -net "$ns2" addr add 10.0.1.2/24 dev ns2eth1
 	ip -net "$ns2" addr add dead:beef:1::2/64 dev ns2eth1 nodad
-	ip -net "$ns2" link set ns2eth1 up mtu 1500 gso_max_segs 0
+	ip -net "$ns2" link set ns2eth1 up mtu 1500
 
 	ip -net "$ns2" addr add 10.0.2.2/24 dev ns2eth2
 	ip -net "$ns2" addr add dead:beef:2::2/64 dev ns2eth2 nodad
-	ip -net "$ns2" link set ns2eth2 up mtu 1500 gso_max_segs 0
+	ip -net "$ns2" link set ns2eth2 up mtu 1500
 
 	ip -net "$ns2" addr add 10.0.3.2/24 dev ns2eth3
 	ip -net "$ns2" addr add dead:beef:3::2/64 dev ns2eth3 nodad
-	ip -net "$ns2" link set ns2eth3 up mtu 1500 gso_max_segs 0
+	ip -net "$ns2" link set ns2eth3 up mtu 1500
 	ip netns exec "$ns2" sysctl -q net.ipv4.ip_forward=1
 	ip netns exec "$ns2" sysctl -q net.ipv6.conf.all.forwarding=1
 
 	ip -net "$ns3" addr add 10.0.3.3/24 dev ns3eth1
 	ip -net "$ns3" addr add dead:beef:3::3/64 dev ns3eth1 nodad
-	ip -net "$ns3" link set ns3eth1 up mtu 1500 gso_max_segs 0
+	ip -net "$ns3" link set ns3eth1 up mtu 1500
 	ip -net "$ns3" route add default via 10.0.3.2
 	ip -net "$ns3" route add default via dead:beef:3::2
 
@@ -155,35 +155,24 @@ do_transfer()
 		sleep 1
 	fi
 
-	mptcp_lib_nstat_init "${ns3}"
-	mptcp_lib_nstat_init "${ns1}"
-
-	ip netns exec ${ns3} \
-		./mptcp_connect -jt ${timeout_poll} -l -p $port -T $max_time \
-			0.0.0.0 < "$sin" > "$sout" &
+	timeout ${timeout_test} \
+		ip netns exec ${ns3} \
+			./mptcp_connect -jt ${timeout_poll} -l -p $port -T $max_time \
+				0.0.0.0 < "$sin" > "$sout" &
 	local spid=$!
 
 	mptcp_lib_wait_local_port_listen "${ns3}" "${port}"
 
-	ip netns exec ${ns1} \
-		./mptcp_connect -jt ${timeout_poll} -p $port -T $max_time \
-			10.0.3.3 < "$cin" > "$cout" &
+	timeout ${timeout_test} \
+		ip netns exec ${ns1} \
+			./mptcp_connect -jt ${timeout_poll} -p $port -T $max_time \
+				10.0.3.3 < "$cin" > "$cout" &
 	local cpid=$!
-
-	mptcp_lib_wait_timeout "${timeout_test}" "${ns3}" "${ns1}" "${port}" \
-		"${cpid}" "${spid}" &
-	local timeout_pid=$!
 
 	wait $cpid
 	local retc=$?
 	wait $spid
 	local rets=$?
-
-	if kill -0 $timeout_pid; then
-		# Finished before the timeout: kill the background job
-		mptcp_lib_kill_group_wait $timeout_pid
-		timeout_pid=0
-	fi
 
 	if $capture; then
 		sleep 1
@@ -191,25 +180,25 @@ do_transfer()
 		kill ${cappid_connector}
 	fi
 
-	mptcp_lib_nstat_get "${ns3}"
-	mptcp_lib_nstat_get "${ns1}"
-
 	cmp $sin $cout > /dev/null 2>&1
 	local cmps=$?
 	cmp $cin $sout > /dev/null 2>&1
 	local cmpc=$?
 
-	if [ $retc -eq 0 ] && [ $rets -eq 0 ] &&
-	   [ $cmpc -eq 0 ] && [ $cmps -eq 0 ] &&
-	   [ $timeout_pid -eq 0 ]; then
-		printf "%-16s" " max $max_time "
+	printf "%-16s" " max $max_time "
+	if [ $retc -eq 0 ] && [ $rets -eq 0 ] && \
+	   [ $cmpc -eq 0 ] && [ $cmps -eq 0 ]; then
 		mptcp_lib_pr_ok
 		cat "$capout"
 		return 0
 	fi
 
-	mptcp_lib_pr_fail "client exit code $retc, server $rets"
-	mptcp_lib_pr_err_stats "${ns3}" "${ns1}" "${port}"
+	mptcp_lib_pr_fail
+	echo "client exit code $retc, server $rets" 1>&2
+	echo -e "\nnetns ${ns3} socket stat for $port:" 1>&2
+	ip netns exec ${ns3} ss -nita 1>&2 -o "sport = :$port"
+	echo -e "\nnetns ${ns1} socket stat for $port:" 1>&2
+	ip netns exec ${ns1} ss -nita 1>&2 -o "dport = :$port"
 	ls -l $sin $cout
 	ls -l $cin $sout
 
@@ -223,11 +212,9 @@ run_test()
 	local rate2=$2
 	local delay1=$3
 	local delay2=$4
-	local limit1=$5
-	local limit2=$6
 	local lret
 	local dev
-	shift 6
+	shift 4
 	local msg=$*
 
 	[ $delay1 -gt 0 ] && delay1="delay ${delay1}ms" || delay1=""
@@ -242,10 +229,10 @@ run_test()
 
 	# keep the queued pkts number low, or the RTT estimator will see
 	# increasing latency over time.
-	tc -n $ns1 qdisc add dev ns1eth1 root netem rate ${rate1}mbit $delay1 limit ${limit1}
-	tc -n $ns1 qdisc add dev ns1eth2 root netem rate ${rate2}mbit $delay2 limit ${limit2}
-	tc -n $ns2 qdisc add dev ns2eth1 root netem rate ${rate1}mbit $delay1 limit ${limit1}
-	tc -n $ns2 qdisc add dev ns2eth2 root netem rate ${rate2}mbit $delay2 limit ${limit2}
+	tc -n $ns1 qdisc add dev ns1eth1 root netem rate ${rate1}mbit $delay1 limit 50
+	tc -n $ns1 qdisc add dev ns1eth2 root netem rate ${rate2}mbit $delay2 limit 50
+	tc -n $ns2 qdisc add dev ns2eth1 root netem rate ${rate1}mbit $delay1 limit 50
+	tc -n $ns2 qdisc add dev ns2eth2 root netem rate ${rate2}mbit $delay2 limit 50
 
 	# time is measured in ms, account for transfer size, aggregated link speed
 	# and header overhead (10%)
@@ -303,13 +290,13 @@ done
 
 setup
 mptcp_lib_subtests_last_ts_reset
-run_test 10 10 0 0  20 20 "balanced bwidth"
-run_test 10 10 1 25 20 50 "balanced bwidth with unbalanced delay"
+run_test 10 10 0 0 "balanced bwidth"
+run_test 10 10 1 25 "balanced bwidth with unbalanced delay"
 
 # we still need some additional infrastructure to pass the following test-cases
-MPTCP_LIB_SUBTEST_FLAKY=1 run_test 10 3 0 0  30 20 "unbalanced bwidth"
-run_test 10 3 1 25 40 30 "unbalanced bwidth with unbalanced delay"
-run_test 10 3 25 1 50 30 "unbalanced bwidth with opposed, unbalanced delay"
+MPTCP_LIB_SUBTEST_FLAKY=1 run_test 10 3 0 0 "unbalanced bwidth"
+run_test 10 3 1 25 "unbalanced bwidth with unbalanced delay"
+run_test 10 3 25 1 "unbalanced bwidth with opposed, unbalanced delay"
 
 mptcp_lib_result_print_all_tap
 exit $ret

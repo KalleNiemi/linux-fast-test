@@ -5,6 +5,7 @@
 
 #include <linux/device.h>
 #include <linux/module.h>
+#include <linux/mod_devicetable.h>
 #include <linux/platform_device.h>
 
 #include "brcmnand.h"
@@ -22,7 +23,7 @@ static int brcmstb_nand_probe(struct platform_device *pdev)
 
 static struct platform_driver brcmstb_nand_driver = {
 	.probe			= brcmstb_nand_probe,
-	.remove			= brcmnand_remove,
+	.remove_new		= brcmnand_remove,
 	.driver = {
 		.name		= "brcmstb_nand",
 		.pm		= &brcmnand_pm_ops,

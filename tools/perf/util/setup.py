@@ -4,7 +4,6 @@ from re import sub
 import shlex
 
 cc = getenv("CC")
-assert cc, "Environment variable CC not set"
 
 # Check if CC has options, as is the case in yocto, where it uses CC="cc --sysroot..."
 cc_tokens = cc.split()
@@ -14,26 +13,14 @@ if len(cc_tokens) > 1:
 else:
     cc_options = ""
 
-# ignore optional stderr could be None as it is set to PIPE to avoid that.
-# mypy: disable-error-code="union-attr"
 cc_is_clang = b"clang version" in Popen([cc, "-v"], stderr=PIPE).stderr.readline()
-
-srctree = getenv('srctree')
-assert srctree, "Environment variable srctree, for the Linux sources, not set"
-src_feature_tests  = f'{srctree}/tools/build/feature'
+src_feature_tests  = getenv('srctree') + '/tools/build/feature'
 
 def clang_has_option(option):
-    error_substrings = (
-        b"unknown argument",
-        b"is not supported",
-        b"unknown warning option"
-    )
-    cmd = shlex.split(f"{cc} {cc_options} {option}") + [
-        "-o", "/dev/null",
-        path.join(src_feature_tests, "test-hello.c")
-    ]
+    cmd = shlex.split(f"{cc} {cc_options} {option}")
+    cmd.append(path.join(src_feature_tests, "test-hello.c"))
     cc_output = Popen(cmd, stderr=PIPE).stderr.readlines()
-    return not any(any(error in line for error in error_substrings) for line in cc_output)
+    return [o for o in cc_output if ((b"unknown argument" in o) or (b"is not supported" in o) or (b"unknown warning option" in o))] == [ ]
 
 if cc_is_clang:
     from sysconfig import get_config_vars
@@ -74,26 +61,27 @@ class install_lib(_install_lib):
         self.build_dir = build_lib
 
 
+cflags = getenv('CFLAGS', '').split()
 # switch off several checks (need to be at the end of cflags list)
-extra_cflags = ['-fno-strict-aliasing', '-Wno-write-strings', '-Wno-unused-parameter', '-Wno-redundant-decls' ]
+cflags += ['-fno-strict-aliasing', '-Wno-write-strings', '-Wno-unused-parameter', '-Wno-redundant-decls' ]
 if cc_is_clang:
-    extra_cflags += ["-Wno-unused-command-line-argument" ]
+    cflags += ["-Wno-unused-command-line-argument" ]
     if clang_has_option("-Wno-cast-function-type-mismatch"):
-        extra_cflags += ["-Wno-cast-function-type-mismatch" ]
+        cflags += ["-Wno-cast-function-type-mismatch" ]
 else:
-    extra_cflags += ['-Wno-cast-function-type' ]
+    cflags += ['-Wno-cast-function-type' ]
 
 # The python headers have mixed code with declarations (decls after asserts, for instance)
-extra_cflags += [ "-Wno-declaration-after-statement" ]
+cflags += [ "-Wno-declaration-after-statement" ]
 
-src_perf  = f'{srctree}/tools/perf'
+src_perf  = getenv('srctree') + '/tools/perf'
 build_lib = getenv('PYTHON_EXTBUILD_LIB')
 build_tmp = getenv('PYTHON_EXTBUILD_TMP')
 
 perf = Extension('perf',
                  sources = [ src_perf + '/util/python.c' ],
 		         include_dirs = ['util/include'],
-		         extra_compile_args = extra_cflags,
+		         extra_compile_args = cflags,
                  )
 
 setup(name='perf',

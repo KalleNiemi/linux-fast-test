@@ -19,6 +19,32 @@
 #include <adf_dbgfs.h>
 #include "adf_dh895xcc_hw_data.h"
 
+static void adf_shutdown(struct pci_dev *pdev)
+{
+	struct adf_accel_dev *accel_dev = adf_devmgr_pci_to_accel_dev(pdev);
+
+	adf_dev_down(accel_dev);
+}
+
+static const struct pci_device_id adf_pci_tbl[] = {
+	{ PCI_VDEVICE(INTEL, PCI_DEVICE_ID_INTEL_QAT_DH895XCC), },
+	{ }
+};
+MODULE_DEVICE_TABLE(pci, adf_pci_tbl);
+
+static int adf_probe(struct pci_dev *dev, const struct pci_device_id *ent);
+static void adf_remove(struct pci_dev *dev);
+
+static struct pci_driver adf_driver = {
+	.id_table = adf_pci_tbl,
+	.name = ADF_DH895XCC_DEVICE_NAME,
+	.probe = adf_probe,
+	.remove = adf_remove,
+	.shutdown = adf_shutdown,
+	.sriov_configure = adf_sriov_configure,
+	.err_handler = &adf_err_handler,
+};
+
 static void adf_cleanup_pci_dev(struct adf_accel_dev *accel_dev)
 {
 	pci_release_regions(accel_dev->accel_pci_dev.pci_dev);
@@ -162,14 +188,15 @@ static int adf_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		bar->size = pci_resource_len(pdev, bar_nr);
 		bar->virt_addr = pci_iomap(accel_pci_dev->pci_dev, bar_nr, 0);
 		if (!bar->virt_addr) {
-			pci_err(pdev, "Failed to map BAR %d\n", bar_nr);
+			dev_err(&pdev->dev, "Failed to map BAR %d\n", bar_nr);
 			ret = -EFAULT;
 			goto out_err_free_reg;
 		}
 	}
+	pci_set_master(pdev);
 
 	if (pci_save_state(pdev)) {
-		pci_err(pdev, "Failed to save pci state\n");
+		dev_err(&pdev->dev, "Failed to save pci state\n");
 		ret = -ENOMEM;
 		goto out_err_free_reg;
 	}
@@ -208,29 +235,6 @@ static void adf_remove(struct pci_dev *pdev)
 	kfree(accel_dev);
 }
 
-static void adf_shutdown(struct pci_dev *pdev)
-{
-	struct adf_accel_dev *accel_dev = adf_devmgr_pci_to_accel_dev(pdev);
-
-	adf_dev_down(accel_dev);
-}
-
-static const struct pci_device_id adf_pci_tbl[] = {
-	{ PCI_VDEVICE(INTEL, PCI_DEVICE_ID_INTEL_QAT_DH895XCC) },
-	{ }
-};
-MODULE_DEVICE_TABLE(pci, adf_pci_tbl);
-
-static struct pci_driver adf_driver = {
-	.id_table = adf_pci_tbl,
-	.name = ADF_DH895XCC_DEVICE_NAME,
-	.probe = adf_probe,
-	.remove = adf_remove,
-	.shutdown = adf_shutdown,
-	.sriov_configure = adf_sriov_configure,
-	.err_handler = &adf_err_handler,
-};
-
 static int __init adfdrv_init(void)
 {
 	request_module("intel_qat");
@@ -255,4 +259,5 @@ MODULE_AUTHOR("Intel");
 MODULE_FIRMWARE(ADF_DH895XCC_FW);
 MODULE_FIRMWARE(ADF_DH895XCC_MMP);
 MODULE_DESCRIPTION("Intel(R) QuickAssist Technology");
-MODULE_IMPORT_NS("CRYPTO_QAT");
+MODULE_VERSION(ADF_DRV_VERSION);
+MODULE_IMPORT_NS(CRYPTO_QAT);

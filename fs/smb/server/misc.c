@@ -121,9 +121,7 @@ int parse_stream_name(char *filename, char **stream_name, int *s_type)
 	char *stream_type;
 	char *s_name;
 	int rc = 0;
-	bool has_stream_type = false;
 
-	*stream_name = NULL;
 	s_name = filename;
 	filename = strsep(&s_name, ":");
 	ksmbd_debug(SMB, "filename : %s, streams : %s\n", filename, s_name);
@@ -139,19 +137,13 @@ int parse_stream_name(char *filename, char **stream_name, int *s_type)
 
 		ksmbd_debug(SMB, "stream name : %s, stream type : %s\n", s_name,
 			    stream_type);
-		if (!strncasecmp("$data", stream_type, 5)) {
+		if (!strncasecmp("$data", stream_type, 5))
 			*s_type = DATA_STREAM;
-			has_stream_type = true;
-		} else if (!strncasecmp("$index_allocation", stream_type, 17)) {
+		else if (!strncasecmp("$index_allocation", stream_type, 17))
 			*s_type = DIR_STREAM;
-			has_stream_type = true;
-		} else {
+		else
 			rc = -ENOENT;
-		}
 	}
-
-	if (has_stream_type && !s_name[0] && *s_type == DATA_STREAM)
-		goto out;
 
 	*stream_name = s_name;
 out:
@@ -172,8 +164,6 @@ char *convert_to_nt_pathname(struct ksmbd_share_config *share,
 {
 	char *pathname, *ab_pathname, *nt_pathname;
 	int share_path_len = share->path_sz;
-	size_t ab_pathname_len;
-	int prefix;
 
 	pathname = kmalloc(PATH_MAX, KSMBD_DEFAULT_GFP);
 	if (!pathname)
@@ -190,18 +180,15 @@ char *convert_to_nt_pathname(struct ksmbd_share_config *share,
 		goto free_pathname;
 	}
 
-	ab_pathname_len = strlen(&ab_pathname[share_path_len]);
-	prefix = ab_pathname[share_path_len] == '\0' ? 1 : 0;
-	nt_pathname = kmalloc(prefix + ab_pathname_len + 1, KSMBD_DEFAULT_GFP);
+	nt_pathname = kzalloc(strlen(&ab_pathname[share_path_len]) + 2,
+			      KSMBD_DEFAULT_GFP);
 	if (!nt_pathname) {
 		nt_pathname = ERR_PTR(-ENOMEM);
 		goto free_pathname;
 	}
-
-	if (prefix)
-		*nt_pathname = '/';
-	memcpy(nt_pathname + prefix, &ab_pathname[share_path_len],
-	       ab_pathname_len + 1);
+	if (ab_pathname[share_path_len] == '\0')
+		strcpy(nt_pathname, "/");
+	strcat(nt_pathname, &ab_pathname[share_path_len]);
 
 	ksmbd_conv_path_to_windows(nt_pathname);
 

@@ -70,7 +70,6 @@ static int red_use_nodrop(struct red_sched_data *q)
 static int red_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		       struct sk_buff **to_free)
 {
-	enum qdisc_drop_reason reason = QDISC_DROP_CONGESTED;
 	struct red_sched_data *q = qdisc_priv(sch);
 	struct Qdisc *child = q->qdisc;
 	unsigned int len;
@@ -111,7 +110,6 @@ static int red_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		break;
 
 	case RED_HARD_MARK:
-		reason = QDISC_DROP_OVERLIMIT;
 		qdisc_qstats_overlimit(sch);
 		if (red_use_harddrop(q) || !red_use_ecn(q)) {
 			WRITE_ONCE(q->stats.forced_drop,
@@ -138,8 +136,8 @@ static int red_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	len = qdisc_pkt_len(skb);
 	ret = qdisc_enqueue(skb, child, to_free);
 	if (likely(ret == NET_XMIT_SUCCESS)) {
-		qstats_backlog_add(sch, len);
-		qdisc_qlen_inc(sch);
+		sch->qstats.backlog += len;
+		sch->q.qlen++;
 	} else if (net_xmit_drop_count(ret)) {
 		WRITE_ONCE(q->stats.pdrop,
 			   q->stats.pdrop + 1);
@@ -152,7 +150,7 @@ congestion_drop:
 	if (!skb)
 		return NET_XMIT_CN | ret;
 
-	qdisc_drop_reason(skb, sch, to_free, reason);
+	qdisc_drop(skb, sch, to_free);
 	return NET_XMIT_CN;
 }
 
@@ -166,7 +164,7 @@ static struct sk_buff *red_dequeue(struct Qdisc *sch)
 	if (skb) {
 		qdisc_bstats_update(sch, skb);
 		qdisc_qstats_backlog_dec(sch, skb);
-		qdisc_qlen_dec(sch);
+		sch->q.qlen--;
 	} else {
 		if (!red_is_idling(&q->vars))
 			red_start_of_idle_period(&q->vars);
@@ -225,7 +223,7 @@ static void red_destroy(struct Qdisc *sch)
 
 	tcf_qevent_destroy(&q->qe_mark, sch);
 	tcf_qevent_destroy(&q->qe_early_drop, sch);
-	timer_delete_sync(&q->adapt_timer);
+	del_timer_sync(&q->adapt_timer);
 	red_offload(sch, false);
 	qdisc_put(q->qdisc);
 }
@@ -257,7 +255,7 @@ static int __red_change(struct Qdisc *sch, struct nlattr **tb,
 	    tb[TCA_RED_STAB] == NULL)
 		return -EINVAL;
 
-	max_P = nla_get_u32_default(tb[TCA_RED_MAX_P], 0);
+	max_P = tb[TCA_RED_MAX_P] ? nla_get_u32(tb[TCA_RED_MAX_P]) : 0;
 
 	ctl = nla_data(tb[TCA_RED_PARMS]);
 	stab = nla_data(tb[TCA_RED_STAB]);
@@ -304,7 +302,7 @@ static int __red_change(struct Qdisc *sch, struct nlattr **tb,
 		      max_P);
 	red_set_vars(&q->vars);
 
-	timer_delete(&q->adapt_timer);
+	del_timer(&q->adapt_timer);
 	if (ctl->flags & TC_RED_ADAPTATIVE)
 		mod_timer(&q->adapt_timer, jiffies + HZ/2);
 
@@ -328,7 +326,7 @@ unlock_out:
 
 static inline void red_adaptative_timer(struct timer_list *t)
 {
-	struct red_sched_data *q = timer_container_of(q, t, adapt_timer);
+	struct red_sched_data *q = from_timer(q, t, adapt_timer);
 	struct Qdisc *sch = q->sch;
 	spinlock_t *root_lock;
 

@@ -316,7 +316,6 @@ enum joycon_ctlr_type {
 	JOYCON_CTLR_TYPE_JCL  = 0x01,
 	JOYCON_CTLR_TYPE_JCR  = 0x02,
 	JOYCON_CTLR_TYPE_PRO  = 0x03,
-	JOYCON_CTLR_TYPE_LIC_PRO = 0x06,
 	JOYCON_CTLR_TYPE_NESL = 0x09,
 	JOYCON_CTLR_TYPE_NESR = 0x0A,
 	JOYCON_CTLR_TYPE_SNES = 0x0B,
@@ -434,25 +433,6 @@ static const struct joycon_ctlr_button_mapping procon_button_mappings[] = {
 	{ /* sentinel */ },
 };
 
-/* Licensed Pro Controllers (e.g. HORI) swap X/Y bits in the report */
-static const struct joycon_ctlr_button_mapping lic_procon_button_mappings[] = {
-	{ BTN_EAST,	JC_BTN_A,	},
-	{ BTN_SOUTH,	JC_BTN_B,	},
-	{ BTN_NORTH,	JC_BTN_Y,	},
-	{ BTN_WEST,	JC_BTN_X,	},
-	{ BTN_TL,	JC_BTN_L,	},
-	{ BTN_TR,	JC_BTN_R,	},
-	{ BTN_TL2,	JC_BTN_ZL,	},
-	{ BTN_TR2,	JC_BTN_ZR,	},
-	{ BTN_SELECT,	JC_BTN_MINUS,	},
-	{ BTN_START,	JC_BTN_PLUS,	},
-	{ BTN_THUMBL,	JC_BTN_LSTICK,	},
-	{ BTN_THUMBR,	JC_BTN_RSTICK,	},
-	{ BTN_MODE,	JC_BTN_HOME,	},
-	{ BTN_Z,	JC_BTN_CAP,	},
-	{ /* sentinel */ },
-};
-
 static const struct joycon_ctlr_button_mapping nescon_button_mappings[] = {
 	{ BTN_SOUTH,	JC_BTN_A,	},
 	{ BTN_EAST,	JC_BTN_B,	},
@@ -477,20 +457,24 @@ static const struct joycon_ctlr_button_mapping snescon_button_mappings[] = {
 	{ /* sentinel */ },
 };
 
+/*
+ * "A", "B", and "C" are mapped positionally, rather than by label (e.g., "A"
+ * gets assigned to BTN_EAST instead of BTN_A).
+ */
 static const struct joycon_ctlr_button_mapping gencon_button_mappings[] = {
-	{ BTN_WEST,	JC_BTN_A,	}, /* A */
-	{ BTN_SOUTH,	JC_BTN_B,	}, /* B */
-	{ BTN_EAST,	JC_BTN_R,	}, /* C */
-	{ BTN_TL,	JC_BTN_X,	}, /* X MD/GEN 6B Only */
-	{ BTN_NORTH,	JC_BTN_Y,	}, /* Y MD/GEN 6B Only */
-	{ BTN_TR,	JC_BTN_L,	}, /* Z MD/GEN 6B Only */
-	{ BTN_SELECT,	JC_BTN_ZR,	}, /* Mode */
+	{ BTN_SOUTH,	JC_BTN_A,	},
+	{ BTN_EAST,	JC_BTN_B,	},
+	{ BTN_WEST,	JC_BTN_R,	},
+	{ BTN_SELECT,	JC_BTN_ZR,	},
 	{ BTN_START,	JC_BTN_PLUS,	},
 	{ BTN_MODE,	JC_BTN_HOME,	},
 	{ BTN_Z,	JC_BTN_CAP,	},
 	{ /* sentinel */ },
 };
 
+/*
+ * N64's C buttons get assigned to d-pad directions and registered as buttons.
+ */
 static const struct joycon_ctlr_button_mapping n64con_button_mappings[] = {
 	{ BTN_A,		JC_BTN_A,	},
 	{ BTN_B,		JC_BTN_B,	},
@@ -715,8 +699,7 @@ static inline bool joycon_type_is_right_joycon(struct joycon_ctlr *ctlr)
 
 static inline bool joycon_type_is_procon(struct joycon_ctlr *ctlr)
 {
-	return ctlr->ctlr_type == JOYCON_CTLR_TYPE_PRO ||
-	       ctlr->ctlr_type == JOYCON_CTLR_TYPE_LIC_PRO;
+	return ctlr->ctlr_type == JOYCON_CTLR_TYPE_PRO;
 }
 
 static inline bool joycon_type_is_snescon(struct joycon_ctlr *ctlr)
@@ -840,7 +823,7 @@ static void joycon_wait_for_input_report(struct joycon_ctlr *ctlr)
 #define JC_INPUT_REPORT_MAX_DELTA	17
 #define JC_SUBCMD_TX_OFFSET_MS		4
 #define JC_SUBCMD_VALID_DELTA_REQ	3
-#define JC_SUBCMD_RATE_MAX_ATTEMPTS	25
+#define JC_SUBCMD_RATE_MAX_ATTEMPTS	500
 #define JC_SUBCMD_RATE_LIMITER_USB_MS	20
 #define JC_SUBCMD_RATE_LIMITER_BT_MS	60
 #define JC_SUBCMD_RATE_LIMITER_MS(ctlr)	((ctlr)->hdev->bus == BUS_USB ? JC_SUBCMD_RATE_LIMITER_USB_MS : JC_SUBCMD_RATE_LIMITER_BT_MS)
@@ -1476,10 +1459,10 @@ static void joycon_parse_imu_report(struct joycon_ctlr *ctlr,
 				ctlr->imu_avg_delta_ms;
 		ctlr->imu_timestamp_us += 1000 * ctlr->imu_avg_delta_ms;
 		if (dropped_pkts > JC_IMU_DROPPED_PKT_WARNING) {
-			hid_warn_ratelimited(ctlr->hdev,
+			hid_warn(ctlr->hdev,
 				 "compensating for %u dropped IMU reports\n",
 				 dropped_pkts);
-			hid_warn_ratelimited(ctlr->hdev,
+			hid_warn(ctlr->hdev,
 				 "delta=%u avg_delta=%u\n",
 				 delta, ctlr->imu_avg_delta_ms);
 		}
@@ -1731,10 +1714,7 @@ static void joycon_parse_report(struct joycon_ctlr *ctlr,
 		joycon_report_left_stick(ctlr, rep);
 		joycon_report_right_stick(ctlr, rep);
 		joycon_report_dpad(ctlr, rep);
-		if (ctlr->ctlr_type == JOYCON_CTLR_TYPE_LIC_PRO)
-			joycon_report_buttons(ctlr, rep, lic_procon_button_mappings);
-		else
-			joycon_report_buttons(ctlr, rep, procon_button_mappings);
+		joycon_report_buttons(ctlr, rep, procon_button_mappings);
 	} else if (joycon_type_is_any_nescon(ctlr)) {
 		joycon_report_dpad(ctlr, rep);
 		joycon_report_buttons(ctlr, rep, nescon_button_mappings);
@@ -2180,10 +2160,7 @@ static int joycon_input_create(struct joycon_ctlr *ctlr)
 		joycon_config_left_stick(ctlr->input);
 		joycon_config_right_stick(ctlr->input);
 		joycon_config_dpad(ctlr->input);
-		if (ctlr->ctlr_type == JOYCON_CTLR_TYPE_LIC_PRO)
-			joycon_config_buttons(ctlr->input, lic_procon_button_mappings);
-		else
-			joycon_config_buttons(ctlr->input, procon_button_mappings);
+		joycon_config_buttons(ctlr->input, procon_button_mappings);
 	} else if (joycon_type_is_any_nescon(ctlr)) {
 		joycon_config_dpad(ctlr->input);
 		joycon_config_buttons(ctlr->input, nescon_button_mappings);
@@ -2458,8 +2435,14 @@ static int joycon_read_info(struct joycon_ctlr *ctlr)
 	for (i = 4, j = 0; j < 6; i++, j++)
 		ctlr->mac_addr[j] = report->subcmd_reply.data[i];
 
-	ctlr->mac_addr_str = devm_kasprintf(&ctlr->hdev->dev, GFP_KERNEL, "%pMU",
-					    ctlr->mac_addr);
+	ctlr->mac_addr_str = devm_kasprintf(&ctlr->hdev->dev, GFP_KERNEL,
+					    "%02X:%02X:%02X:%02X:%02X:%02X",
+					    ctlr->mac_addr[0],
+					    ctlr->mac_addr[1],
+					    ctlr->mac_addr[2],
+					    ctlr->mac_addr[3],
+					    ctlr->mac_addr[4],
+					    ctlr->mac_addr[5]);
 	if (!ctlr->mac_addr_str)
 		return -ENOMEM;
 	hid_info(ctlr->hdev, "controller MAC = %s\n", ctlr->mac_addr_str);
@@ -2524,30 +2507,13 @@ static int joycon_init(struct hid_device *hdev)
 
 	if (joycon_has_joysticks(ctlr)) {
 		/* get controller calibration data, and parse it */
-		if (ctlr->ctlr_type == JOYCON_CTLR_TYPE_LIC_PRO) {
+		ret = joycon_request_calibration(ctlr);
+		if (ret) {
 			/*
-			 * Licensed controllers may have incompatible SPI flash
-			 * layouts. Use default calibration values.
+			 * We can function with default calibration, but it may be
+			 * inaccurate. Provide a warning, and continue on.
 			 */
-			hid_info(hdev, "using default cal for licensed controller\n");
-			joycon_use_default_calibration(hdev,
-						       &ctlr->left_stick_cal_x,
-						       &ctlr->left_stick_cal_y,
-						       "left", 0);
-			joycon_use_default_calibration(hdev,
-						       &ctlr->right_stick_cal_x,
-						       &ctlr->right_stick_cal_y,
-						       "right", 0);
-		} else {
-			ret = joycon_request_calibration(ctlr);
-			if (ret) {
-				/*
-				 * We can function with default calibration, but
-				 * it may be inaccurate. Provide a warning, and
-				 * continue on.
-				 */
-				hid_warn(hdev, "Analog stick positions may be inaccurate\n");
-			}
+			hid_warn(hdev, "Analog stick positions may be inaccurate\n");
 		}
 	}
 
@@ -2565,13 +2531,8 @@ static int joycon_init(struct hid_device *hdev)
 		/* Enable the IMU */
 		ret = joycon_enable_imu(ctlr);
 		if (ret) {
-			if (ctlr->ctlr_type == JOYCON_CTLR_TYPE_LIC_PRO) {
-				hid_dbg(hdev, "IMU enable failed for licensed controller, continuing\n");
-				ret = 0;
-			} else {
-				hid_err(hdev, "Failed to enable the IMU; ret=%d\n", ret);
-				goto out_unlock;
-			}
+			hid_err(hdev, "Failed to enable the IMU; ret=%d\n", ret);
+			goto out_unlock;
 		}
 	}
 
@@ -2586,13 +2547,8 @@ static int joycon_init(struct hid_device *hdev)
 		/* Enable rumble */
 		ret = joycon_enable_rumble(ctlr);
 		if (ret) {
-			if (ctlr->ctlr_type == JOYCON_CTLR_TYPE_LIC_PRO) {
-				hid_dbg(hdev, "rumble enable failed for licensed controller, continuing\n");
-				ret = 0;
-			} else {
-				hid_err(hdev, "Failed to enable rumble; ret=%d\n", ret);
-				goto out_unlock;
-			}
+			hid_err(hdev, "Failed to enable rumble; ret=%d\n", ret);
+			goto out_unlock;
 		}
 	}
 
@@ -2696,8 +2652,7 @@ static int nintendo_hid_probe(struct hid_device *hdev,
 	init_waitqueue_head(&ctlr->wait);
 	spin_lock_init(&ctlr->lock);
 	ctlr->rumble_queue = alloc_workqueue("hid-nintendo-rumble_wq",
-					     WQ_FREEZABLE | WQ_MEM_RECLAIM | WQ_PERCPU,
-					     0);
+					     WQ_FREEZABLE | WQ_MEM_RECLAIM, 0);
 	if (!ctlr->rumble_queue) {
 		ret = -ENOMEM;
 		goto err;
@@ -2796,6 +2751,8 @@ static void nintendo_hid_remove(struct hid_device *hdev)
 	hid_hw_stop(hdev);
 }
 
+#ifdef CONFIG_PM
+
 static int nintendo_hid_resume(struct hid_device *hdev)
 {
 	struct joycon_ctlr *ctlr = hid_get_drvdata(hdev);
@@ -2838,6 +2795,8 @@ static int nintendo_hid_suspend(struct hid_device *hdev, pm_message_t message)
 	return 0;
 }
 
+#endif
+
 static const struct hid_device_id nintendo_hid_devices[] = {
 	{ HID_USB_DEVICE(USB_VENDOR_ID_NINTENDO,
 			 USB_DEVICE_ID_NINTENDO_PROCON) },
@@ -2861,8 +2820,6 @@ static const struct hid_device_id nintendo_hid_devices[] = {
 			 USB_DEVICE_ID_NINTENDO_GENCON) },
 	{ HID_BLUETOOTH_DEVICE(USB_VENDOR_ID_NINTENDO,
 			 USB_DEVICE_ID_NINTENDO_N64CON) },
-	{ HID_BLUETOOTH_DEVICE(USB_VENDOR_ID_HORI,
-			 USB_DEVICE_ID_HORI_WIRELESS_SWITCH_PAD) },
 	{ }
 };
 MODULE_DEVICE_TABLE(hid, nintendo_hid_devices);
@@ -2873,8 +2830,11 @@ static struct hid_driver nintendo_hid_driver = {
 	.probe		= nintendo_hid_probe,
 	.remove		= nintendo_hid_remove,
 	.raw_event	= nintendo_hid_event,
-	.resume		= pm_ptr(nintendo_hid_resume),
-	.suspend	= pm_ptr(nintendo_hid_suspend),
+
+#ifdef CONFIG_PM
+	.resume		= nintendo_hid_resume,
+	.suspend	= nintendo_hid_suspend,
+#endif
 };
 static int __init nintendo_init(void)
 {

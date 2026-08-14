@@ -13,8 +13,11 @@
 #include <linux/usb.h>
 #include <linux/errno.h>
 #include <linux/slab.h>
+#include <linux/tty_driver.h>
 #include <linux/tty_flip.h>
+#include <linux/moduleparam.h>
 #include <linux/spinlock.h>
+#include <linux/uaccess.h>
 #include <linux/usb/serial.h>
 
 #define DRIVER_DESC "Metrologic Instruments Inc. - USB-POS driver"
@@ -242,7 +245,7 @@ static int metrousb_port_probe(struct usb_serial_port *port)
 {
 	struct metrousb_private *metro_priv;
 
-	metro_priv = kzalloc_obj(*metro_priv);
+	metro_priv = kzalloc(sizeof(*metro_priv), GFP_KERNEL);
 	if (!metro_priv)
 		return -ENOMEM;
 

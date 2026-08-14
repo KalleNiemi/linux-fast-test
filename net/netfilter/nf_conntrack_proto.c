@@ -100,8 +100,14 @@ const struct nf_conntrack_l4proto *nf_ct_l4proto_find(u8 l4proto)
 	case IPPROTO_UDP: return &nf_conntrack_l4proto_udp;
 	case IPPROTO_TCP: return &nf_conntrack_l4proto_tcp;
 	case IPPROTO_ICMP: return &nf_conntrack_l4proto_icmp;
+#ifdef CONFIG_NF_CT_PROTO_DCCP
+	case IPPROTO_DCCP: return &nf_conntrack_l4proto_dccp;
+#endif
 #ifdef CONFIG_NF_CT_PROTO_SCTP
 	case IPPROTO_SCTP: return &nf_conntrack_l4proto_sctp;
+#endif
+#ifdef CONFIG_NF_CT_PROTO_UDPLITE
+	case IPPROTO_UDPLITE: return &nf_conntrack_l4proto_udplite;
 #endif
 #ifdef CONFIG_NF_CT_PROTO_GRE
 	case IPPROTO_GRE: return &nf_conntrack_l4proto_gre;
@@ -129,9 +135,6 @@ unsigned int nf_confirm(void *priv,
 			struct sk_buff *skb,
 			const struct nf_hook_state *state)
 {
-	int (*helper_cb)(struct sk_buff *skb, unsigned int protoff,
-			 struct nf_conn *ct,
-			 enum ip_conntrack_info conntrackinfo);
 	const struct nf_conn_help *help;
 	enum ip_conntrack_info ctinfo;
 	unsigned int protoff;
@@ -178,13 +181,11 @@ unsigned int nf_confirm(void *priv,
 		/* rcu_read_lock()ed by nf_hook */
 		helper = rcu_dereference(help->helper);
 		if (helper) {
-			helper_cb = rcu_dereference(helper->help);
-			if (helper_cb) {
-				ret = helper_cb(skb, protoff,
-						ct, ctinfo);
-				if (ret != NF_ACCEPT)
-					return ret;
-			}
+			ret = helper->help(skb,
+					   protoff,
+					   ct, ctinfo);
+			if (ret != NF_ACCEPT)
+				return ret;
 		}
 	}
 
@@ -679,6 +680,9 @@ void nf_conntrack_proto_pernet_init(struct net *net)
 	nf_conntrack_icmp_init_net(net);
 #if IS_ENABLED(CONFIG_IPV6)
 	nf_conntrack_icmpv6_init_net(net);
+#endif
+#ifdef CONFIG_NF_CT_PROTO_DCCP
+	nf_conntrack_dccp_init_net(net);
 #endif
 #ifdef CONFIG_NF_CT_PROTO_SCTP
 	nf_conntrack_sctp_init_net(net);

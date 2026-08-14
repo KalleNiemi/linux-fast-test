@@ -2457,7 +2457,7 @@ static void ci_register_patching_mc_arb(struct radeon_device *rdev,
 	u32 tmp, tmp2;
 
 	tmp = RREG32(MC_SEQ_MISC0);
-	patch = (tmp & 0x0000f00) == 0x300;
+	patch = ((tmp & 0x0000f00) == 0x300) ? true : false;
 
 	if (patch &&
 	    ((rdev->pdev->device == 0x67B0) ||
@@ -3239,8 +3239,7 @@ static int ci_populate_all_graphic_levels(struct radeon_device *rdev)
 	u32 level_array_size = sizeof(SMU7_Discrete_GraphicsLevel) *
 		SMU7_MAX_LEVELS_GRAPHICS;
 	SMU7_Discrete_GraphicsLevel *levels = pi->smc_state_table.GraphicsLevel;
-	int ret;
-	u32 i;
+	u32 i, ret;
 
 	memset(levels, 0, level_array_size);
 
@@ -3287,8 +3286,7 @@ static int ci_populate_all_memory_levels(struct radeon_device *rdev)
 	u32 level_array_size = sizeof(SMU7_Discrete_MemoryLevel) *
 		SMU7_MAX_LEVELS_MEMORY;
 	SMU7_Discrete_MemoryLevel *levels = pi->smc_state_table.MemoryLevel;
-	int ret;
-	u32 i;
+	u32 i, ret;
 
 	memset(levels, 0, level_array_size);
 
@@ -3409,7 +3407,11 @@ static int ci_setup_default_dpm_tables(struct radeon_device *rdev)
 		&rdev->pm.dpm.dyn_state.cac_leakage_table;
 	u32 i;
 
+	if (allowed_sclk_vddc_table == NULL)
+		return -EINVAL;
 	if (allowed_sclk_vddc_table->count < 1)
+		return -EINVAL;
+	if (allowed_mclk_table == NULL)
 		return -EINVAL;
 	if (allowed_mclk_table->count < 1)
 		return -EINVAL;
@@ -3440,7 +3442,7 @@ static int ci_setup_default_dpm_tables(struct radeon_device *rdev)
 			pi->dpm_table.sclk_table.dpm_levels[pi->dpm_table.sclk_table.count].value =
 				allowed_sclk_vddc_table->entries[i].clk;
 			pi->dpm_table.sclk_table.dpm_levels[pi->dpm_table.sclk_table.count].enabled =
-				i == 0;
+				(i == 0) ? true : false;
 			pi->dpm_table.sclk_table.count++;
 		}
 	}
@@ -3453,7 +3455,7 @@ static int ci_setup_default_dpm_tables(struct radeon_device *rdev)
 			pi->dpm_table.mclk_table.dpm_levels[pi->dpm_table.mclk_table.count].value =
 				allowed_mclk_table->entries[i].clk;
 			pi->dpm_table.mclk_table.dpm_levels[pi->dpm_table.mclk_table.count].enabled =
-				i == 0;
+				(i == 0) ? true : false;
 			pi->dpm_table.mclk_table.count++;
 		}
 	}
@@ -3468,20 +3470,24 @@ static int ci_setup_default_dpm_tables(struct radeon_device *rdev)
 	pi->dpm_table.vddc_table.count = allowed_sclk_vddc_table->count;
 
 	allowed_mclk_table = &rdev->pm.dpm.dyn_state.vddci_dependency_on_mclk;
-	for (i = 0; i < allowed_mclk_table->count; i++) {
-		pi->dpm_table.vddci_table.dpm_levels[i].value =
-			allowed_mclk_table->entries[i].v;
-		pi->dpm_table.vddci_table.dpm_levels[i].enabled = true;
+	if (allowed_mclk_table) {
+		for (i = 0; i < allowed_mclk_table->count; i++) {
+			pi->dpm_table.vddci_table.dpm_levels[i].value =
+				allowed_mclk_table->entries[i].v;
+			pi->dpm_table.vddci_table.dpm_levels[i].enabled = true;
+		}
+		pi->dpm_table.vddci_table.count = allowed_mclk_table->count;
 	}
-	pi->dpm_table.vddci_table.count = allowed_mclk_table->count;
 
 	allowed_mclk_table = &rdev->pm.dpm.dyn_state.mvdd_dependency_on_mclk;
-	for (i = 0; i < allowed_mclk_table->count; i++) {
-		pi->dpm_table.mvdd_table.dpm_levels[i].value =
-			allowed_mclk_table->entries[i].v;
-		pi->dpm_table.mvdd_table.dpm_levels[i].enabled = true;
+	if (allowed_mclk_table) {
+		for (i = 0; i < allowed_mclk_table->count; i++) {
+			pi->dpm_table.mvdd_table.dpm_levels[i].value =
+				allowed_mclk_table->entries[i].v;
+			pi->dpm_table.mvdd_table.dpm_levels[i].enabled = true;
+		}
+		pi->dpm_table.mvdd_table.count = allowed_mclk_table->count;
 	}
-	pi->dpm_table.mvdd_table.count = allowed_mclk_table->count;
 
 	ci_setup_default_pcie_tables(rdev);
 
@@ -4491,7 +4497,7 @@ static int ci_register_patching_mc_seq(struct radeon_device *rdev,
 	bool patch;
 
 	tmp = RREG32(MC_SEQ_MISC0);
-	patch = (tmp & 0x0000f00) == 0x300;
+	patch = ((tmp & 0x0000f00) == 0x300) ? true : false;
 
 	if (patch &&
 	    ((rdev->pdev->device == 0x67B0) ||
@@ -4582,7 +4588,7 @@ static int ci_initialize_mc_reg_table(struct radeon_device *rdev)
 	u8 module_index = rv770_get_memory_module_index(rdev);
 	int ret;
 
-	table = kzalloc_obj(struct atom_mc_reg_table);
+	table = kzalloc(sizeof(struct atom_mc_reg_table), GFP_KERNEL);
 	if (!table)
 		return -ENOMEM;
 
@@ -4877,9 +4883,15 @@ static int ci_set_private_data_variables_based_on_pptable(struct radeon_device *
 	struct radeon_clock_voltage_dependency_table *allowed_mclk_vddci_table =
 		&rdev->pm.dpm.dyn_state.vddci_dependency_on_mclk;
 
+	if (allowed_sclk_vddc_table == NULL)
+		return -EINVAL;
 	if (allowed_sclk_vddc_table->count < 1)
 		return -EINVAL;
+	if (allowed_mclk_vddc_table == NULL)
+		return -EINVAL;
 	if (allowed_mclk_vddc_table->count < 1)
+		return -EINVAL;
+	if (allowed_mclk_vddci_table == NULL)
 		return -EINVAL;
 	if (allowed_mclk_vddci_table->count < 1)
 		return -EINVAL;
@@ -5520,8 +5532,9 @@ static int ci_parse_power_table(struct radeon_device *rdev)
 		(mode_info->atom_context->bios + data_offset +
 		 le16_to_cpu(power_info->pplib.usNonClockInfoArrayOffset));
 
-	rdev->pm.dpm.ps = kzalloc_objs(struct radeon_ps,
-				       state_array->ucNumEntries);
+	rdev->pm.dpm.ps = kcalloc(state_array->ucNumEntries,
+				  sizeof(struct radeon_ps),
+				  GFP_KERNEL);
 	if (!rdev->pm.dpm.ps)
 		return -ENOMEM;
 	power_state_offset = (u8 *)state_array->states;
@@ -5536,7 +5549,7 @@ static int ci_parse_power_table(struct radeon_device *rdev)
 			ret = -EINVAL;
 			goto err_free_ps;
 		}
-		ps = kzalloc_obj(struct ci_ps);
+		ps = kzalloc(sizeof(struct ci_ps), GFP_KERNEL);
 		if (ps == NULL) {
 			ret = -ENOMEM;
 			goto err_free_ps;
@@ -5640,7 +5653,7 @@ int ci_dpm_init(struct radeon_device *rdev)
 	struct pci_dev *root = rdev->pdev->bus->self;
 	int ret;
 
-	pi = kzalloc_obj(struct ci_power_info);
+	pi = kzalloc(sizeof(struct ci_power_info), GFP_KERNEL);
 	if (pi == NULL)
 		return -ENOMEM;
 	rdev->pm.dpm.priv = pi;
@@ -5743,7 +5756,9 @@ int ci_dpm_init(struct radeon_device *rdev)
 	ci_set_private_data_variables_based_on_pptable(rdev);
 
 	rdev->pm.dpm.dyn_state.vddc_dependency_on_dispclk.entries =
-		kzalloc_objs(struct radeon_clock_voltage_dependency_entry, 4);
+		kcalloc(4,
+			sizeof(struct radeon_clock_voltage_dependency_entry),
+			GFP_KERNEL);
 	if (!rdev->pm.dpm.dyn_state.vddc_dependency_on_dispclk.entries) {
 		ci_dpm_fini(rdev);
 		return -ENOMEM;

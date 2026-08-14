@@ -47,15 +47,9 @@ fn main() {
         })
         .expect("No test function found in `rustdoc`'s output.");
 
-    // Replicate `rustdoc` 1.87+ behaviour [1] by fully qualifying `Result` to avoid the collision
-    // with our own `Result` coming from the prelude.
-    //
-    // [1]: https://github.com/rust-lang/rust/pull/137807
-    //
-    // TODO: Remove this when MSRV is bumped above 1.87.
+    // Qualify `Result` to avoid the collision with our own `Result` coming from the prelude.
     let body = body.replace(
         &format!("{rustdoc_function_name}() -> Result<(), impl core::fmt::Debug> {{"),
-        // This intentionally does not use absolute paths to match `rustdoc` 1.87 behaviour.
         &format!("{rustdoc_function_name}() -> core::result::Result<(), impl core::fmt::Debug> {{"),
     );
 

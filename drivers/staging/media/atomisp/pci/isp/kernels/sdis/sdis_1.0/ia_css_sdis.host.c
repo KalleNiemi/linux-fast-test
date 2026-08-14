@@ -2,6 +2,15 @@
 /*
  * Support for Intel Camera Imaging ISP subsystem.
  * Copyright (c) 2015, Intel Corporation.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
  */
 
 #include "hmm.h"
@@ -50,8 +59,9 @@ void ia_css_sdis_horicoef_vmem_encode(
 	assert(size % (IA_CSS_DVS_NUM_COEF_TYPES * ISP_VEC_NELEMS * sizeof(
 			   short)) == 0);
 
-	for (type = 0; type < IA_CSS_DVS_NUM_COEF_TYPES; type++)
+	for (type = 0; type < IA_CSS_DVS_NUM_COEF_TYPES; type++) {
 		fill_row(&private[type * stride], &public[type * width], width, padding);
+	}
 }
 
 void ia_css_sdis_vertcoef_vmem_encode(
@@ -76,8 +86,9 @@ void ia_css_sdis_vertcoef_vmem_encode(
 	assert(size % (IA_CSS_DVS_NUM_COEF_TYPES * ISP_VEC_NELEMS * sizeof(
 			   short)) == 0);
 
-	for (type = 0; type < IA_CSS_DVS_NUM_COEF_TYPES; type++)
+	for (type = 0; type < IA_CSS_DVS_NUM_COEF_TYPES; type++) {
 		fill_row(&private[type * stride], &public[type * height], height, padding);
+	}
 }
 
 void ia_css_sdis_horiproj_encode(
@@ -228,8 +239,7 @@ void ia_css_sdis_clear_coefficients(
 int
 ia_css_get_dvs_statistics(
     struct ia_css_dvs_statistics	       *host_stats,
-    const struct ia_css_isp_dvs_statistics *isp_stats)
-{
+    const struct ia_css_isp_dvs_statistics *isp_stats) {
 	struct ia_css_isp_dvs_statistics_map *map;
 	int ret = 0;
 
@@ -239,11 +249,13 @@ ia_css_get_dvs_statistics(
 	assert(isp_stats);
 
 	map = ia_css_isp_dvs_statistics_map_allocate(isp_stats, NULL);
-	if (map) {
+	if (map)
+	{
 		hmm_load(isp_stats->data_ptr, map->data_ptr, isp_stats->size);
 		ia_css_translate_dvs_statistics(host_stats, map);
 		ia_css_isp_dvs_statistics_map_free(map);
-	} else {
+	} else
+	{
 		IA_CSS_ERROR("out of memory");
 		ret = -ENOMEM;
 	}
@@ -307,7 +319,7 @@ ia_css_isp_dvs_statistics_allocate(
 	if (!grid->enable)
 		return NULL;
 
-	me = kvzalloc_objs(*me, 1);
+	me = kvcalloc(1, sizeof(*me), GFP_KERNEL);
 	if (!me)
 		goto err;
 
@@ -348,7 +360,7 @@ ia_css_isp_dvs_statistics_map_allocate(
 	 * so we use a local char * instead. */
 	char *base_ptr;
 
-	me = kvmalloc_obj(*me);
+	me = kvmalloc(sizeof(*me), GFP_KERNEL);
 	if (!me) {
 		IA_CSS_LOG("cannot allocate memory");
 		goto err;

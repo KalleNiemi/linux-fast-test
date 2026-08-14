@@ -6,6 +6,7 @@
  */
 
 #include <linux/module.h>
+#include <linux/mod_devicetable.h>
 #include <linux/i2c.h>
 #include <linux/iio/iio.h>
 
@@ -136,8 +137,10 @@ static int dmard06_probe(struct i2c_client *client)
 	}
 
 	indio_dev = devm_iio_device_alloc(&client->dev, sizeof(*dmard06));
-	if (!indio_dev)
+	if (!indio_dev) {
+		dev_err(&client->dev, "Failed to allocate iio device\n");
 		return -ENOMEM;
+	}
 
 	dmard06 = iio_priv(indio_dev);
 	dmard06->client = client;
@@ -198,9 +201,9 @@ static DEFINE_SIMPLE_DEV_PM_OPS(dmard06_pm_ops, dmard06_suspend,
 				dmard06_resume);
 
 static const struct i2c_device_id dmard06_id[] = {
-	{ .name = "dmard05" },
-	{ .name = "dmard06" },
-	{ .name = "dmard07" },
+	{ "dmard05" },
+	{ "dmard06" },
+	{ "dmard07" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, dmard06_id);

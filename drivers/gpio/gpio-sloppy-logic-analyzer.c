@@ -20,6 +20,7 @@
 #include <linux/gpio/consumer.h>
 #include <linux/init.h>
 #include <linux/ktime.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/platform_device.h>
@@ -160,13 +161,6 @@ static int fops_buf_size_get(void *data, u64 *val)
 	return 0;
 }
 
-static void fops_buf_release(void *data)
-{
-	struct gpio_la_poll_priv *priv = data;
-
-	vfree(priv->blob.data);
-}
-
 static int fops_buf_size_set(void *data, u64 val)
 {
 	struct gpio_la_poll_priv *priv = data;
@@ -245,9 +239,6 @@ static int gpio_la_poll_probe(struct platform_device *pdev)
 		return ret;
 
 	fops_buf_size_set(priv, GPIO_LA_DEFAULT_BUF_SIZE);
-	ret = devm_add_action_or_reset(dev, fops_buf_release, priv);
-	if (ret)
-		return ret;
 
 	priv->descs = devm_gpiod_get_array(dev, "probe", GPIOD_IN);
 	if (IS_ERR(priv->descs))
@@ -315,14 +306,14 @@ static void gpio_la_poll_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id gpio_la_poll_of_match[] = {
-	{ .compatible = "gpio-sloppy-logic-analyzer" },
+	{ .compatible = GPIO_LA_NAME },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, gpio_la_poll_of_match);
 
 static struct platform_driver gpio_la_poll_device_driver = {
 	.probe = gpio_la_poll_probe,
-	.remove = gpio_la_poll_remove,
+	.remove_new = gpio_la_poll_remove,
 	.driver = {
 		.name = GPIO_LA_NAME,
 		.of_match_table = gpio_la_poll_of_match,

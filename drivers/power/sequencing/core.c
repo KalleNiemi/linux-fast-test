@@ -90,7 +90,7 @@ static struct pwrseq_unit *pwrseq_unit_new(const struct pwrseq_unit_data *data)
 {
 	struct pwrseq_unit *unit;
 
-	unit = kzalloc_obj(*unit);
+	unit = kzalloc(sizeof(*unit), GFP_KERNEL);
 	if (!unit)
 		return NULL;
 
@@ -138,7 +138,7 @@ static struct pwrseq_unit_dep *pwrseq_unit_dep_new(struct pwrseq_unit *unit)
 {
 	struct pwrseq_unit_dep *dep;
 
-	dep = kzalloc_obj(*dep);
+	dep = kzalloc(sizeof(*dep), GFP_KERNEL);
 	if (!dep)
 		return NULL;
 
@@ -195,7 +195,7 @@ pwrseq_target_new(const struct pwrseq_target_data *data)
 {
 	struct pwrseq_target *target;
 
-	target = kzalloc_obj(*target);
+	target = kzalloc(sizeof(*target), GFP_KERNEL);
 	if (!target)
 		return NULL;
 
@@ -631,7 +631,7 @@ static int pwrseq_match_device(struct device *pwrseq_dev, void *data)
 		return 0;
 
 	ret = pwrseq->match(pwrseq, match_data->dev);
-	if (ret == PWRSEQ_NO_MATCH || ret < 0)
+	if (ret <= 0)
 		return ret;
 
 	/* We got the matching device, let's find the right target. */
@@ -654,7 +654,7 @@ static int pwrseq_match_device(struct device *pwrseq_dev, void *data)
 
 	match_data->desc->pwrseq = pwrseq_device_get(pwrseq);
 
-	return PWRSEQ_MATCH_OK;
+	return 1;
 }
 
 /**
@@ -672,7 +672,8 @@ struct pwrseq_desc *pwrseq_get(struct device *dev, const char *target)
 	struct pwrseq_match_data match_data;
 	int ret;
 
-	struct pwrseq_desc *desc __free(kfree) = kzalloc_obj(*desc);
+	struct pwrseq_desc *desc __free(kfree) = kzalloc(sizeof(*desc),
+							 GFP_KERNEL);
 	if (!desc)
 		return ERR_PTR(-ENOMEM);
 
@@ -686,7 +687,7 @@ struct pwrseq_desc *pwrseq_get(struct device *dev, const char *target)
 			       pwrseq_match_device);
 	if (ret < 0)
 		return ERR_PTR(ret);
-	if (ret == PWRSEQ_NO_MATCH)
+	if (ret == 0)
 		/* No device matched. */
 		return ERR_PTR(-EPROBE_DEFER);
 
@@ -968,29 +969,6 @@ int pwrseq_power_off(struct pwrseq_desc *desc)
 }
 EXPORT_SYMBOL_GPL(pwrseq_power_off);
 
-/**
- * pwrseq_to_device() - Get the pwrseq device pointer from a descriptor.
- * @desc: Descriptor referencing the power sequencer.
- *
- * Return the 'dev' pointer of the power sequencer device associated with @desc.
- * Consumer drivers can use this to query the pwrseq provider's device tree
- * node, for example to check for the existence of specific properties.
- *
- * Since pwrseq_get() already takes a reference to the pwrseq device, this
- * function does not take an additional reference.
- *
- * Returns:
- * Pointer to the pwrseq struct device, or NULL if @desc is NULL.
- */
-struct device *pwrseq_to_device(struct pwrseq_desc *desc)
-{
-	if (!desc)
-		return NULL;
-
-	return &desc->pwrseq->dev;
-}
-EXPORT_SYMBOL_GPL(pwrseq_to_device);
-
 #if IS_ENABLED(CONFIG_DEBUG_FS)
 
 struct pwrseq_debugfs_count_ctx {
@@ -1071,7 +1049,7 @@ static int pwrseq_debugfs_seq_show(struct seq_file *seq, void *data)
 	struct pwrseq_target *target;
 	struct pwrseq_unit *unit;
 
-	seq_printf(seq, "%s (%s):\n", dev_name(dev), dev_name(dev->parent));
+	seq_printf(seq, "%s:\n", dev_name(dev));
 
 	seq_puts(seq, "  targets:\n");
 	list_for_each_entry(target, &pwrseq->targets, list)

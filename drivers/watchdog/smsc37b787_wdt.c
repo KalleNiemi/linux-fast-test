@@ -36,7 +36,7 @@
  *  mknod /dev/watchdog c 10 130
  *
  * For an example userspace keep-alive daemon, see:
- *   samples/watchdog/watchdog-simple.c
+ *   Documentation/watchdog/wdt.rst
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -485,7 +485,7 @@ static long wb_smsc_wdt_ioctl(struct file *file,
 	}
 }
 
-/* -- Notifier functions -----------------------------------------*/
+/* -- Notifier funtions -----------------------------------------*/
 
 static int wb_smsc_wdt_notify_sys(struct notifier_block *this,
 					unsigned long code, void *unused)

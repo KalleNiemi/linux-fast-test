@@ -11,6 +11,7 @@
 #include <linux/iio/iio.h>
 #include <linux/iio/machine.h>
 #include <linux/mfd/mp2629.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/platform_device.h>
@@ -43,7 +44,7 @@ struct mp2629_adc {
 	struct device *dev;
 };
 
-static const struct iio_chan_spec mp2629_channels[] = {
+static struct iio_chan_spec mp2629_channels[] = {
 	MP2629_ADC_CHAN(BATT_VOLT, IIO_VOLTAGE),
 	MP2629_ADC_CHAN(SYSTEM_VOLT, IIO_VOLTAGE),
 	MP2629_ADC_CHAN(INPUT_VOLT, IIO_VOLTAGE),
@@ -51,7 +52,7 @@ static const struct iio_chan_spec mp2629_channels[] = {
 	MP2629_ADC_CHAN(INPUT_CURRENT, IIO_CURRENT)
 };
 
-static const struct iio_map mp2629_adc_maps[] = {
+static struct iio_map mp2629_adc_maps[] = {
 	MP2629_MAP(BATT_VOLT, "batt-volt"),
 	MP2629_MAP(SYSTEM_VOLT, "system-volt"),
 	MP2629_MAP(INPUT_VOLT, "input-volt"),
@@ -194,7 +195,7 @@ static struct platform_driver mp2629_adc_driver = {
 		.of_match_table = mp2629_adc_of_match,
 	},
 	.probe		= mp2629_adc_probe,
-	.remove		= mp2629_adc_remove,
+	.remove_new	= mp2629_adc_remove,
 };
 module_platform_driver(mp2629_adc_driver);
 

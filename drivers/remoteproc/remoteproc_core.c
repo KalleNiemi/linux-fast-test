@@ -16,25 +16,29 @@
 
 #define pr_fmt(fmt)    "%s: " fmt, __func__
 
-#include <asm/byteorder.h>
 #include <linux/delay.h>
-#include <linux/device.h>
-#include <linux/dma-mapping.h>
-#include <linux/elf.h>
-#include <linux/firmware.h>
-#include <linux/idr.h>
-#include <linux/iommu.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/mutex.h>
-#include <linux/of_platform.h>
+#include <linux/device.h>
 #include <linux/panic_notifier.h>
-#include <linux/platform_device.h>
+#include <linux/slab.h>
+#include <linux/mutex.h>
+#include <linux/dma-mapping.h>
+#include <linux/firmware.h>
+#include <linux/string.h>
+#include <linux/debugfs.h>
 #include <linux/rculist.h>
 #include <linux/remoteproc.h>
-#include <linux/slab.h>
-#include <linux/string.h>
+#include <linux/iommu.h>
+#include <linux/idr.h>
+#include <linux/elf.h>
+#include <linux/crc32.h>
+#include <linux/of_platform.h>
+#include <linux/of_reserved_mem.h>
+#include <linux/virtio_ids.h>
 #include <linux/virtio_ring.h>
+#include <asm/byteorder.h>
+#include <linux/platform_device.h>
 
 #include "remoteproc_internal.h"
 
@@ -105,10 +109,10 @@ static int rproc_enable_iommu(struct rproc *rproc)
 		return 0;
 	}
 
-	domain = iommu_paging_domain_alloc(dev);
-	if (IS_ERR(domain)) {
+	domain = iommu_domain_alloc(dev->bus);
+	if (!domain) {
 		dev_err(dev, "can't alloc iommu domain\n");
-		return PTR_ERR(domain);
+		return -ENOMEM;
 	}
 
 	iommu_set_fault_handler(domain, rproc_iommu_fault, rproc);
@@ -155,6 +159,7 @@ phys_addr_t rproc_va_to_pa(void *cpu_addr)
 	WARN_ON(!virt_addr_valid(cpu_addr));
 	return virt_to_phys(cpu_addr);
 }
+EXPORT_SYMBOL(rproc_va_to_pa);
 
 /**
  * rproc_da_to_va() - lookup the kernel virtual address for a remoteproc address
@@ -557,7 +562,7 @@ static int rproc_handle_trace(struct rproc *rproc, void *ptr,
 		return -EINVAL;
 	}
 
-	trace = kzalloc_obj(*trace);
+	trace = kzalloc(sizeof(*trace), GFP_KERNEL);
 	if (!trace)
 		return -ENOMEM;
 
@@ -635,7 +640,7 @@ static int rproc_handle_devmem(struct rproc *rproc, void *ptr,
 		return -EINVAL;
 	}
 
-	mapping = kzalloc_obj(*mapping);
+	mapping = kzalloc(sizeof(*mapping), GFP_KERNEL);
 	if (!mapping)
 		return -ENOMEM;
 
@@ -694,7 +699,7 @@ static int rproc_alloc_carveout(struct rproc *rproc,
 		return -ENOMEM;
 	}
 
-	dev_dbg(dev, "carveout va %p, dma %pad, len 0x%zx\n",
+	dev_dbg(dev, "carveout va %pK, dma %pad, len 0x%zx\n",
 		va, &dma, mem->len);
 
 	if (mem->da != FW_RSC_ADDR_ANY && !rproc->domain) {
@@ -727,7 +732,7 @@ static int rproc_alloc_carveout(struct rproc *rproc,
 	 * physical address in this case.
 	 */
 	if (mem->da != FW_RSC_ADDR_ANY && rproc->domain) {
-		mapping = kzalloc_obj(*mapping);
+		mapping = kzalloc(sizeof(*mapping), GFP_KERNEL);
 		if (!mapping) {
 			ret = -ENOMEM;
 			goto dma_free;
@@ -917,7 +922,7 @@ rproc_mem_entry_init(struct device *dev,
 	struct rproc_mem_entry *mem;
 	va_list args;
 
-	mem = kzalloc_obj(*mem);
+	mem = kzalloc(sizeof(*mem), GFP_KERNEL);
 	if (!mem)
 		return mem;
 
@@ -960,7 +965,7 @@ rproc_of_resm_mem_entry_init(struct device *dev, u32 of_resm_idx, size_t len,
 	struct rproc_mem_entry *mem;
 	va_list args;
 
-	mem = kzalloc_obj(*mem);
+	mem = kzalloc(sizeof(*mem), GFP_KERNEL);
 	if (!mem)
 		return mem;
 
@@ -1011,55 +1016,60 @@ static rproc_handle_resource_t rproc_loading_handlers[RSC_LAST] = {
 	[RSC_VDEV] = rproc_handle_vdev,
 };
 
-struct rproc_rsc_cb_data {
-	struct rproc *rproc;
-	rproc_handle_resource_t *handlers;
-};
-
-static int rproc_handle_rsc_entry(u32 type, void *rsc, int offset,
-				  int avail, void *data)
-{
-	struct rproc_rsc_cb_data *d = data;
-	struct rproc *rproc = d->rproc;
-	struct device *dev = &rproc->dev;
-	rproc_handle_resource_t handler;
-	int ret;
-
-	dev_dbg(dev, "rsc: type %d\n", type);
-
-	if (type >= RSC_VENDOR_START && type <= RSC_VENDOR_END) {
-		ret = rproc_handle_rsc(rproc, type, rsc, offset, avail);
-		if (ret == RSC_HANDLED)
-			return 0;
-		if (ret < 0)
-			return ret;
-		dev_warn(dev, "unsupported vendor resource %d\n", type);
-		return 0;
-	}
-
-	if (type >= RSC_LAST) {
-		dev_warn(dev, "unsupported resource %d\n", type);
-		return 0;
-	}
-
-	handler = d->handlers[type];
-	if (!handler)
-		return 0;
-
-	return handler(rproc, rsc, offset, avail);
-}
-
 /* handle firmware resource entries before booting the remote processor */
 static int rproc_handle_resources(struct rproc *rproc,
 				  rproc_handle_resource_t handlers[RSC_LAST])
 {
-	struct rproc_rsc_cb_data d = { .rproc = rproc, .handlers = handlers };
+	struct device *dev = &rproc->dev;
+	rproc_handle_resource_t handler;
+	int ret = 0, i;
 
 	if (!rproc->table_ptr)
 		return 0;
 
-	return rsc_table_for_each_entry(rproc->table_ptr, rproc->table_sz,
-					&rproc->dev, rproc_handle_rsc_entry, &d);
+	for (i = 0; i < rproc->table_ptr->num; i++) {
+		int offset = rproc->table_ptr->offset[i];
+		struct fw_rsc_hdr *hdr = (void *)rproc->table_ptr + offset;
+		int avail = rproc->table_sz - offset - sizeof(*hdr);
+		void *rsc = (void *)hdr + sizeof(*hdr);
+
+		/* make sure table isn't truncated */
+		if (avail < 0) {
+			dev_err(dev, "rsc table is truncated\n");
+			return -EINVAL;
+		}
+
+		dev_dbg(dev, "rsc: type %d\n", hdr->type);
+
+		if (hdr->type >= RSC_VENDOR_START &&
+		    hdr->type <= RSC_VENDOR_END) {
+			ret = rproc_handle_rsc(rproc, hdr->type, rsc,
+					       offset + sizeof(*hdr), avail);
+			if (ret == RSC_HANDLED)
+				continue;
+			else if (ret < 0)
+				break;
+
+			dev_warn(dev, "unsupported vendor resource %d\n",
+				 hdr->type);
+			continue;
+		}
+
+		if (hdr->type >= RSC_LAST) {
+			dev_warn(dev, "unsupported resource %d\n", hdr->type);
+			continue;
+		}
+
+		handler = handlers[hdr->type];
+		if (!handler)
+			continue;
+
+		ret = handler(rproc, rsc, offset + sizeof(*hdr), avail);
+		if (ret)
+			break;
+	}
+
+	return ret;
 }
 
 static int rproc_prepare_subdevices(struct rproc *rproc)
@@ -1979,7 +1989,7 @@ EXPORT_SYMBOL(rproc_boot);
 int rproc_shutdown(struct rproc *rproc)
 {
 	struct device *dev = &rproc->dev;
-	int ret;
+	int ret = 0;
 
 	ret = mutex_lock_interruptible(&rproc->lock);
 	if (ret) {
@@ -2015,6 +2025,7 @@ int rproc_shutdown(struct rproc *rproc)
 	kfree(rproc->cached_table);
 	rproc->cached_table = NULL;
 	rproc->table_ptr = NULL;
+	rproc->table_sz = 0;
 out:
 	mutex_unlock(&rproc->lock);
 	return ret;

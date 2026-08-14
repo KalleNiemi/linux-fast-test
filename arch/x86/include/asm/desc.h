@@ -46,6 +46,7 @@ struct gdt_page {
 } __attribute__((aligned(PAGE_SIZE)));
 
 DECLARE_PER_CPU_PAGE_ALIGNED(struct gdt_page, gdt_page);
+DECLARE_INIT_PER_CPU(gdt_page);
 
 /* Provide the original GDT */
 static inline struct desc_struct *get_cpu_gdt_rw(unsigned int cpu)
@@ -437,10 +438,6 @@ extern void idt_setup_early_traps(void);
 extern void idt_setup_traps(void);
 extern void idt_setup_apic_and_irq_gates(void);
 extern bool idt_is_f00f_address(unsigned long address);
-
-extern void idt_do_interrupt_irqoff(unsigned long address);
-extern void idt_do_nmi_irqoff(void);
-extern void idt_entry_from_kvm(unsigned int vector);
 
 #ifdef CONFIG_X86_64
 extern void idt_setup_early_pf(void);

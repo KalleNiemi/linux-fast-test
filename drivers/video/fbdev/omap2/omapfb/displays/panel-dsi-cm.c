@@ -15,6 +15,7 @@
 #include <linux/gpio/consumer.h>
 #include <linux/interrupt.h>
 #include <linux/jiffies.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/sched/signal.h>
@@ -1214,7 +1215,7 @@ static int dsicm_probe(struct platform_device *pdev)
 
 		ddata->bldev = bldev;
 
-		bldev->props.power = BACKLIGHT_POWER_ON;
+		bldev->props.power = FB_BLANK_UNBLANK;
 		bldev->props.brightness = 255;
 
 		dsicm_bl_update_status(bldev);
@@ -1252,7 +1253,7 @@ static void dsicm_remove(struct platform_device *pdev)
 
 	bldev = ddata->bldev;
 	if (bldev != NULL) {
-		bldev->props.power = BACKLIGHT_POWER_OFF;
+		bldev->props.power = FB_BLANK_POWERDOWN;
 		dsicm_bl_update_status(bldev);
 		backlight_device_unregister(bldev);
 	}

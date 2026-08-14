@@ -32,7 +32,7 @@
  * ranges).
  *
  * There are some hardware limitations:
- * a) You can't use mixture of unipolar/bipolar ranges or differential/single
+ * a) You cann't use mixture of unipolar/bipoar ranges or differencial/single
  *  ended inputs.
  * b) DMA transfers must have the length aligned to two samples (32 bit),
  *  so there is some problems if cmd->chanlist_len is odd. This driver tries
@@ -227,7 +227,7 @@ struct pci9118_private {
 	struct pci9118_dmabuf dmabuf[2];
 	int softsshdelay;		/*
 					 * >0 use software S&H,
-					 * number is requested delay in ns
+					 * numer is requested delay in ns
 					 */
 	unsigned char softsshsample;	/*
 					 * polarity of S&H signal
@@ -1715,10 +1715,10 @@ static int adl_pci9118_pci_probe(struct pci_dev *dev,
 
 /* FIXME: All the supported board types have the same device ID! */
 static const struct pci_device_id adl_pci9118_pci_table[] = {
-	{ PCI_VDEVICE(AMCC, 0x80d9), .driver_data = BOARD_PCI9118DG },
-/*	{ PCI_VDEVICE(AMCC, 0x80d9), .driver_data = BOARD_PCI9118HG }, */
-/*	{ PCI_VDEVICE(AMCC, 0x80d9), .driver_data = BOARD_PCI9118HR }, */
-	{ }
+	{ PCI_VDEVICE(AMCC, 0x80d9), BOARD_PCI9118DG },
+/*	{ PCI_VDEVICE(AMCC, 0x80d9), BOARD_PCI9118HG }, */
+/*	{ PCI_VDEVICE(AMCC, 0x80d9), BOARD_PCI9118HR }, */
+	{ 0 }
 };
 MODULE_DEVICE_TABLE(pci, adl_pci9118_pci_table);
 

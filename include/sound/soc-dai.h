@@ -17,7 +17,6 @@
 struct snd_pcm_substream;
 struct snd_soc_dapm_widget;
 struct snd_compr_stream;
-struct clk;
 
 /*
  * DAI hardware audio formats.
@@ -54,21 +53,6 @@ struct clk;
 #define SND_SOC_POSSIBLE_DAIFMT_PDM		(1 << SND_SOC_DAI_FORMAT_PDM)
 
 /*
- * DAI TDM slot idle modes
- *
- * Describes a CODEC/CPU's behaviour when not actively receiving or
- * transmitting on a given TDM slot. NONE is undefined behaviour.
- * Add new modes to the end.
- */
-#define SND_SOC_DAI_TDM_IDLE_NONE	0
-#define SND_SOC_DAI_TDM_IDLE_OFF	1
-#define SND_SOC_DAI_TDM_IDLE_ZERO	2
-#define SND_SOC_DAI_TDM_IDLE_PULLDOWN	3
-#define SND_SOC_DAI_TDM_IDLE_HIZ	4
-#define SND_SOC_DAI_TDM_IDLE_PULLUP	5
-#define SND_SOC_DAI_TDM_IDLE_DRIVE_HIGH	6
-
-/*
  * DAI Clock gating.
  *
  * DAI bit clocks can be gated (disabled) when the DAI is not
@@ -81,10 +65,10 @@ struct clk;
 /*
  * define GATED -> CONT. GATED will be selected if both are selected.
  * see
- *	soc_dai_convert_possiblefmt_to_daifmt()
+ *	snd_soc_runtime_get_dai_fmt()
  */
 #define SND_SOC_POSSIBLE_DAIFMT_CLOCK_SHIFT	16
-#define SND_SOC_POSSIBLE_DAIFMT_CLOCK_MASK	(0xFFFFULL << SND_SOC_POSSIBLE_DAIFMT_CLOCK_SHIFT)
+#define SND_SOC_POSSIBLE_DAIFMT_CLOCK_MASK	(0xFFFF	<< SND_SOC_POSSIBLE_DAIFMT_CLOCK_SHIFT)
 #define SND_SOC_POSSIBLE_DAIFMT_GATED		(0x1ULL	<< SND_SOC_POSSIBLE_DAIFMT_CLOCK_SHIFT)
 #define SND_SOC_POSSIBLE_DAIFMT_CONT		(0x2ULL	<< SND_SOC_POSSIBLE_DAIFMT_CLOCK_SHIFT)
 
@@ -134,11 +118,25 @@ struct clk;
 #define SND_SOC_DAIFMT_CBP_CFC		(3 << 12) /* codec clk provider & frame consumer */
 #define SND_SOC_DAIFMT_CBC_CFC		(4 << 12) /* codec clk consumer & frame consumer */
 
+/* previous definitions kept for backwards-compatibility, do not use in new contributions */
+#define SND_SOC_DAIFMT_CBM_CFM		SND_SOC_DAIFMT_CBP_CFP
+#define SND_SOC_DAIFMT_CBS_CFM		SND_SOC_DAIFMT_CBC_CFP
+#define SND_SOC_DAIFMT_CBM_CFS		SND_SOC_DAIFMT_CBP_CFC
+#define SND_SOC_DAIFMT_CBS_CFS		SND_SOC_DAIFMT_CBC_CFC
+
 /* when passed to set_fmt directly indicate if the device is provider or consumer */
 #define SND_SOC_DAIFMT_BP_FP		SND_SOC_DAIFMT_CBP_CFP
 #define SND_SOC_DAIFMT_BC_FP		SND_SOC_DAIFMT_CBC_CFP
 #define SND_SOC_DAIFMT_BP_FC		SND_SOC_DAIFMT_CBP_CFC
 #define SND_SOC_DAIFMT_BC_FC		SND_SOC_DAIFMT_CBC_CFC
+
+/* Describes the possible PCM format */
+#define SND_SOC_POSSIBLE_DAIFMT_CLOCK_PROVIDER_SHIFT	48
+#define SND_SOC_POSSIBLE_DAIFMT_CLOCK_PROVIDER_MASK	(0xFFFFULL << SND_SOC_POSSIBLE_DAIFMT_CLOCK_PROVIDER_SHIFT)
+#define SND_SOC_POSSIBLE_DAIFMT_CBP_CFP			(0x1ULL    << SND_SOC_POSSIBLE_DAIFMT_CLOCK_PROVIDER_SHIFT)
+#define SND_SOC_POSSIBLE_DAIFMT_CBC_CFP			(0x2ULL    << SND_SOC_POSSIBLE_DAIFMT_CLOCK_PROVIDER_SHIFT)
+#define SND_SOC_POSSIBLE_DAIFMT_CBP_CFC			(0x4ULL    << SND_SOC_POSSIBLE_DAIFMT_CLOCK_PROVIDER_SHIFT)
+#define SND_SOC_POSSIBLE_DAIFMT_CBC_CFC			(0x8ULL    << SND_SOC_POSSIBLE_DAIFMT_CLOCK_PROVIDER_SHIFT)
 
 #define SND_SOC_DAIFMT_FORMAT_MASK		0x000f
 #define SND_SOC_DAIFMT_CLOCK_MASK		0x00f0
@@ -181,18 +179,13 @@ int snd_soc_dai_set_pll(struct snd_soc_dai *dai,
 
 int snd_soc_dai_set_bclk_ratio(struct snd_soc_dai *dai, unsigned int ratio);
 
-void snd_soc_dai_set_bclk_clk(struct snd_soc_dai *dai, struct clk *bclk);
-
 /* Digital Audio interface formatting */
-unsigned int snd_soc_dai_auto_select_format(const struct snd_soc_pcm_runtime *rtd);
+int snd_soc_dai_get_fmt_max_priority(const struct snd_soc_pcm_runtime *rtd);
+u64 snd_soc_dai_get_fmt(const struct snd_soc_dai *dai, int priority);
 int snd_soc_dai_set_fmt(struct snd_soc_dai *dai, unsigned int fmt);
 
 int snd_soc_dai_set_tdm_slot(struct snd_soc_dai *dai,
 	unsigned int tx_mask, unsigned int rx_mask, int slots, int slot_width);
-
-int snd_soc_dai_set_tdm_idle(struct snd_soc_dai *dai,
-			     unsigned int tx_mask, unsigned int rx_mask,
-			     int tx_mode, int rx_mode);
 
 int snd_soc_dai_set_channel_map(struct snd_soc_dai *dai,
 	unsigned int tx_num, const unsigned int *tx_slot,
@@ -200,13 +193,10 @@ int snd_soc_dai_set_channel_map(struct snd_soc_dai *dai,
 
 int snd_soc_dai_set_tristate(struct snd_soc_dai *dai, int tristate);
 
-int snd_soc_dai_prepare(struct snd_soc_dai *dai,
-			struct snd_pcm_substream *substream);
-
 /* Digital Audio Interface mute */
 int snd_soc_dai_digital_mute(struct snd_soc_dai *dai, int mute,
 			     int direction);
-int snd_soc_dai_mute_is_ctrled_at_trigger(struct snd_soc_dai *dai);
+
 
 int snd_soc_dai_get_channel_map(const struct snd_soc_dai *dai,
 		unsigned int *tx_num, unsigned int *tx_slot,
@@ -226,7 +216,8 @@ void snd_soc_dai_shutdown(struct snd_soc_dai *dai,
 			  struct snd_pcm_substream *substream, int rollback);
 void snd_soc_dai_suspend(struct snd_soc_dai *dai);
 void snd_soc_dai_resume(struct snd_soc_dai *dai);
-int snd_soc_dai_compress_new(struct snd_soc_dai *dai, struct snd_soc_pcm_runtime *rtd);
+int snd_soc_dai_compress_new(struct snd_soc_dai *dai,
+			     struct snd_soc_pcm_runtime *rtd, int num);
 bool snd_soc_dai_stream_valid(const struct snd_soc_dai *dai, int stream);
 void snd_soc_dai_action(struct snd_soc_dai *dai,
 			int stream, int action);
@@ -269,7 +260,7 @@ int snd_soc_dai_compr_ack(struct snd_soc_dai *dai,
 			  size_t bytes);
 int snd_soc_dai_compr_pointer(struct snd_soc_dai *dai,
 			      struct snd_compr_stream *cstream,
-			      struct snd_compr_tstamp64 *tstamp);
+			      struct snd_compr_tstamp *tstamp);
 int snd_soc_dai_compr_set_metadata(struct snd_soc_dai *dai,
 				   struct snd_compr_stream *cstream,
 				   struct snd_compr_metadata *metadata);
@@ -284,7 +275,7 @@ struct snd_soc_dai_ops {
 	int (*probe)(struct snd_soc_dai *dai);
 	int (*remove)(struct snd_soc_dai *dai);
 	/* compress dai */
-	int (*compress_new)(struct snd_soc_pcm_runtime *rtd);
+	int (*compress_new)(struct snd_soc_pcm_runtime *rtd, int num);
 	/* Optional Callback used at pcm creation*/
 	int (*pcm_new)(struct snd_soc_pcm_runtime *rtd,
 		       struct snd_soc_dai *dai);
@@ -310,9 +301,6 @@ struct snd_soc_dai_ops {
 	int (*set_tdm_slot)(struct snd_soc_dai *dai,
 		unsigned int tx_mask, unsigned int rx_mask,
 		int slots, int slot_width);
-	int (*set_tdm_idle)(struct snd_soc_dai *dai,
-			    unsigned int tx_mask, unsigned int rx_mask,
-			    int tx_mode, int rx_mode);
 	int (*set_channel_map)(struct snd_soc_dai *dai,
 		unsigned int tx_num, const unsigned int *tx_slot,
 		unsigned int rx_num, const unsigned int *rx_slot);
@@ -399,9 +387,8 @@ struct snd_soc_cdai_ops {
 			struct snd_compr_metadata *, struct snd_soc_dai *);
 	int (*trigger)(struct snd_compr_stream *, int,
 			struct snd_soc_dai *);
-	int (*pointer)(struct snd_compr_stream *stream,
-		       struct snd_compr_tstamp64 *tstamp,
-		       struct snd_soc_dai *dai);
+	int (*pointer)(struct snd_compr_stream *,
+			struct snd_compr_tstamp *, struct snd_soc_dai *);
 	int (*ack)(struct snd_compr_stream *, size_t,
 			struct snd_soc_dai *);
 };
@@ -467,10 +454,6 @@ struct snd_soc_dai {
 	unsigned int symmetric_channels;
 	unsigned int symmetric_sample_bits;
 
-	/* shared BCLK clock for cross-DAI rate constraints */
-	struct clk *bclk;
-	unsigned int bclk_ratio; /* BCLK = rate * bclk_ratio (0 = use channels * sample_bits) */
-
 	/* parent platform/codec */
 	struct snd_soc_component *component;
 
@@ -484,9 +467,6 @@ struct snd_soc_dai {
 
 	/* bit field */
 	unsigned int probed:1;
-
-	/* DAI private data */
-	void *priv;
 };
 
 static inline const struct snd_soc_pcm_stream *

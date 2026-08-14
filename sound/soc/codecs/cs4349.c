@@ -7,6 +7,7 @@
  * Authors: Tim Howe <Tim.Howe@cirrus.com>
  */
 
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/kernel.h>
@@ -311,6 +312,7 @@ static void cs4349_i2c_remove(struct i2c_client *client)
 	gpiod_set_value_cansleep(cs4349->reset_gpio, 0);
 }
 
+#ifdef CONFIG_PM
 static int cs4349_runtime_suspend(struct device *dev)
 {
 	struct cs4349_private *cs4349 = dev_get_drvdata(dev);
@@ -344,9 +346,11 @@ static int cs4349_runtime_resume(struct device *dev)
 
 	return 0;
 }
+#endif
 
 static const struct dev_pm_ops cs4349_runtime_pm = {
-	RUNTIME_PM_OPS(cs4349_runtime_suspend, cs4349_runtime_resume, NULL)
+	SET_RUNTIME_PM_OPS(cs4349_runtime_suspend, cs4349_runtime_resume,
+			   NULL)
 };
 
 static const struct of_device_id cs4349_of_match[] = {
@@ -357,8 +361,8 @@ static const struct of_device_id cs4349_of_match[] = {
 MODULE_DEVICE_TABLE(of, cs4349_of_match);
 
 static const struct i2c_device_id cs4349_i2c_id[] = {
-	{ .name = "cs4349" },
-	{ }
+	{"cs4349"},
+	{}
 };
 
 MODULE_DEVICE_TABLE(i2c, cs4349_i2c_id);
@@ -367,7 +371,7 @@ static struct i2c_driver cs4349_i2c_driver = {
 	.driver = {
 		.name		= "cs4349",
 		.of_match_table	= cs4349_of_match,
-		.pm = pm_ptr(&cs4349_runtime_pm),
+		.pm = &cs4349_runtime_pm,
 	},
 	.id_table	= cs4349_i2c_id,
 	.probe		= cs4349_i2c_probe,

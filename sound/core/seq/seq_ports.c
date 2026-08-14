@@ -108,13 +108,14 @@ static void port_subs_info_init(struct snd_seq_port_subs_info *grp)
 }
 
 
-/* create a port, 0 on success or a negative error code is returned
+/* create a port, port number or a negative error code is returned
  * the caller needs to unref the port via snd_seq_port_unlock() appropriately
  */
-int snd_seq_create_port(struct snd_seq_client *client,
+int snd_seq_create_port(struct snd_seq_client *client, int port,
 			struct snd_seq_client_port **port_ret)
 {
-	struct snd_seq_client_port *new_port;
+	struct snd_seq_client_port *new_port, *p;
+	int num;
 	
 	*port_ret = NULL;
 
@@ -128,7 +129,7 @@ int snd_seq_create_port(struct snd_seq_client *client,
 	}
 
 	/* create a new port */
-	new_port = kzalloc_obj(*new_port);
+	new_port = kzalloc(sizeof(*new_port), GFP_KERNEL);
 	if (!new_port)
 		return -ENOMEM;	/* failure, out of memory */
 	/* init port data */
@@ -140,38 +141,25 @@ int snd_seq_create_port(struct snd_seq_client *client,
 	port_subs_info_init(&new_port->c_dest);
 	snd_use_lock_use(&new_port->use_lock);
 
-	*port_ret = new_port;
-
-	return 0;
-}
-
-/* insert the port; return the port address or a negative error code */
-int snd_seq_insert_port(struct snd_seq_client *client, int port,
-			struct snd_seq_client_port *new_port)
-{
-	struct snd_seq_client_port *p;
-	int num;
-
 	num = max(port, 0);
 	guard(mutex)(&client->ports_mutex);
 	guard(write_lock_irq)(&client->ports_lock);
-	struct list_head *insert_before = &client->ports_list_head;
 	list_for_each_entry(p, &client->ports_list_head, list) {
-		if (p->addr.port == port)
+		if (p->addr.port == port) {
+			kfree(new_port);
 			return -EBUSY;
-		if (p->addr.port > num) {
-			insert_before = &p->list;
-			break;
 		}
+		if (p->addr.port > num)
+			break;
 		if (port < 0) /* auto-probe mode */
 			num = p->addr.port + 1;
 	}
 	/* insert the new port */
-	list_add_tail(&new_port->list, insert_before);
+	list_add_tail(&new_port->list, &p->list);
 	client->num_ports++;
 	new_port->addr.port = num;	/* store the port number in the port */
-	if (!new_port->name[0])
-		sprintf(new_port->name, "port-%d", num);
+	sprintf(new_port->name, "port-%d", num);
+	*port_ret = new_port;
 
 	return num;
 }
@@ -190,10 +178,17 @@ static int unsubscribe_port(struct snd_seq_client *client,
 static struct snd_seq_client_port *get_client_port(struct snd_seq_addr *addr,
 						   struct snd_seq_client **cp)
 {
+	struct snd_seq_client_port *p;
 	*cp = snd_seq_client_use_ptr(addr->client);
-	if (!*cp)
-		return NULL;
-	return snd_seq_port_use_ptr(*cp, addr->port);
+	if (*cp) {
+		p = snd_seq_port_use_ptr(*cp, addr->port);
+		if (! p) {
+			snd_seq_client_unlock(*cp);
+			*cp = NULL;
+		}
+		return p;
+	}
+	return NULL;
 }
 
 static void delete_and_unsubscribe_port(struct snd_seq_client *client,
@@ -223,13 +218,14 @@ static void clear_subscriber_list(struct snd_seq_client *client,
 
 	list_for_each_safe(p, n, &grp->list_head) {
 		struct snd_seq_subscribers *subs;
+		struct snd_seq_client *c;
+		struct snd_seq_client_port *aport;
 
 		subs = get_subscriber(p, is_src);
-		struct snd_seq_client *c __free(snd_seq_client) = NULL;
-		struct snd_seq_client_port *aport __free(snd_seq_port) =
-			is_src ?
-			get_client_port(&subs->info.dest, &c) :
-			get_client_port(&subs->info.sender, &c);
+		if (is_src)
+			aport = get_client_port(&subs->info.dest, &c);
+		else
+			aport = get_client_port(&subs->info.sender, &c);
 		delete_and_unsubscribe_port(client, port, subs, is_src, false);
 
 		if (!aport) {
@@ -245,6 +241,8 @@ static void clear_subscriber_list(struct snd_seq_client *client,
 		/* ok we got the connected port */
 		delete_and_unsubscribe_port(c, aport, subs, !is_src, true);
 		kfree(subs);
+		snd_seq_port_unlock(aport);
+		snd_seq_client_unlock(c);
 	}
 }
 
@@ -584,7 +582,7 @@ int snd_seq_port_connect(struct snd_seq_client *connector,
 	bool exclusive;
 	int err;
 
-	subs = kzalloc_obj(*subs);
+	subs = kzalloc(sizeof(*subs), GFP_KERNEL);
 	if (!subs)
 		return -ENOMEM;
 

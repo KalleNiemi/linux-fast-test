@@ -182,7 +182,7 @@ static int mxs_spi_txrx_dma(struct mxs_spi *spi,
 	if (!len)
 		return -EINVAL;
 
-	dma_xfer = kzalloc_objs(*dma_xfer, sgs);
+	dma_xfer = kcalloc(sgs, sizeof(*dma_xfer), GFP_KERNEL);
 	if (!dma_xfer)
 		return -ENOMEM;
 
@@ -381,14 +381,12 @@ static int mxs_spi_transfer_one(struct spi_controller *host,
 		if (status)
 			break;
 
-		t->effective_speed_hz = ssp->clk_rate;
-
 		/* De-assert on last transfer, inverted by cs_change flag */
 		flag = (&t->transfer_list == m->transfers.prev) ^ t->cs_change ?
 		       TXRX_DEASSERT_CS : 0;
 
 		/*
-		 * Small blocks can be transferred via PIO.
+		 * Small blocks can be transfered via PIO.
 		 * Measured by empiric means:
 		 *
 		 * dd if=/dev/mtdblock0 of=/dev/null bs=1024k count=1
@@ -563,7 +561,7 @@ static int mxs_spi_probe(struct platform_device *pdev)
 	if (ret)
 		clk_freq = clk_freq_default;
 
-	host = devm_spi_alloc_host(&pdev->dev, sizeof(*spi));
+	host = spi_alloc_host(&pdev->dev, sizeof(*spi));
 	if (!host)
 		return -ENOMEM;
 
@@ -589,12 +587,13 @@ static int mxs_spi_probe(struct platform_device *pdev)
 	ret = devm_request_irq(&pdev->dev, irq_err, mxs_ssp_irq_handler, 0,
 			       dev_name(&pdev->dev), ssp);
 	if (ret)
-		return ret;
+		goto out_host_free;
 
 	ssp->dmach = dma_request_chan(&pdev->dev, "rx-tx");
 	if (IS_ERR(ssp->dmach)) {
 		dev_err(ssp->dev, "Failed to request DMA\n");
-		return PTR_ERR(ssp->dmach);
+		ret = PTR_ERR(ssp->dmach);
+		goto out_host_free;
 	}
 
 	pm_runtime_enable(ssp->dev);
@@ -634,7 +633,8 @@ out_pm_runtime_disable:
 	pm_runtime_disable(ssp->dev);
 out_dma_release:
 	dma_release_channel(ssp->dmach);
-
+out_host_free:
+	spi_controller_put(host);
 	return ret;
 }
 
@@ -648,6 +648,8 @@ static void mxs_spi_remove(struct platform_device *pdev)
 	spi = spi_controller_get_devdata(host);
 	ssp = &spi->ssp;
 
+	spi_controller_get(host);
+
 	spi_unregister_controller(host);
 
 	pm_runtime_disable(&pdev->dev);
@@ -655,11 +657,13 @@ static void mxs_spi_remove(struct platform_device *pdev)
 		mxs_spi_runtime_suspend(&pdev->dev);
 
 	dma_release_channel(ssp->dmach);
+
+	spi_controller_put(host);
 }
 
 static struct platform_driver mxs_spi_driver = {
 	.probe	= mxs_spi_probe,
-	.remove = mxs_spi_remove,
+	.remove_new = mxs_spi_remove,
 	.driver	= {
 		.name	= DRIVER_NAME,
 		.of_match_table = mxs_spi_dt_ids,

@@ -29,8 +29,6 @@ algorithms work.
    fiemap
    files
    locks
-   mmap_prepare
-   multigrain-ts
    mount_api
    quota
    seq_file
@@ -43,7 +41,6 @@ algorithms work.
    caching/index
 
    porting
-   adding-new-filesystems
 
 Filesystem support layers
 =========================
@@ -74,6 +71,7 @@ Documentation for filesystem implementations.
    afs
    autofs
    autofs-mount-control
+   bcachefs/index
    befs
    bfs
    btrfs
@@ -91,16 +89,18 @@ Documentation for filesystem implementations.
    ext3
    ext4/index
    f2fs
-   gfs2/index
+   gfs2
+   gfs2-uevents
+   gfs2-glocks
    hfs
    hfsplus
    hpfs
-   fuse/index
+   fuse
+   fuse-io
    inotify
    isofs
    nilfs2
    nfs/index
-   ntfs
    ntfs3
    ocfs2
    ocfs2-online-filecheck
@@ -111,12 +111,12 @@ Documentation for filesystem implementations.
    qnx6
    ramfs-rootfs-initramfs
    relay
-   resctrl
    romfs
    smb/index
    spufs/index
    squashfs
    sysfs
+   sysv-fs
    tmpfs
    ubifs
    ubifs-authentication

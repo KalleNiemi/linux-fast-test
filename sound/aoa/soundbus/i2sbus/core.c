@@ -94,11 +94,13 @@ static irqreturn_t i2sbus_bus_intr(int irq, void *devid)
 	struct i2sbus_dev *dev = devid;
 	u32 intreg;
 
-	guard(spinlock)(&dev->low_lock);
+	spin_lock(&dev->low_lock);
 	intreg = in_le32(&dev->intfregs->intr_ctl);
 
 	/* acknowledge interrupt reasons */
 	out_le32(&dev->intfregs->intr_ctl, intreg);
+
+	spin_unlock(&dev->low_lock);
 
 	return IRQ_HANDLED;
 }
@@ -171,7 +173,7 @@ static int i2sbus_add_dev(struct macio_dev *macio,
 	if (strncmp(node_name, "i2s-", 4))
 		return 0;
 
-	dev = kzalloc_obj(struct i2sbus_dev);
+	dev = kzalloc(sizeof(struct i2sbus_dev), GFP_KERNEL);
 	if (!dev)
 		return 0;
 

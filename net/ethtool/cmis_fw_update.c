@@ -2,7 +2,6 @@
 
 #include <linux/ethtool.h>
 #include <linux/firmware.h>
-#include <net/netdev_lock.h>
 
 #include "common.h"
 #include "module_fw.h"
@@ -436,7 +435,6 @@ static int cmis_fw_update_reset(struct net_device *dev)
 {
 	__u32 reset_data = ETH_RESET_PHY;
 
-	netdev_assert_locked_ops(dev);
 	return dev->ethtool_ops->reset(dev, &reset_data);
 }
 

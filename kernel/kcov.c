@@ -55,13 +55,13 @@ struct kcov {
 	refcount_t		refcount;
 	/* The lock protects mode, size, area and t. */
 	spinlock_t		lock;
-	enum kcov_mode		mode __guarded_by(&lock);
+	enum kcov_mode		mode;
 	/* Size of arena (in long's). */
-	unsigned int		size __guarded_by(&lock);
+	unsigned int		size;
 	/* Coverage buffer shared with user space. */
-	void			*area __guarded_by(&lock);
+	void			*area;
 	/* Task for which we collect coverage, or NULL. */
-	struct task_struct	*t __guarded_by(&lock);
+	struct task_struct	*t;
 	/* Collecting coverage from remote (background) threads. */
 	bool			remote;
 	/* Size of remote area (in long's). */
@@ -122,7 +122,7 @@ static struct kcov_remote *kcov_remote_add(struct kcov *kcov, u64 handle)
 
 	if (kcov_remote_find(handle))
 		return ERR_PTR(-EEXIST);
-	remote = kmalloc_obj(*remote, GFP_ATOMIC);
+	remote = kmalloc(sizeof(*remote), GFP_ATOMIC);
 	if (!remote)
 		return ERR_PTR(-ENOMEM);
 	remote->handle = handle;
@@ -368,7 +368,6 @@ static void kcov_start(struct task_struct *t, struct kcov *kcov,
 	WRITE_ONCE(t->kcov_mode, mode);
 }
 
-/* operates on coverage-generator-owned fields */
 static void kcov_stop(struct task_struct *t)
 {
 	WRITE_ONCE(t->kcov_mode, KCOV_MODE_DISABLED);
@@ -378,22 +377,20 @@ static void kcov_stop(struct task_struct *t)
 	t->kcov_area = NULL;
 }
 
-/* operates on coverage-generator-owned fields */
 static void kcov_task_reset(struct task_struct *t)
 {
 	kcov_stop(t);
 	t->kcov_sequence = 0;
+	t->kcov_handle = 0;
 }
 
 void kcov_task_init(struct task_struct *t)
 {
 	kcov_task_reset(t);
-	t->kcov_remote = NULL;
 	t->kcov_handle = current->kcov_handle;
 }
 
 static void kcov_reset(struct kcov *kcov)
-	__must_hold(&kcov->lock)
 {
 	kcov->t = NULL;
 	kcov->mode = KCOV_MODE_INIT;
@@ -403,7 +400,6 @@ static void kcov_reset(struct kcov *kcov)
 }
 
 static void kcov_remote_reset(struct kcov *kcov)
-	__must_hold(&kcov->lock)
 {
 	int bkt;
 	struct kcov_remote *remote;
@@ -423,16 +419,12 @@ static void kcov_remote_reset(struct kcov *kcov)
 }
 
 static void kcov_disable(struct task_struct *t, struct kcov *kcov)
-	__must_hold(&kcov->lock)
 {
-	if (kcov->remote) {
-		t->kcov_handle = 0;
-		t->kcov_remote = NULL;
+	kcov_task_reset(t);
+	if (kcov->remote)
 		kcov_remote_reset(kcov);
-	} else {
-		kcov_task_reset(t);
+	else
 		kcov_reset(kcov);
-	}
 }
 
 static void kcov_get(struct kcov *kcov)
@@ -443,11 +435,8 @@ static void kcov_get(struct kcov *kcov)
 static void kcov_put(struct kcov *kcov)
 {
 	if (refcount_dec_and_test(&kcov->refcount)) {
-		/* Context-safety: no references left, object being destroyed. */
-		context_unsafe(
-			kcov_remote_reset(kcov);
-			vfree(kcov->area);
-		);
+		kcov_remote_reset(kcov);
+		vfree(kcov->area);
 		kfree(kcov);
 	}
 }
@@ -458,47 +447,41 @@ void kcov_task_exit(struct task_struct *t)
 	unsigned long flags;
 
 	kcov = t->kcov;
-	if (kcov) {
-		spin_lock_irqsave(&kcov->lock, flags);
-		kcov_debug("t = %px, kcov->t = %px\n", t, kcov->t);
-		/*
-		 * This could be a remote task between kcov_remote_start() and
-		 * kcov_remote_stop().
-		 * In this case we should print a warning right away, since a
-		 * task shouldn't be exiting when it's in a kcov coverage
-		 * collection section.
-		 *
-		 * Otherwise, this should be a task that created a local
-		 * kcov instance and hasn't called KCOV_DISABLE.
-		 * Make sure that t->kcov->t is consistent.
-		 */
-		if (WARN_ON(kcov->remote) || WARN_ON(kcov->t != t)) {
-			spin_unlock_irqrestore(&kcov->lock, flags);
-			return;
-		}
-		/* Just to not leave dangling references behind. */
-		kcov_disable(t, kcov);
+	if (kcov == NULL)
+		return;
+
+	spin_lock_irqsave(&kcov->lock, flags);
+	kcov_debug("t = %px, kcov->t = %px\n", t, kcov->t);
+	/*
+	 * For KCOV_ENABLE devices we want to make sure that t->kcov->t == t,
+	 * which comes down to:
+	 *        WARN_ON(!kcov->remote && kcov->t != t);
+	 *
+	 * For KCOV_REMOTE_ENABLE devices, the exiting task is either:
+	 *
+	 * 1. A remote task between kcov_remote_start() and kcov_remote_stop().
+	 *    In this case we should print a warning right away, since a task
+	 *    shouldn't be exiting when it's in a kcov coverage collection
+	 *    section. Here t points to the task that is collecting remote
+	 *    coverage, and t->kcov->t points to the thread that created the
+	 *    kcov device. Which means that to detect this case we need to
+	 *    check that t != t->kcov->t, and this gives us the following:
+	 *        WARN_ON(kcov->remote && kcov->t != t);
+	 *
+	 * 2. The task that created kcov exiting without calling KCOV_DISABLE,
+	 *    and then again we make sure that t->kcov->t == t:
+	 *        WARN_ON(kcov->remote && kcov->t != t);
+	 *
+	 * By combining all three checks into one we get:
+	 */
+	if (WARN_ON(kcov->t != t)) {
 		spin_unlock_irqrestore(&kcov->lock, flags);
-		kcov_put(kcov);
+		return;
 	}
-	kcov = t->kcov_remote;
-	if (kcov) {
-		spin_lock_irqsave(&kcov->lock, flags);
-		kcov_debug("t = %px, kcov->t = %px\n", t, kcov->t);
-		/*
-		 * This is a KCOV_REMOTE_ENABLE device, and the task is the
-		 * user task which has requested remote coverage collection.
-		 * Make sure that t->kcov->t is consistent.
-		 */
-		if (WARN_ON(!kcov->remote) || WARN_ON(kcov->t != t)) {
-			spin_unlock_irqrestore(&kcov->lock, flags);
-			return;
-		}
-		/* Just to not leave dangling references behind. */
-		kcov_disable(t, kcov);
-		spin_unlock_irqrestore(&kcov->lock, flags);
-		kcov_put(kcov);
-	}
+	/* Just to not leave dangling references behind. */
+	kcov_disable(t, kcov);
+	spin_unlock_irqrestore(&kcov->lock, flags);
+	kcov_put(kcov);
 }
 
 static int kcov_mmap(struct file *filep, struct vm_area_struct *vma)
@@ -508,7 +491,6 @@ static int kcov_mmap(struct file *filep, struct vm_area_struct *vma)
 	unsigned long size, off;
 	struct page *page;
 	unsigned long flags;
-	void *area;
 
 	spin_lock_irqsave(&kcov->lock, flags);
 	size = kcov->size * sizeof(unsigned long);
@@ -517,11 +499,10 @@ static int kcov_mmap(struct file *filep, struct vm_area_struct *vma)
 		res = -EINVAL;
 		goto exit;
 	}
-	area = kcov->area;
 	spin_unlock_irqrestore(&kcov->lock, flags);
 	vm_flags_set(vma, VM_DONTEXPAND);
 	for (off = 0; off < size; off += PAGE_SIZE) {
-		page = vmalloc_to_page(area + off);
+		page = vmalloc_to_page(kcov->area + off);
 		res = vm_insert_page(vma, vma->vm_start + off, page);
 		if (res) {
 			pr_warn_once("kcov: vm_insert_page() failed\n");
@@ -538,13 +519,13 @@ static int kcov_open(struct inode *inode, struct file *filep)
 {
 	struct kcov *kcov;
 
-	kcov = kzalloc_obj(*kcov);
+	kcov = kzalloc(sizeof(*kcov), GFP_KERNEL);
 	if (!kcov)
 		return -ENOMEM;
-	guard(spinlock_init)(&kcov->lock);
 	kcov->mode = KCOV_MODE_DISABLED;
 	kcov->sequence = 1;
 	refcount_set(&kcov->refcount, 1);
+	spin_lock_init(&kcov->lock);
 	filep->private_data = kcov;
 	return nonseekable_open(inode, filep);
 }
@@ -571,11 +552,10 @@ static int kcov_get_mode(unsigned long arg)
 
 /*
  * Fault in a lazily-faulted vmalloc area before it can be used by
- * __sanitizer_cov_trace_pc(), to avoid recursion issues if any code on the
+ * __santizer_cov_trace_pc(), to avoid recursion issues if any code on the
  * vmalloc fault handling path is instrumented.
  */
 static void kcov_fault_in_area(struct kcov *kcov)
-	__must_hold(&kcov->lock)
 {
 	unsigned long stride = PAGE_SIZE / sizeof(unsigned long);
 	unsigned long *area = kcov->area;
@@ -604,7 +584,6 @@ static inline bool kcov_check_handle(u64 handle, bool common_valid,
 
 static int kcov_ioctl_locked(struct kcov *kcov, unsigned int cmd,
 			     unsigned long arg)
-	__must_hold(&kcov->lock)
 {
 	struct task_struct *t;
 	unsigned long flags, unused;
@@ -640,9 +619,9 @@ static int kcov_ioctl_locked(struct kcov *kcov, unsigned int cmd,
 	case KCOV_DISABLE:
 		/* Disable coverage for the current task. */
 		unused = arg;
-		t = current;
-		if (unused != 0 || (kcov != t->kcov && kcov != t->kcov_remote))
+		if (unused != 0 || current->kcov != kcov)
 			return -EINVAL;
+		t = current;
 		if (WARN_ON(kcov->t != t))
 			return -EINVAL;
 		kcov_disable(t, kcov);
@@ -652,7 +631,7 @@ static int kcov_ioctl_locked(struct kcov *kcov, unsigned int cmd,
 		if (kcov->mode != KCOV_MODE_INIT || !kcov->area)
 			return -EINVAL;
 		t = current;
-		if (kcov->t != NULL || t->kcov_remote != NULL)
+		if (kcov->t != NULL || t->kcov != NULL)
 			return -EBUSY;
 		remote_arg = (struct kcov_remote_arg *)arg;
 		mode = kcov_get_mode(remote_arg->trace_mode);
@@ -662,7 +641,8 @@ static int kcov_ioctl_locked(struct kcov *kcov, unsigned int cmd,
 		    LONG_MAX / sizeof(unsigned long))
 			return -EINVAL;
 		kcov->mode = mode;
-		t->kcov_remote = kcov;
+		t->kcov = kcov;
+	        t->kcov_mode = KCOV_MODE_REMOTE;
 		kcov->t = t;
 		kcov->remote = true;
 		kcov->remote_size = remote_arg->area_size;
@@ -834,7 +814,6 @@ static inline bool kcov_mode_enabled(unsigned int mode)
 }
 
 static void kcov_remote_softirq_start(struct task_struct *t)
-	__must_hold(&kcov_percpu_data.lock)
 {
 	struct kcov_percpu_data *data = this_cpu_ptr(&kcov_percpu_data);
 	unsigned int mode;
@@ -852,7 +831,6 @@ static void kcov_remote_softirq_start(struct task_struct *t)
 }
 
 static void kcov_remote_softirq_stop(struct task_struct *t)
-	__must_hold(&kcov_percpu_data.lock)
 {
 	struct kcov_percpu_data *data = this_cpu_ptr(&kcov_percpu_data);
 
@@ -918,12 +896,10 @@ void kcov_remote_start(u64 handle)
 	/* Put in kcov_remote_stop(). */
 	kcov_get(kcov);
 	/*
-	 * Read kcov fields before unlocking kcov_remote_lock to prevent races
-	 * with KCOV_DISABLE and kcov_remote_reset(); cannot acquire kcov->lock
-	 * here, because it might lead to deadlock given kcov_remote_lock is
-	 * acquired _after_ kcov->lock elsewhere.
+	 * Read kcov fields before unlock to prevent races with
+	 * KCOV_DISABLE / kcov_remote_reset().
 	 */
-	mode = context_unsafe(kcov->mode);
+	mode = kcov->mode;
 	sequence = kcov->sequence;
 	if (in_task()) {
 		size = kcov->remote_size;
@@ -1001,15 +977,6 @@ static void kcov_move_area(enum kcov_mode mode, void *dst_area,
 	src_entries = src_area + count_size;
 	memcpy(dst_entries, src_entries, bytes_to_move);
 	entries_moved = bytes_to_move >> entry_size_log;
-
-	/*
-	 * A write memory barrier is required here, to ensure
-	 * that the writes from the memcpy() are visible before
-	 * the count is updated. Without this, it is possible for
-	 * a user to observe a new count value but stale
-	 * coverage data.
-	 */
-	smp_wmb();
 
 	switch (mode) {
 	case KCOV_MODE_TRACE_PC:
@@ -1093,11 +1060,11 @@ void kcov_remote_stop(void)
 EXPORT_SYMBOL(kcov_remote_stop);
 
 /* See the comment before kcov_remote_start() for usage details. */
-struct kcov_common_handle_id kcov_common_handle(void)
+u64 kcov_common_handle(void)
 {
 	if (!in_task())
-		return (struct kcov_common_handle_id){ .val = 0 };
-	return (struct kcov_common_handle_id){ .val = current->kcov_handle };
+		return 0;
+	return current->kcov_handle;
 }
 EXPORT_SYMBOL(kcov_common_handle);
 

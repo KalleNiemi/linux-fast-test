@@ -115,7 +115,7 @@ int msm_atomic_init_pending_timer(struct msm_pending_timer *timer,
 	timer->kms = kms;
 	timer->crtc_idx = crtc_idx;
 
-	timer->worker = kthread_run_worker(0, "atomic-worker-%d", crtc_idx);
+	timer->worker = kthread_create_worker(0, "atomic-worker-%d", crtc_idx);
 	if (IS_ERR(timer->worker)) {
 		int ret = PTR_ERR(timer->worker);
 		timer->worker = NULL;
@@ -136,7 +136,7 @@ void msm_atomic_destroy_pending_timer(struct msm_pending_timer *timer)
 		kthread_destroy_worker(timer->worker);
 }
 
-static bool can_do_async(struct drm_atomic_commit *state,
+static bool can_do_async(struct drm_atomic_state *state,
 		struct drm_crtc **async_crtc)
 {
 	struct drm_connector_state *connector_state;
@@ -169,7 +169,7 @@ static bool can_do_async(struct drm_atomic_commit *state,
  * can be used with for_each_crtc_mask() iterator, to iterate
  * effected crtcs without needing to preserve the atomic state.
  */
-static unsigned get_crtc_mask(struct drm_atomic_commit *state)
+static unsigned get_crtc_mask(struct drm_atomic_state *state)
 {
 	struct drm_crtc_state *crtc_state;
 	struct drm_crtc *crtc;
@@ -181,18 +181,12 @@ static unsigned get_crtc_mask(struct drm_atomic_commit *state)
 	return mask;
 }
 
-int msm_atomic_check(struct drm_device *dev, struct drm_atomic_commit *state)
+int msm_atomic_check(struct drm_device *dev, struct drm_atomic_state *state)
 {
-	struct msm_drm_private *priv = dev->dev_private;
-	struct msm_kms *kms = priv->kms;
 	struct drm_crtc_state *old_crtc_state, *new_crtc_state;
 	struct drm_crtc *crtc;
-	int i, ret = 0;
+	int i;
 
-	/*
-	 * FIXME: stop setting allow_modeset and move this check to the DPU
-	 * driver.
-	 */
 	for_each_oldnew_crtc_in_state(state, crtc, old_crtc_state,
 				      new_crtc_state, i) {
 		if ((old_crtc_state->ctm && !new_crtc_state->ctm) ||
@@ -202,15 +196,10 @@ int msm_atomic_check(struct drm_device *dev, struct drm_atomic_commit *state)
 		}
 	}
 
-	if (kms && kms->funcs && kms->funcs->check_mode_changed)
-		ret = kms->funcs->check_mode_changed(kms, state);
-	if (ret)
-		return ret;
-
 	return drm_atomic_helper_check(dev, state);
 }
 
-void msm_atomic_commit_tail(struct drm_atomic_commit *state)
+void msm_atomic_commit_tail(struct drm_atomic_state *state)
 {
 	struct drm_device *dev = state->dev;
 	struct msm_drm_private *priv = dev->dev_private;
@@ -231,8 +220,6 @@ void msm_atomic_commit_tail(struct drm_atomic_commit *state)
 	trace_msm_atomic_wait_flush_start(crtc_mask);
 	kms->funcs->wait_flush(kms, crtc_mask);
 	trace_msm_atomic_wait_flush_finish(crtc_mask);
-
-	atomic_set(&kms->fault_snapshot_capture, 0);
 
 	/*
 	 * Now that there is no in-progress flush, prepare the

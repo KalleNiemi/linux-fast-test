@@ -321,7 +321,6 @@ static int rockchip_pdm_set_fmt(struct snd_soc_dai *cpu_dai,
 {
 	struct rk_pdm_dev *pdm = to_info(cpu_dai);
 	unsigned int mask = 0, val = 0;
-	int ret;
 
 	mask = PDM_CKP_MSK;
 	switch (fmt & SND_SOC_DAIFMT_INV_MASK) {
@@ -335,10 +334,7 @@ static int rockchip_pdm_set_fmt(struct snd_soc_dai *cpu_dai,
 		return -EINVAL;
 	}
 
-	ret = pm_runtime_resume_and_get(cpu_dai->dev);
-	if (ret)
-		return ret;
-
+	pm_runtime_get_sync(cpu_dai->dev);
 	regmap_update_bits(pdm->regmap, PDM_CLK_CTRL, mask, val);
 	pm_runtime_put(cpu_dai->dev);
 
@@ -426,16 +422,16 @@ static int rockchip_pdm_runtime_resume(struct device *dev)
 	struct rk_pdm_dev *pdm = dev_get_drvdata(dev);
 	int ret;
 
-	ret = clk_prepare_enable(pdm->hclk);
+	ret = clk_prepare_enable(pdm->clk);
 	if (ret) {
-		dev_err(pdm->dev, "hclock enable failed %d\n", ret);
+		dev_err(pdm->dev, "clock enable failed %d\n", ret);
 		return ret;
 	}
 
-	ret = clk_prepare_enable(pdm->clk);
+	ret = clk_prepare_enable(pdm->hclk);
 	if (ret) {
-		clk_disable_unprepare(pdm->hclk);
-		dev_err(pdm->dev, "clock enable failed %d\n", ret);
+		clk_disable_unprepare(pdm->clk);
+		dev_err(pdm->dev, "hclock enable failed %d\n", ret);
 		return ret;
 	}
 
@@ -672,6 +668,7 @@ static void rockchip_pdm_remove(struct platform_device *pdev)
 	clk_disable_unprepare(pdm->hclk);
 }
 
+#ifdef CONFIG_PM_SLEEP
 static int rockchip_pdm_suspend(struct device *dev)
 {
 	struct rk_pdm_dev *pdm = dev_get_drvdata(dev);
@@ -696,11 +693,12 @@ static int rockchip_pdm_resume(struct device *dev)
 
 	return ret;
 }
+#endif
 
 static const struct dev_pm_ops rockchip_pdm_pm_ops = {
-	RUNTIME_PM_OPS(rockchip_pdm_runtime_suspend,
-		       rockchip_pdm_runtime_resume, NULL)
-	SYSTEM_SLEEP_PM_OPS(rockchip_pdm_suspend, rockchip_pdm_resume)
+	SET_RUNTIME_PM_OPS(rockchip_pdm_runtime_suspend,
+			   rockchip_pdm_runtime_resume, NULL)
+	SET_SYSTEM_SLEEP_PM_OPS(rockchip_pdm_suspend, rockchip_pdm_resume)
 };
 
 static struct platform_driver rockchip_pdm_driver = {
@@ -709,7 +707,7 @@ static struct platform_driver rockchip_pdm_driver = {
 	.driver = {
 		.name = "rockchip-pdm",
 		.of_match_table = of_match_ptr(rockchip_pdm_match),
-		.pm = pm_ptr(&rockchip_pdm_pm_ops),
+		.pm = &rockchip_pdm_pm_ops,
 	},
 };
 

@@ -1171,7 +1171,7 @@ static int ncm_unwrap_ntb(struct gether *port,
 	unsigned char	*ntb_ptr = skb->data;
 	__le16		*tmp;
 	unsigned	index, index2;
-	unsigned int	ndp_index;
+	int		ndp_index;
 	unsigned	dg_len, dg_len2;
 	unsigned	ndp_len;
 	unsigned	block_len;
@@ -1565,7 +1565,8 @@ static int ncm_bind(struct usb_configuration *c, struct usb_function *f)
 	ncm->port.open = ncm_open;
 	ncm->port.close = ncm_close;
 
-	hrtimer_setup(&ncm->task_timer, ncm_tx_timeout, CLOCK_MONOTONIC, HRTIMER_MODE_REL_SOFT);
+	hrtimer_init(&ncm->task_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_SOFT);
+	ncm->task_timer.function = ncm_tx_timeout;
 
 	if (cdev->use_os_string) {
 		os_desc_table[0].os_desc = &ncm_opts->ncm_os_desc;
@@ -1684,7 +1685,7 @@ static struct usb_function_instance *ncm_alloc_inst(void)
 	char *names[1];
 	struct config_group *ncm_interf_group;
 
-	opts = kzalloc_obj(*opts);
+	opts = kzalloc(sizeof(*opts), GFP_KERNEL);
 	if (!opts)
 		return ERR_PTR(-ENOMEM);
 	opts->ncm_os_desc.ext_compat_id = opts->ncm_ext_compat_id;

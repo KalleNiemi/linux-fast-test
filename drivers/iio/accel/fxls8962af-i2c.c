@@ -8,6 +8,7 @@
 #include <linux/dev_printk.h>
 #include <linux/err.h>
 #include <linux/i2c.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/regmap.h>
 
@@ -27,18 +28,16 @@ static int fxls8962af_probe(struct i2c_client *client)
 }
 
 static const struct i2c_device_id fxls8962af_id[] = {
-	{ .name = "fxls8962af", .driver_data = fxls8962af },
-	{ .name = "fxls8964af", .driver_data = fxls8964af },
-	{ .name = "fxls8967af", .driver_data = fxls8967af },
-	{ .name = "fxls8974cf", .driver_data = fxls8974cf },
-	{ }
+	{ "fxls8962af", fxls8962af },
+	{ "fxls8964af", fxls8964af },
+	{}
 };
 MODULE_DEVICE_TABLE(i2c, fxls8962af_id);
 
 static const struct of_device_id fxls8962af_of_match[] = {
 	{ .compatible = "nxp,fxls8962af" },
 	{ .compatible = "nxp,fxls8964af" },
-	{ }
+	{}
 };
 MODULE_DEVICE_TABLE(of, fxls8962af_of_match);
 
@@ -56,4 +55,4 @@ module_i2c_driver(fxls8962af_driver);
 MODULE_AUTHOR("Sean Nyekjaer <sean@geanix.com>");
 MODULE_DESCRIPTION("NXP FXLS8962AF/FXLS8964AF accelerometer i2c driver");
 MODULE_LICENSE("GPL v2");
-MODULE_IMPORT_NS("IIO_FXLS8962AF");
+MODULE_IMPORT_NS(IIO_FXLS8962AF);

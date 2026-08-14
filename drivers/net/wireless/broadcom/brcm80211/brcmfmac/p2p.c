@@ -970,12 +970,10 @@ exit:
  * @channel: channel to stay on.
  * @duration: time in ms to remain on channel.
  * @cookie: cookie.
- * @rx_addr: Address to match against the destination of received frames
  */
 int brcmf_p2p_remain_on_channel(struct wiphy *wiphy, struct wireless_dev *wdev,
 				struct ieee80211_channel *channel,
-				unsigned int duration, u64 *cookie,
-				const u8 *rx_addr)
+				unsigned int duration, u64 *cookie)
 {
 	struct brcmf_cfg80211_info *cfg = wiphy_to_cfg(wiphy);
 	struct brcmf_p2p_info *p2p = &cfg->p2p;
@@ -1405,7 +1403,7 @@ int brcmf_p2p_notify_action_frame_rx(struct brcmf_if *ifp,
 	u8 action;
 
 	if (e->datalen < sizeof(*rxframe)) {
-		brcmf_dbg(SCAN, "Event data too small. Ignore\n");
+		brcmf_dbg(SCAN, "Event data to small. Ignore\n");
 		return 0;
 	}
 
@@ -1942,7 +1940,7 @@ s32 brcmf_p2p_notify_rx_mgmt_p2p_probereq(struct brcmf_if *ifp,
 		  e->reason);
 
 	if (e->datalen < sizeof(*rxframe)) {
-		brcmf_dbg(SCAN, "Event data too small. Ignore\n");
+		brcmf_dbg(SCAN, "Event data to small. Ignore\n");
 		return 0;
 	}
 

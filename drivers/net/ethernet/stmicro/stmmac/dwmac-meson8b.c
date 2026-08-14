@@ -26,6 +26,8 @@
 #define PRG_ETH0_RGMII_MODE		BIT(0)
 
 #define PRG_ETH0_EXT_PHY_MODE_MASK	GENMASK(2, 0)
+#define PRG_ETH0_EXT_RGMII_MODE		1
+#define PRG_ETH0_EXT_RMII_MODE		4
 
 /* mux to choose between fclk_div2 (bit unset) and mpll2 (bit set) */
 #define PRG_ETH0_CLK_M250_SEL_MASK	GENMASK(4, 4)
@@ -236,19 +238,27 @@ static int meson8b_set_phy_mode(struct meson8b_dwmac *dwmac)
 
 static int meson_axg_set_phy_mode(struct meson8b_dwmac *dwmac)
 {
-	int phy_intf_sel;
-
-	phy_intf_sel = stmmac_get_phy_intf_sel(dwmac->phy_mode);
-	if (phy_intf_sel != PHY_INTF_SEL_RGMII &&
-	    phy_intf_sel != PHY_INTF_SEL_RMII) {
+	switch (dwmac->phy_mode) {
+	case PHY_INTERFACE_MODE_RGMII:
+	case PHY_INTERFACE_MODE_RGMII_RXID:
+	case PHY_INTERFACE_MODE_RGMII_ID:
+	case PHY_INTERFACE_MODE_RGMII_TXID:
+		/* enable RGMII mode */
+		meson8b_dwmac_mask_bits(dwmac, PRG_ETH0,
+					PRG_ETH0_EXT_PHY_MODE_MASK,
+					PRG_ETH0_EXT_RGMII_MODE);
+		break;
+	case PHY_INTERFACE_MODE_RMII:
+		/* disable RGMII mode -> enables RMII mode */
+		meson8b_dwmac_mask_bits(dwmac, PRG_ETH0,
+					PRG_ETH0_EXT_PHY_MODE_MASK,
+					PRG_ETH0_EXT_RMII_MODE);
+		break;
+	default:
 		dev_err(dwmac->dev, "fail to set phy-mode %s\n",
 			phy_modes(dwmac->phy_mode));
-		return phy_intf_sel < 0 ? phy_intf_sel : -EINVAL;
+		return -EINVAL;
 	}
-
-	meson8b_dwmac_mask_bits(dwmac, PRG_ETH0, PRG_ETH0_EXT_PHY_MODE_MASK,
-				FIELD_PREP(PRG_ETH0_EXT_PHY_MODE_MASK,
-					   phy_intf_sel));
 
 	return 0;
 }
@@ -407,7 +417,11 @@ static int meson8b_dwmac_probe(struct platform_device *pdev)
 		return PTR_ERR(dwmac->regs);
 
 	dwmac->dev = &pdev->dev;
-	dwmac->phy_mode = plat_dat->phy_interface;
+	ret = of_get_phy_mode(pdev->dev.of_node, &dwmac->phy_mode);
+	if (ret) {
+		dev_err(&pdev->dev, "missing phy-mode property\n");
+		return ret;
+	}
 
 	/* use 2ns as fallback since this value was previously hardcoded */
 	if (of_property_read_u32(pdev->dev.of_node, "amlogic,tx-delay-ns",
@@ -506,7 +520,7 @@ MODULE_DEVICE_TABLE(of, meson8b_dwmac_match);
 
 static struct platform_driver meson8b_dwmac_driver = {
 	.probe  = meson8b_dwmac_probe,
-	.remove = stmmac_pltfr_remove,
+	.remove_new = stmmac_pltfr_remove,
 	.driver = {
 		.name           = "meson8b-dwmac",
 		.pm		= &stmmac_pltfr_pm_ops,

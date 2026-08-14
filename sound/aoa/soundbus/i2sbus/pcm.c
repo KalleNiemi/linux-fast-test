@@ -530,16 +530,20 @@ static int i2sbus_pcm_trigger(struct i2sbus_dev *i2sdev, int in, int cmd)
 {
 	struct codec_info_item *cii;
 	struct pcm_info *pi;
+	int result = 0;
+	unsigned long flags;
 
-	guard(spinlock_irqsave)(&i2sdev->low_lock);
+	spin_lock_irqsave(&i2sdev->low_lock, flags);
 
 	get_pcm_info(i2sdev, in, &pi, NULL);
 
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_RESUME:
-		if (pi->dbdma_ring.running)
-			return -EALREADY;
+		if (pi->dbdma_ring.running) {
+			result = -EALREADY;
+			goto out_unlock;
+		}
 		list_for_each_entry(cii, &i2sdev->sound.codec_list, list)
 			if (cii->codec->start)
 				cii->codec->start(cii, pi->substream);
@@ -553,7 +557,7 @@ static int i2sbus_pcm_trigger(struct i2sbus_dev *i2sdev, int in, int cmd)
 				udelay(10);
 				if (in_le32(&pi->dbdma->status) & ACTIVE) {
 					pi->dbdma_ring.stopping = 0;
-					return 0; /* keep running */
+					goto out_unlock; /* keep running */
 				}
 			}
 		}
@@ -579,8 +583,10 @@ static int i2sbus_pcm_trigger(struct i2sbus_dev *i2sdev, int in, int cmd)
 
 	case SNDRV_PCM_TRIGGER_STOP:
 	case SNDRV_PCM_TRIGGER_SUSPEND:
-		if (!pi->dbdma_ring.running)
-			return -EALREADY;
+		if (!pi->dbdma_ring.running) {
+			result = -EALREADY;
+			goto out_unlock;
+		}
 		pi->dbdma_ring.running = 0;
 
 		/* Set the S0 bit to make the DMA branch to the stop cmd */
@@ -592,10 +598,13 @@ static int i2sbus_pcm_trigger(struct i2sbus_dev *i2sdev, int in, int cmd)
 				cii->codec->stop(cii, pi->substream);
 		break;
 	default:
-		return -EINVAL;
+		result = -EINVAL;
+		goto out_unlock;
 	}
 
-	return 0;
+ out_unlock:
+	spin_unlock_irqrestore(&i2sdev->low_lock, flags);
+	return result;
 }
 
 static snd_pcm_uframes_t i2sbus_pcm_pointer(struct i2sbus_dev *i2sdev, int in)
@@ -622,67 +631,70 @@ static inline void handle_interrupt(struct i2sbus_dev *i2sdev, int in)
 	int dma_stopped = 0;
 	struct snd_pcm_runtime *runtime;
 
-	scoped_guard(spinlock, &i2sdev->low_lock) {
-		get_pcm_info(i2sdev, in, &pi, NULL);
-		if (!pi->dbdma_ring.running && !pi->dbdma_ring.stopping)
-			return;
+	spin_lock(&i2sdev->low_lock);
+	get_pcm_info(i2sdev, in, &pi, NULL);
+	if (!pi->dbdma_ring.running && !pi->dbdma_ring.stopping)
+		goto out_unlock;
 
-		i = pi->current_period;
-		runtime = pi->substream->runtime;
-		while (pi->dbdma_ring.cmds[i].xfer_status) {
-			if (le16_to_cpu(pi->dbdma_ring.cmds[i].xfer_status) & BT)
-				/*
-				 * BT is the branch taken bit.  If it took a branch
-				 * it is because we set the S0 bit to make it
-				 * branch to the stop command.
-				 */
-				dma_stopped = 1;
-			pi->dbdma_ring.cmds[i].xfer_status = 0;
-
-			if (++i >= runtime->periods) {
-				i = 0;
-				pi->frame_count += runtime->buffer_size;
-			}
-			pi->current_period = i;
-
+	i = pi->current_period;
+	runtime = pi->substream->runtime;
+	while (pi->dbdma_ring.cmds[i].xfer_status) {
+		if (le16_to_cpu(pi->dbdma_ring.cmds[i].xfer_status) & BT)
 			/*
-			 * Check the frame count.  The DMA tends to get a bit
-			 * ahead of the frame counter, which confuses the core.
+			 * BT is the branch taken bit.  If it took a branch
+			 * it is because we set the S0 bit to make it
+			 * branch to the stop command.
 			 */
-			fc = in_le32(&i2sdev->intfregs->frame_count);
-			nframes = i * runtime->period_size;
-			if (fc < pi->frame_count + nframes)
-				pi->frame_count = fc - nframes;
+			dma_stopped = 1;
+		pi->dbdma_ring.cmds[i].xfer_status = 0;
+
+		if (++i >= runtime->periods) {
+			i = 0;
+			pi->frame_count += runtime->buffer_size;
 		}
+		pi->current_period = i;
 
-		if (dma_stopped) {
-			timeout = 1000;
-			for (;;) {
-				status = in_le32(&pi->dbdma->status);
-				if (!(status & ACTIVE) && (!in || (status & 0x80)))
-					break;
-				if (--timeout <= 0) {
-					printk(KERN_ERR
-					       "i2sbus: timed out waiting for DMA to stop!\n");
-					break;
-				}
-				udelay(1);
-			}
-
-			/* Turn off DMA controller, clear S0 bit */
-			out_le32(&pi->dbdma->control, (RUN | PAUSE | 1) << 16);
-
-			pi->dbdma_ring.stopping = 0;
-			if (pi->stop_completion)
-				complete(pi->stop_completion);
-		}
-
-		if (!pi->dbdma_ring.running)
-			return;
+		/*
+		 * Check the frame count.  The DMA tends to get a bit
+		 * ahead of the frame counter, which confuses the core.
+		 */
+		fc = in_le32(&i2sdev->intfregs->frame_count);
+		nframes = i * runtime->period_size;
+		if (fc < pi->frame_count + nframes)
+			pi->frame_count = fc - nframes;
 	}
 
+	if (dma_stopped) {
+		timeout = 1000;
+		for (;;) {
+			status = in_le32(&pi->dbdma->status);
+			if (!(status & ACTIVE) && (!in || (status & 0x80)))
+				break;
+			if (--timeout <= 0) {
+				printk(KERN_ERR "i2sbus: timed out "
+				       "waiting for DMA to stop!\n");
+				break;
+			}
+			udelay(1);
+		}
+
+		/* Turn off DMA controller, clear S0 bit */
+		out_le32(&pi->dbdma->control, (RUN | PAUSE | 1) << 16);
+
+		pi->dbdma_ring.stopping = 0;
+		if (pi->stop_completion)
+			complete(pi->stop_completion);
+	}
+
+	if (!pi->dbdma_ring.running)
+		goto out_unlock;
+	spin_unlock(&i2sdev->low_lock);
 	/* may call _trigger again, hence needs to be unlocked */
 	snd_pcm_period_elapsed(pi->substream);
+	return;
+
+ out_unlock:
+	spin_unlock(&i2sdev->low_lock);
 }
 
 irqreturn_t i2sbus_tx_intr(int irq, void *devid)
@@ -906,7 +918,7 @@ i2sbus_attach_codec(struct soundbus_dev *dev, struct snd_card *card,
 		tmp++;
 	}
 
-	cii = kzalloc_obj(struct codec_info_item);
+	cii = kzalloc(sizeof(struct codec_info_item), GFP_KERNEL);
 	if (!cii)
 		return -ENOMEM;
 

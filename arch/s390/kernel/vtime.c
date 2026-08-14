@@ -17,7 +17,6 @@
 #include <asm/vtimer.h>
 #include <asm/vtime.h>
 #include <asm/cpu_mf.h>
-#include <asm/idle.h>
 #include <asm/smp.h>
 
 #include "entry.h"
@@ -49,7 +48,8 @@ static inline void set_vtimer(u64 expires)
 
 static inline int virt_timer_forward(u64 elapsed)
 {
-	lockdep_assert_irqs_disabled();
+	BUG_ON(!irqs_disabled());
+
 	if (list_empty(&virt_timer_list))
 		return 0;
 	elapsed = atomic64_add_return(elapsed, &virt_timer_elapsed);
@@ -111,16 +111,6 @@ static void account_system_index_scaled(struct task_struct *p, u64 cputime,
 	account_system_index_time(p, cputime_to_nsecs(cputime), index);
 }
 
-static inline void vtime_reset_last_update(struct lowcore *lc)
-{
-	asm volatile(
-		"	stpt	%0\n"	/* Store current cpu timer value */
-		"	stckf	%1"	/* Store current tod clock value */
-		: "=Q" (lc->last_update_timer),
-		  "=Q" (lc->last_update_clock)
-		: : "cc");
-}
-
 /*
  * Update process times based on virtual cpu times stored by entry.S
  * to the lowcore fields user_timer, system_timer & steal_clock.
@@ -132,9 +122,12 @@ static int do_account_vtime(struct task_struct *tsk)
 
 	timer = lc->last_update_timer;
 	clock = lc->last_update_clock;
-
-	vtime_reset_last_update(lc);
-
+	asm volatile(
+		"	stpt	%0\n"	/* Store current cpu timer value */
+		"	stckf	%1"	/* Store current tod clock value */
+		: "=Q" (lc->last_update_timer),
+		  "=Q" (lc->last_update_clock)
+		: : "cc");
 	clock = lc->last_update_clock - clock;
 	timer -= lc->last_update_timer;
 
@@ -144,16 +137,23 @@ static int do_account_vtime(struct task_struct *tsk)
 		lc->system_timer += timer;
 
 	/* Update MT utilization calculation */
-	if (smp_cpu_mtid && time_after64(jiffies_64, __this_cpu_read(mt_scaling_jiffies)))
+	if (smp_cpu_mtid &&
+	    time_after64(jiffies_64, this_cpu_read(mt_scaling_jiffies)))
 		update_mt_scaling();
 
 	/* Calculate cputime delta */
-	user = update_tsk_timer(&tsk->thread.user_timer, lc->user_timer);
-	guest = update_tsk_timer(&tsk->thread.guest_timer, lc->guest_timer);
-	system = update_tsk_timer(&tsk->thread.system_timer, lc->system_timer);
-	hardirq = update_tsk_timer(&tsk->thread.hardirq_timer, lc->hardirq_timer);
-	softirq = update_tsk_timer(&tsk->thread.softirq_timer, lc->softirq_timer);
-	lc->steal_timer += clock - user - guest - system - hardirq - softirq;
+	user = update_tsk_timer(&tsk->thread.user_timer,
+				READ_ONCE(lc->user_timer));
+	guest = update_tsk_timer(&tsk->thread.guest_timer,
+				 READ_ONCE(lc->guest_timer));
+	system = update_tsk_timer(&tsk->thread.system_timer,
+				  READ_ONCE(lc->system_timer));
+	hardirq = update_tsk_timer(&tsk->thread.hardirq_timer,
+				   READ_ONCE(lc->hardirq_timer));
+	softirq = update_tsk_timer(&tsk->thread.softirq_timer,
+				   READ_ONCE(lc->softirq_timer));
+	lc->steal_timer +=
+		clock - user - guest - system - hardirq - softirq;
 
 	/* Push account value */
 	if (user) {

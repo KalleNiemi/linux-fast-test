@@ -416,7 +416,7 @@ static struct rpmsg_eptdev *rpmsg_chrdev_eptdev_alloc(struct rpmsg_device *rpdev
 	struct rpmsg_eptdev *eptdev;
 	struct device *dev;
 
-	eptdev = kzalloc_obj(*eptdev);
+	eptdev = kzalloc(sizeof(*eptdev), GFP_KERNEL);
 	if (!eptdev)
 		return ERR_PTR(-ENOMEM);
 

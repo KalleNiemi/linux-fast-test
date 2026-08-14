@@ -15,7 +15,7 @@
 #include <linux/string.h>
 
 /**
- * DOC: basic gateable clock which can gate and ungate its output
+ * DOC: basic gatable clock which can gate and ungate its output
  *
  * Traits of this clock:
  * prepare - clk_(un)prepare only ensures parent is (un)prepared
@@ -145,7 +145,7 @@ struct clk_hw *__clk_hw_register_gate(struct device *dev,
 	}
 
 	/* allocate the gate */
-	gate = kzalloc_obj(*gate);
+	gate = kzalloc(sizeof(*gate), GFP_KERNEL);
 	if (!gate)
 		return ERR_PTR(-ENOMEM);
 

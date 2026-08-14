@@ -6,7 +6,7 @@
 
     AC-3 support:
 
-    Copyright (C) 2008 Hans Verkuil <hverkuil@kernel.org>
+    Copyright (C) 2008 Hans Verkuil <hverkuil@xs4all.nl>
 
   */
 
@@ -770,7 +770,7 @@ static void saa6752hs_remove(struct i2c_client *client)
 }
 
 static const struct i2c_device_id saa6752hs_id[] = {
-	{ .name = "saa6752hs" },
+	{ "saa6752hs" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, saa6752hs_id);

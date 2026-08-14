@@ -14,7 +14,7 @@
 #include <linux/skbuff.h>
 #include <linux/netdevice.h>
 #include <linux/if_vlan.h>
-#include <linux/prandom.h>
+#include <linux/random.h>
 #include <linux/highmem.h>
 #include <linux/sched.h>
 
@@ -94,7 +94,7 @@ static int bpf_fill_maxinsns1(struct bpf_test *self)
 	__u32 k = ~0;
 	int i;
 
-	insn = kmalloc_objs(*insn, len);
+	insn = kmalloc_array(len, sizeof(*insn), GFP_KERNEL);
 	if (!insn)
 		return -ENOMEM;
 
@@ -113,7 +113,7 @@ static int bpf_fill_maxinsns2(struct bpf_test *self)
 	struct sock_filter *insn;
 	int i;
 
-	insn = kmalloc_objs(*insn, len);
+	insn = kmalloc_array(len, sizeof(*insn), GFP_KERNEL);
 	if (!insn)
 		return -ENOMEM;
 
@@ -133,7 +133,7 @@ static int bpf_fill_maxinsns3(struct bpf_test *self)
 	struct rnd_state rnd;
 	int i;
 
-	insn = kmalloc_objs(*insn, len);
+	insn = kmalloc_array(len, sizeof(*insn), GFP_KERNEL);
 	if (!insn)
 		return -ENOMEM;
 
@@ -159,7 +159,7 @@ static int bpf_fill_maxinsns4(struct bpf_test *self)
 	struct sock_filter *insn;
 	int i;
 
-	insn = kmalloc_objs(*insn, len);
+	insn = kmalloc_array(len, sizeof(*insn), GFP_KERNEL);
 	if (!insn)
 		return -ENOMEM;
 
@@ -178,7 +178,7 @@ static int bpf_fill_maxinsns5(struct bpf_test *self)
 	struct sock_filter *insn;
 	int i;
 
-	insn = kmalloc_objs(*insn, len);
+	insn = kmalloc_array(len, sizeof(*insn), GFP_KERNEL);
 	if (!insn)
 		return -ENOMEM;
 
@@ -201,7 +201,7 @@ static int bpf_fill_maxinsns6(struct bpf_test *self)
 	struct sock_filter *insn;
 	int i;
 
-	insn = kmalloc_objs(*insn, len);
+	insn = kmalloc_array(len, sizeof(*insn), GFP_KERNEL);
 	if (!insn)
 		return -ENOMEM;
 
@@ -223,7 +223,7 @@ static int bpf_fill_maxinsns7(struct bpf_test *self)
 	struct sock_filter *insn;
 	int i;
 
-	insn = kmalloc_objs(*insn, len);
+	insn = kmalloc_array(len, sizeof(*insn), GFP_KERNEL);
 	if (!insn)
 		return -ENOMEM;
 
@@ -249,7 +249,7 @@ static int bpf_fill_maxinsns8(struct bpf_test *self)
 	struct sock_filter *insn;
 	int i, jmp_off = len - 3;
 
-	insn = kmalloc_objs(*insn, len);
+	insn = kmalloc_array(len, sizeof(*insn), GFP_KERNEL);
 	if (!insn)
 		return -ENOMEM;
 
@@ -272,7 +272,7 @@ static int bpf_fill_maxinsns9(struct bpf_test *self)
 	struct bpf_insn *insn;
 	int i;
 
-	insn = kmalloc_objs(*insn, len);
+	insn = kmalloc_array(len, sizeof(*insn), GFP_KERNEL);
 	if (!insn)
 		return -ENOMEM;
 
@@ -298,7 +298,7 @@ static int bpf_fill_maxinsns10(struct bpf_test *self)
 	struct bpf_insn *insn;
 	int i;
 
-	insn = kmalloc_objs(*insn, len);
+	insn = kmalloc_array(len, sizeof(*insn), GFP_KERNEL);
 	if (!insn)
 		return -ENOMEM;
 
@@ -324,7 +324,7 @@ static int __bpf_fill_ja(struct bpf_test *self, unsigned int len,
 	unsigned int rlen;
 	int i, j;
 
-	insn = kmalloc_objs(*insn, len);
+	insn = kmalloc_array(len, sizeof(*insn), GFP_KERNEL);
 	if (!insn)
 		return -ENOMEM;
 
@@ -358,7 +358,7 @@ static int bpf_fill_maxinsns12(struct bpf_test *self)
 	struct sock_filter *insn;
 	int i = 0;
 
-	insn = kmalloc_objs(*insn, len);
+	insn = kmalloc_array(len, sizeof(*insn), GFP_KERNEL);
 	if (!insn)
 		return -ENOMEM;
 
@@ -381,7 +381,7 @@ static int bpf_fill_maxinsns13(struct bpf_test *self)
 	struct sock_filter *insn;
 	int i = 0;
 
-	insn = kmalloc_objs(*insn, len);
+	insn = kmalloc_array(len, sizeof(*insn), GFP_KERNEL);
 	if (!insn)
 		return -ENOMEM;
 
@@ -410,7 +410,7 @@ static int bpf_fill_ld_abs_get_processor_id(struct bpf_test *self)
 	struct sock_filter *insn;
 	int i;
 
-	insn = kmalloc_objs(*insn, len);
+	insn = kmalloc_array(len, sizeof(*insn), GFP_KERNEL);
 	if (!insn)
 		return -ENOMEM;
 
@@ -434,7 +434,7 @@ static int __bpf_fill_stxdw(struct bpf_test *self, int size)
 	struct bpf_insn *insn;
 	int i;
 
-	insn = kmalloc_objs(*insn, len);
+	insn = kmalloc_array(len, sizeof(*insn), GFP_KERNEL);
 	if (!insn)
 		return -ENOMEM;
 
@@ -478,13 +478,13 @@ static int __bpf_ld_imm64(struct bpf_insn insns[2], u8 reg, s64 imm64)
  * to overflow the field size of the native instruction, triggering
  * a branch conversion mechanism in some JITs.
  */
-static int __bpf_fill_max_jmp(struct bpf_test *self, int jmp, int imm, bool alu32)
+static int __bpf_fill_max_jmp(struct bpf_test *self, int jmp, int imm)
 {
 	struct bpf_insn *insns;
 	int len = S16_MAX + 5;
 	int i;
 
-	insns = kmalloc_objs(*insns, len);
+	insns = kmalloc_array(len, sizeof(*insns), GFP_KERNEL);
 	if (!insns)
 		return -ENOMEM;
 
@@ -501,7 +501,7 @@ static int __bpf_fill_max_jmp(struct bpf_test *self, int jmp, int imm, bool alu3
 		};
 		int op = ops[(i >> 1) % ARRAY_SIZE(ops)];
 
-		if ((i & 1) || alu32)
+		if (i & 1)
 			insns[i++] = BPF_ALU32_REG(op, R0, R1);
 		else
 			insns[i++] = BPF_ALU64_REG(op, R0, R1);
@@ -516,67 +516,32 @@ static int __bpf_fill_max_jmp(struct bpf_test *self, int jmp, int imm, bool alu3
 }
 
 /* Branch taken by runtime decision */
-static int bpf_fill_max_jmp_taken_32(struct bpf_test *self)
-{
-	return __bpf_fill_max_jmp(self, BPF_JEQ, 1, true);
-}
-
 static int bpf_fill_max_jmp_taken(struct bpf_test *self)
 {
-	return __bpf_fill_max_jmp(self, BPF_JEQ, 1, false);
+	return __bpf_fill_max_jmp(self, BPF_JEQ, 1);
 }
 
 /* Branch not taken by runtime decision */
-static int bpf_fill_max_jmp_not_taken_32(struct bpf_test *self)
-{
-	return __bpf_fill_max_jmp(self, BPF_JEQ, 0, true);
-}
-
 static int bpf_fill_max_jmp_not_taken(struct bpf_test *self)
 {
-	return __bpf_fill_max_jmp(self, BPF_JEQ, 0, false);
+	return __bpf_fill_max_jmp(self, BPF_JEQ, 0);
 }
 
 /* Branch always taken, known at JIT time */
-static int bpf_fill_max_jmp_always_taken_32(struct bpf_test *self)
-{
-	return __bpf_fill_max_jmp(self, BPF_JGE, 0, true);
-}
-
 static int bpf_fill_max_jmp_always_taken(struct bpf_test *self)
 {
-	return __bpf_fill_max_jmp(self, BPF_JGE, 0, false);
+	return __bpf_fill_max_jmp(self, BPF_JGE, 0);
 }
 
 /* Branch never taken, known at JIT time */
-static int bpf_fill_max_jmp_never_taken_32(struct bpf_test *self)
-{
-	return __bpf_fill_max_jmp(self, BPF_JLT, 0, true);
-}
-
 static int bpf_fill_max_jmp_never_taken(struct bpf_test *self)
 {
-	return __bpf_fill_max_jmp(self, BPF_JLT, 0, false);
+	return __bpf_fill_max_jmp(self, BPF_JLT, 0);
 }
 
 /* ALU result computation used in tests */
-enum { F_ALU32 = 1, F_SIGNED = 2 };
-
-static bool __bpf_alu_result(u64 *res, u64 v1, u64 v2, u8 op, u32 flags)
+static bool __bpf_alu_result(u64 *res, u64 v1, u64 v2, u8 op)
 {
-	bool is_signed = flags & F_SIGNED;
-
-	/* Narrow operands for ALU32 */
-	if (flags & F_ALU32) {
-		if (is_signed) {
-			v1 = (u64)(s32)v1;
-			v2 = (u64)(s32)v2;
-		} else {
-			v1 = (u32)v1;
-			v2 = (u32)v2;
-		}
-	}
-
 	*res = 0;
 	switch (op) {
 	case BPF_MOV:
@@ -614,28 +579,12 @@ static bool __bpf_alu_result(u64 *res, u64 v1, u64 v2, u8 op, u32 flags)
 	case BPF_DIV:
 		if (v2 == 0)
 			return false;
-		if (!is_signed) {
-			*res = div64_u64(v1, v2);
-		} else {
-			if ((s64)v2 == -1) /* Handled by verifier */
-				return false;
-			*res = (u64)div64_s64(v1, v2);
-		}
+		*res = div64_u64(v1, v2);
 		break;
 	case BPF_MOD:
 		if (v2 == 0)
 			return false;
-		if (!is_signed) {
-			div64_u64_rem(v1, v2, res);
-		} else {
-			if ((s64)v2 == -1)
-				return false;
-			/*
-			 * Avoid s64 % s64 which generates __moddi3 on
-			 * 32-bit architectures. Use div64_s64 instead.
-			 */
-			*res = (u64)((s64)v1 - div64_s64(v1, v2) * (s64)v2);
-		}
+		div64_u64_rem(v1, v2, res);
 		break;
 	}
 	return true;
@@ -643,7 +592,7 @@ static bool __bpf_alu_result(u64 *res, u64 v1, u64 v2, u8 op, u32 flags)
 
 /* Test an ALU shift operation for all valid shift values */
 static int __bpf_fill_alu_shift(struct bpf_test *self, u8 op,
-				u8 mode, u32 flags)
+				u8 mode, bool alu32)
 {
 	static const s64 regs[] = {
 		0x0123456789abcdefLL, /* dword > 0, word < 0 */
@@ -651,13 +600,13 @@ static int __bpf_fill_alu_shift(struct bpf_test *self, u8 op,
 		0xfedcba0198765432LL, /* dword < 0, word < 0 */
 		0x0123458967abcdefLL, /* dword > 0, word > 0 */
 	};
-	int bits = (flags & F_ALU32) ? 32 : 64;
+	int bits = alu32 ? 32 : 64;
 	int len = (2 + 7 * bits) * ARRAY_SIZE(regs) + 3;
 	struct bpf_insn *insn;
 	int imm, k;
 	int i = 0;
 
-	insn = kmalloc_objs(*insn, len);
+	insn = kmalloc_array(len, sizeof(*insn), GFP_KERNEL);
 	if (!insn)
 		return -ENOMEM;
 
@@ -674,7 +623,7 @@ static int __bpf_fill_alu_shift(struct bpf_test *self, u8 op,
 			/* Perform operation */
 			insn[i++] = BPF_ALU64_REG(BPF_MOV, R1, R3);
 			insn[i++] = BPF_ALU64_IMM(BPF_MOV, R2, imm);
-			if (flags & F_ALU32) {
+			if (alu32) {
 				if (mode == BPF_K)
 					insn[i++] = BPF_ALU32_IMM(op, R1, imm);
 				else
@@ -684,14 +633,14 @@ static int __bpf_fill_alu_shift(struct bpf_test *self, u8 op,
 					reg = (s32)reg;
 				else
 					reg = (u32)reg;
-				__bpf_alu_result(&val, reg, imm, op, 0);
+				__bpf_alu_result(&val, reg, imm, op);
 				val = (u32)val;
 			} else {
 				if (mode == BPF_K)
 					insn[i++] = BPF_ALU64_IMM(op, R1, imm);
 				else
 					insn[i++] = BPF_ALU64_REG(op, R1, R2);
-				__bpf_alu_result(&val, reg, imm, op, 0);
+				__bpf_alu_result(&val, reg, imm, op);
 			}
 
 			/*
@@ -719,62 +668,62 @@ static int __bpf_fill_alu_shift(struct bpf_test *self, u8 op,
 
 static int bpf_fill_alu64_lsh_imm(struct bpf_test *self)
 {
-	return __bpf_fill_alu_shift(self, BPF_LSH, BPF_K, 0);
+	return __bpf_fill_alu_shift(self, BPF_LSH, BPF_K, false);
 }
 
 static int bpf_fill_alu64_rsh_imm(struct bpf_test *self)
 {
-	return __bpf_fill_alu_shift(self, BPF_RSH, BPF_K, 0);
+	return __bpf_fill_alu_shift(self, BPF_RSH, BPF_K, false);
 }
 
 static int bpf_fill_alu64_arsh_imm(struct bpf_test *self)
 {
-	return __bpf_fill_alu_shift(self, BPF_ARSH, BPF_K, 0);
+	return __bpf_fill_alu_shift(self, BPF_ARSH, BPF_K, false);
 }
 
 static int bpf_fill_alu64_lsh_reg(struct bpf_test *self)
 {
-	return __bpf_fill_alu_shift(self, BPF_LSH, BPF_X, 0);
+	return __bpf_fill_alu_shift(self, BPF_LSH, BPF_X, false);
 }
 
 static int bpf_fill_alu64_rsh_reg(struct bpf_test *self)
 {
-	return __bpf_fill_alu_shift(self, BPF_RSH, BPF_X, 0);
+	return __bpf_fill_alu_shift(self, BPF_RSH, BPF_X, false);
 }
 
 static int bpf_fill_alu64_arsh_reg(struct bpf_test *self)
 {
-	return __bpf_fill_alu_shift(self, BPF_ARSH, BPF_X, 0);
+	return __bpf_fill_alu_shift(self, BPF_ARSH, BPF_X, false);
 }
 
 static int bpf_fill_alu32_lsh_imm(struct bpf_test *self)
 {
-	return __bpf_fill_alu_shift(self, BPF_LSH, BPF_K, F_ALU32);
+	return __bpf_fill_alu_shift(self, BPF_LSH, BPF_K, true);
 }
 
 static int bpf_fill_alu32_rsh_imm(struct bpf_test *self)
 {
-	return __bpf_fill_alu_shift(self, BPF_RSH, BPF_K, F_ALU32);
+	return __bpf_fill_alu_shift(self, BPF_RSH, BPF_K, true);
 }
 
 static int bpf_fill_alu32_arsh_imm(struct bpf_test *self)
 {
-	return __bpf_fill_alu_shift(self, BPF_ARSH, BPF_K, F_ALU32);
+	return __bpf_fill_alu_shift(self, BPF_ARSH, BPF_K, true);
 }
 
 static int bpf_fill_alu32_lsh_reg(struct bpf_test *self)
 {
-	return __bpf_fill_alu_shift(self, BPF_LSH, BPF_X, F_ALU32);
+	return __bpf_fill_alu_shift(self, BPF_LSH, BPF_X, true);
 }
 
 static int bpf_fill_alu32_rsh_reg(struct bpf_test *self)
 {
-	return __bpf_fill_alu_shift(self, BPF_RSH, BPF_X, F_ALU32);
+	return __bpf_fill_alu_shift(self, BPF_RSH, BPF_X, true);
 }
 
 static int bpf_fill_alu32_arsh_reg(struct bpf_test *self)
 {
-	return __bpf_fill_alu_shift(self, BPF_ARSH, BPF_X, F_ALU32);
+	return __bpf_fill_alu_shift(self, BPF_ARSH, BPF_X, true);
 }
 
 /*
@@ -782,15 +731,15 @@ static int bpf_fill_alu32_arsh_reg(struct bpf_test *self)
  * for the case when the source and destination are the same.
  */
 static int __bpf_fill_alu_shift_same_reg(struct bpf_test *self, u8 op,
-					 u32 flags)
+					 bool alu32)
 {
-	int bits = (flags & F_ALU32) ? 32 : 64;
+	int bits = alu32 ? 32 : 64;
 	int len = 3 + 6 * bits;
 	struct bpf_insn *insn;
 	int i = 0;
 	u64 val;
 
-	insn = kmalloc_objs(*insn, len);
+	insn = kmalloc_array(len, sizeof(*insn), GFP_KERNEL);
 	if (!insn)
 		return -ENOMEM;
 
@@ -801,14 +750,14 @@ static int __bpf_fill_alu_shift_same_reg(struct bpf_test *self, u8 op,
 
 		/* Perform operation */
 		insn[i++] = BPF_ALU64_IMM(BPF_MOV, R1, val);
-		if (flags & F_ALU32)
+		if (alu32)
 			insn[i++] = BPF_ALU32_REG(op, R1, R1);
 		else
 			insn[i++] = BPF_ALU64_REG(op, R1, R1);
 
 		/* Compute the reference result */
-		__bpf_alu_result(&res, val, val, op, 0);
-		if (flags & F_ALU32)
+		__bpf_alu_result(&res, val, val, op);
+		if (alu32)
 			res = (u32)res;
 		i += __bpf_ld_imm64(&insn[i], R2, res);
 
@@ -829,32 +778,32 @@ static int __bpf_fill_alu_shift_same_reg(struct bpf_test *self, u8 op,
 
 static int bpf_fill_alu64_lsh_same_reg(struct bpf_test *self)
 {
-	return __bpf_fill_alu_shift_same_reg(self, BPF_LSH, 0);
+	return __bpf_fill_alu_shift_same_reg(self, BPF_LSH, false);
 }
 
 static int bpf_fill_alu64_rsh_same_reg(struct bpf_test *self)
 {
-	return __bpf_fill_alu_shift_same_reg(self, BPF_RSH, 0);
+	return __bpf_fill_alu_shift_same_reg(self, BPF_RSH, false);
 }
 
 static int bpf_fill_alu64_arsh_same_reg(struct bpf_test *self)
 {
-	return __bpf_fill_alu_shift_same_reg(self, BPF_ARSH, 0);
+	return __bpf_fill_alu_shift_same_reg(self, BPF_ARSH, false);
 }
 
 static int bpf_fill_alu32_lsh_same_reg(struct bpf_test *self)
 {
-	return __bpf_fill_alu_shift_same_reg(self, BPF_LSH, F_ALU32);
+	return __bpf_fill_alu_shift_same_reg(self, BPF_LSH, true);
 }
 
 static int bpf_fill_alu32_rsh_same_reg(struct bpf_test *self)
 {
-	return __bpf_fill_alu_shift_same_reg(self, BPF_RSH, F_ALU32);
+	return __bpf_fill_alu_shift_same_reg(self, BPF_RSH, true);
 }
 
 static int bpf_fill_alu32_arsh_same_reg(struct bpf_test *self)
 {
-	return __bpf_fill_alu_shift_same_reg(self, BPF_ARSH, F_ALU32);
+	return __bpf_fill_alu_shift_same_reg(self, BPF_ARSH, true);
 }
 
 /*
@@ -967,20 +916,17 @@ static int __bpf_fill_pattern(struct bpf_test *self, void *arg,
 static int __bpf_emit_alu64_imm(struct bpf_test *self, void *arg,
 				struct bpf_insn *insns, s64 dst, s64 imm)
 {
-	int *a = arg;
-	int op = a[0];
-	u32 flags = a[1];
-	s16 off = (flags & F_SIGNED) ? 1 : 0;
+	int op = *(int *)arg;
 	int i = 0;
 	u64 res;
 
 	if (!insns)
 		return 7;
 
-	if (__bpf_alu_result(&res, dst, (s32)imm, op, flags)) {
+	if (__bpf_alu_result(&res, dst, (s32)imm, op)) {
 		i += __bpf_ld_imm64(&insns[i], R1, dst);
 		i += __bpf_ld_imm64(&insns[i], R3, res);
-		insns[i++] = BPF_ALU64_IMM_OFF(op, R1, imm, off);
+		insns[i++] = BPF_ALU64_IMM(op, R1, imm);
 		insns[i++] = BPF_JMP_REG(BPF_JEQ, R1, R3, 1);
 		insns[i++] = BPF_EXIT_INSN();
 	}
@@ -991,20 +937,17 @@ static int __bpf_emit_alu64_imm(struct bpf_test *self, void *arg,
 static int __bpf_emit_alu32_imm(struct bpf_test *self, void *arg,
 				struct bpf_insn *insns, s64 dst, s64 imm)
 {
-	int *a = arg;
-	int op = a[0];
-	u32 flags = a[1];
-	s16 off = (flags & F_SIGNED) ? 1 : 0;
+	int op = *(int *)arg;
 	int i = 0;
 	u64 res;
 
 	if (!insns)
 		return 7;
 
-	if (__bpf_alu_result(&res, dst, (s32)imm, op, flags | F_ALU32)) {
+	if (__bpf_alu_result(&res, (u32)dst, (u32)imm, op)) {
 		i += __bpf_ld_imm64(&insns[i], R1, dst);
 		i += __bpf_ld_imm64(&insns[i], R3, (u32)res);
-		insns[i++] = BPF_ALU32_IMM_OFF(op, R1, imm, off);
+		insns[i++] = BPF_ALU32_IMM(op, R1, imm);
 		insns[i++] = BPF_JMP_REG(BPF_JEQ, R1, R3, 1);
 		insns[i++] = BPF_EXIT_INSN();
 	}
@@ -1022,7 +965,7 @@ static int __bpf_emit_alu64_reg(struct bpf_test *self, void *arg,
 	if (!insns)
 		return 9;
 
-	if (__bpf_alu_result(&res, dst, src, op, 0)) {
+	if (__bpf_alu_result(&res, dst, src, op)) {
 		i += __bpf_ld_imm64(&insns[i], R1, dst);
 		i += __bpf_ld_imm64(&insns[i], R2, src);
 		i += __bpf_ld_imm64(&insns[i], R3, res);
@@ -1044,7 +987,7 @@ static int __bpf_emit_alu32_reg(struct bpf_test *self, void *arg,
 	if (!insns)
 		return 9;
 
-	if (__bpf_alu_result(&res, (u32)dst, (u32)src, op, 0)) {
+	if (__bpf_alu_result(&res, (u32)dst, (u32)src, op)) {
 		i += __bpf_ld_imm64(&insns[i], R1, dst);
 		i += __bpf_ld_imm64(&insns[i], R2, src);
 		i += __bpf_ld_imm64(&insns[i], R3, (u32)res);
@@ -1056,20 +999,16 @@ static int __bpf_emit_alu32_reg(struct bpf_test *self, void *arg,
 	return i;
 }
 
-static int __bpf_fill_alu64_imm(struct bpf_test *self, int op, u32 flags)
+static int __bpf_fill_alu64_imm(struct bpf_test *self, int op)
 {
-	int arg[2] = {op, flags};
-
-	return __bpf_fill_pattern(self, &arg, 64, 32,
+	return __bpf_fill_pattern(self, &op, 64, 32,
 				  PATTERN_BLOCK1, PATTERN_BLOCK2,
 				  &__bpf_emit_alu64_imm);
 }
 
-static int __bpf_fill_alu32_imm(struct bpf_test *self, int op, u32 flags)
+static int __bpf_fill_alu32_imm(struct bpf_test *self, int op)
 {
-	int arg[2] = {op, flags};
-
-	return __bpf_fill_pattern(self, &arg, 64, 32,
+	return __bpf_fill_pattern(self, &op, 64, 32,
 				  PATTERN_BLOCK1, PATTERN_BLOCK2,
 				  &__bpf_emit_alu32_imm);
 }
@@ -1091,115 +1030,93 @@ static int __bpf_fill_alu32_reg(struct bpf_test *self, int op)
 /* ALU64 immediate operations */
 static int bpf_fill_alu64_mov_imm(struct bpf_test *self)
 {
-	return __bpf_fill_alu64_imm(self, BPF_MOV, 0);
+	return __bpf_fill_alu64_imm(self, BPF_MOV);
 }
 
 static int bpf_fill_alu64_and_imm(struct bpf_test *self)
 {
-	return __bpf_fill_alu64_imm(self, BPF_AND, 0);
+	return __bpf_fill_alu64_imm(self, BPF_AND);
 }
 
 static int bpf_fill_alu64_or_imm(struct bpf_test *self)
 {
-	return __bpf_fill_alu64_imm(self, BPF_OR, 0);
+	return __bpf_fill_alu64_imm(self, BPF_OR);
 }
 
 static int bpf_fill_alu64_xor_imm(struct bpf_test *self)
 {
-	return __bpf_fill_alu64_imm(self, BPF_XOR, 0);
+	return __bpf_fill_alu64_imm(self, BPF_XOR);
 }
 
 static int bpf_fill_alu64_add_imm(struct bpf_test *self)
 {
-	return __bpf_fill_alu64_imm(self, BPF_ADD, 0);
+	return __bpf_fill_alu64_imm(self, BPF_ADD);
 }
 
 static int bpf_fill_alu64_sub_imm(struct bpf_test *self)
 {
-	return __bpf_fill_alu64_imm(self, BPF_SUB, 0);
+	return __bpf_fill_alu64_imm(self, BPF_SUB);
 }
 
 static int bpf_fill_alu64_mul_imm(struct bpf_test *self)
 {
-	return __bpf_fill_alu64_imm(self, BPF_MUL, 0);
+	return __bpf_fill_alu64_imm(self, BPF_MUL);
 }
 
 static int bpf_fill_alu64_div_imm(struct bpf_test *self)
 {
-	return __bpf_fill_alu64_imm(self, BPF_DIV, 0);
+	return __bpf_fill_alu64_imm(self, BPF_DIV);
 }
 
 static int bpf_fill_alu64_mod_imm(struct bpf_test *self)
 {
-	return __bpf_fill_alu64_imm(self, BPF_MOD, 0);
-}
-
-/* Signed ALU64 immediate operations */
-static int bpf_fill_alu64_sdiv_imm(struct bpf_test *self)
-{
-	return __bpf_fill_alu64_imm(self, BPF_DIV, F_SIGNED);
-}
-
-static int bpf_fill_alu64_smod_imm(struct bpf_test *self)
-{
-	return __bpf_fill_alu64_imm(self, BPF_MOD, F_SIGNED);
-}
-
-/* Signed ALU32 immediate operations */
-static int bpf_fill_alu32_sdiv_imm(struct bpf_test *self)
-{
-	return __bpf_fill_alu32_imm(self, BPF_DIV, F_SIGNED);
-}
-
-static int bpf_fill_alu32_smod_imm(struct bpf_test *self)
-{
-	return __bpf_fill_alu32_imm(self, BPF_MOD, F_SIGNED);
+	return __bpf_fill_alu64_imm(self, BPF_MOD);
 }
 
 /* ALU32 immediate operations */
 static int bpf_fill_alu32_mov_imm(struct bpf_test *self)
 {
-	return __bpf_fill_alu32_imm(self, BPF_MOV, 0);
+	return __bpf_fill_alu32_imm(self, BPF_MOV);
 }
 
 static int bpf_fill_alu32_and_imm(struct bpf_test *self)
 {
-	return __bpf_fill_alu32_imm(self, BPF_AND, 0);
+	return __bpf_fill_alu32_imm(self, BPF_AND);
 }
 
 static int bpf_fill_alu32_or_imm(struct bpf_test *self)
 {
-	return __bpf_fill_alu32_imm(self, BPF_OR, 0);
+	return __bpf_fill_alu32_imm(self, BPF_OR);
 }
 
 static int bpf_fill_alu32_xor_imm(struct bpf_test *self)
 {
-	return __bpf_fill_alu32_imm(self, BPF_XOR, 0);
+	return __bpf_fill_alu32_imm(self, BPF_XOR);
 }
 
 static int bpf_fill_alu32_add_imm(struct bpf_test *self)
 {
-	return __bpf_fill_alu32_imm(self, BPF_ADD, 0);
+	return __bpf_fill_alu32_imm(self, BPF_ADD);
 }
 
 static int bpf_fill_alu32_sub_imm(struct bpf_test *self)
 {
-	return __bpf_fill_alu32_imm(self, BPF_SUB, 0);
+	return __bpf_fill_alu32_imm(self, BPF_SUB);
 }
 
 static int bpf_fill_alu32_mul_imm(struct bpf_test *self)
 {
-	return __bpf_fill_alu32_imm(self, BPF_MUL, 0);
+	return __bpf_fill_alu32_imm(self, BPF_MUL);
 }
 
 static int bpf_fill_alu32_div_imm(struct bpf_test *self)
 {
-	return __bpf_fill_alu32_imm(self, BPF_DIV, 0);
+	return __bpf_fill_alu32_imm(self, BPF_DIV);
 }
 
 static int bpf_fill_alu32_mod_imm(struct bpf_test *self)
 {
-	return __bpf_fill_alu32_imm(self, BPF_MOD, 0);
+	return __bpf_fill_alu32_imm(self, BPF_MOD);
 }
 
 /* ALU64 register operations */
@@ -1298,8 +1215,7 @@ static int bpf_fill_alu32_mod_reg(struct bpf_test *self)
  * Test JITs that implement complex ALU operations as function
  * calls, and must re-arrange operands for argument passing.
  */
-static int __bpf_fill_alu_imm_regs(struct bpf_test *self, u8 op,
-				    u32 flags)
+static int __bpf_fill_alu_imm_regs(struct bpf_test *self, u8 op, bool alu32)
 {
 	int len = 2 + 10 * 10;
 	struct bpf_insn *insns;
@@ -1308,42 +1224,33 @@ static int __bpf_fill_alu_imm_regs(struct bpf_test *self, u8 op,
 	u32 imm;
 	int rd;
 
-	insns = kmalloc_objs(*insns, len);
+	insns = kmalloc_array(len, sizeof(*insns), GFP_KERNEL);
 	if (!insns)
 		return -ENOMEM;
 
 	/* Operand and result values according to operation */
-	if (flags & F_SIGNED) {
-		if (flags & F_ALU32)
-			dst = -76543210;
-		else
-			dst = -7654321076543210LL;
-	} else {
-		if (flags & F_ALU32)
-			dst = 0x76543210U;
-		else
-			dst = 0x7edcba9876543210ULL;
-	}
+	if (alu32)
+		dst = 0x76543210U;
+	else
+		dst = 0x7edcba9876543210ULL;
 	imm = 0x01234567U;
 
 	if (op == BPF_LSH || op == BPF_RSH || op == BPF_ARSH)
 		imm &= 31;
 
-	__bpf_alu_result(&res, dst, imm, op, flags);
+	__bpf_alu_result(&res, dst, imm, op);
 
-	if (flags & F_ALU32)
+	if (alu32)
 		res = (u32)res;
 
 	/* Check all operand registers */
 	for (rd = R0; rd <= R9; rd++) {
 		i += __bpf_ld_imm64(&insns[i], rd, dst);
 
-		s16 off = (flags & F_SIGNED) ? 1 : 0;
-
-		if (flags & F_ALU32)
-			insns[i++] = BPF_ALU32_IMM_OFF(op, rd, imm, off);
+		if (alu32)
+			insns[i++] = BPF_ALU32_IMM(op, rd, imm);
 		else
-			insns[i++] = BPF_ALU64_IMM_OFF(op, rd, imm, off);
+			insns[i++] = BPF_ALU64_IMM(op, rd, imm);
 
 		insns[i++] = BPF_JMP32_IMM(BPF_JEQ, rd, res, 2);
 		insns[i++] = BPF_MOV64_IMM(R0, __LINE__);
@@ -1368,145 +1275,123 @@ static int __bpf_fill_alu_imm_regs(struct bpf_test *self, u8 op,
 /* ALU64 K registers */
 static int bpf_fill_alu64_mov_imm_regs(struct bpf_test *self)
 {
-	return __bpf_fill_alu_imm_regs(self, BPF_MOV, 0);
+	return __bpf_fill_alu_imm_regs(self, BPF_MOV, false);
 }
 
 static int bpf_fill_alu64_and_imm_regs(struct bpf_test *self)
 {
-	return __bpf_fill_alu_imm_regs(self, BPF_AND, 0);
+	return __bpf_fill_alu_imm_regs(self, BPF_AND, false);
 }
 
 static int bpf_fill_alu64_or_imm_regs(struct bpf_test *self)
 {
-	return __bpf_fill_alu_imm_regs(self, BPF_OR, 0);
+	return __bpf_fill_alu_imm_regs(self, BPF_OR, false);
 }
 
 static int bpf_fill_alu64_xor_imm_regs(struct bpf_test *self)
 {
-	return __bpf_fill_alu_imm_regs(self, BPF_XOR, 0);
+	return __bpf_fill_alu_imm_regs(self, BPF_XOR, false);
 }
 
 static int bpf_fill_alu64_lsh_imm_regs(struct bpf_test *self)
 {
-	return __bpf_fill_alu_imm_regs(self, BPF_LSH, 0);
+	return __bpf_fill_alu_imm_regs(self, BPF_LSH, false);
 }
 
 static int bpf_fill_alu64_rsh_imm_regs(struct bpf_test *self)
 {
-	return __bpf_fill_alu_imm_regs(self, BPF_RSH, 0);
+	return __bpf_fill_alu_imm_regs(self, BPF_RSH, false);
 }
 
 static int bpf_fill_alu64_arsh_imm_regs(struct bpf_test *self)
 {
-	return __bpf_fill_alu_imm_regs(self, BPF_ARSH, 0);
+	return __bpf_fill_alu_imm_regs(self, BPF_ARSH, false);
 }
 
 static int bpf_fill_alu64_add_imm_regs(struct bpf_test *self)
 {
-	return __bpf_fill_alu_imm_regs(self, BPF_ADD, 0);
+	return __bpf_fill_alu_imm_regs(self, BPF_ADD, false);
 }
 
 static int bpf_fill_alu64_sub_imm_regs(struct bpf_test *self)
 {
-	return __bpf_fill_alu_imm_regs(self, BPF_SUB, 0);
+	return __bpf_fill_alu_imm_regs(self, BPF_SUB, false);
 }
 
 static int bpf_fill_alu64_mul_imm_regs(struct bpf_test *self)
 {
-	return __bpf_fill_alu_imm_regs(self, BPF_MUL, 0);
+	return __bpf_fill_alu_imm_regs(self, BPF_MUL, false);
 }
 
 static int bpf_fill_alu64_div_imm_regs(struct bpf_test *self)
 {
-	return __bpf_fill_alu_imm_regs(self, BPF_DIV, 0);
+	return __bpf_fill_alu_imm_regs(self, BPF_DIV, false);
 }
 
 static int bpf_fill_alu64_mod_imm_regs(struct bpf_test *self)
 {
-	return __bpf_fill_alu_imm_regs(self, BPF_MOD, 0);
-}
-
-/* Signed ALU64 K registers */
-static int bpf_fill_alu64_sdiv_imm_regs(struct bpf_test *self)
-{
-	return __bpf_fill_alu_imm_regs(self, BPF_DIV, F_SIGNED);
-}
-
-static int bpf_fill_alu64_smod_imm_regs(struct bpf_test *self)
-{
-	return __bpf_fill_alu_imm_regs(self, BPF_MOD, F_SIGNED);
+	return __bpf_fill_alu_imm_regs(self, BPF_MOD, false);
 }
 
 /* ALU32 K registers */
 static int bpf_fill_alu32_mov_imm_regs(struct bpf_test *self)
 {
-	return __bpf_fill_alu_imm_regs(self, BPF_MOV, F_ALU32);
+	return __bpf_fill_alu_imm_regs(self, BPF_MOV, true);
 }
 
 static int bpf_fill_alu32_and_imm_regs(struct bpf_test *self)
 {
-	return __bpf_fill_alu_imm_regs(self, BPF_AND, F_ALU32);
+	return __bpf_fill_alu_imm_regs(self, BPF_AND, true);
 }
 
 static int bpf_fill_alu32_or_imm_regs(struct bpf_test *self)
 {
-	return __bpf_fill_alu_imm_regs(self, BPF_OR, F_ALU32);
+	return __bpf_fill_alu_imm_regs(self, BPF_OR, true);
 }
 
 static int bpf_fill_alu32_xor_imm_regs(struct bpf_test *self)
 {
-	return __bpf_fill_alu_imm_regs(self, BPF_XOR, F_ALU32);
+	return __bpf_fill_alu_imm_regs(self, BPF_XOR, true);
 }
 
 static int bpf_fill_alu32_lsh_imm_regs(struct bpf_test *self)
 {
-	return __bpf_fill_alu_imm_regs(self, BPF_LSH, F_ALU32);
+	return __bpf_fill_alu_imm_regs(self, BPF_LSH, true);
 }
 
 static int bpf_fill_alu32_rsh_imm_regs(struct bpf_test *self)
 {
-	return __bpf_fill_alu_imm_regs(self, BPF_RSH, F_ALU32);
+	return __bpf_fill_alu_imm_regs(self, BPF_RSH, true);
 }
 
 static int bpf_fill_alu32_arsh_imm_regs(struct bpf_test *self)
 {
-	return __bpf_fill_alu_imm_regs(self, BPF_ARSH, F_ALU32);
+	return __bpf_fill_alu_imm_regs(self, BPF_ARSH, true);
 }
 
 static int bpf_fill_alu32_add_imm_regs(struct bpf_test *self)
 {
-	return __bpf_fill_alu_imm_regs(self, BPF_ADD, F_ALU32);
+	return __bpf_fill_alu_imm_regs(self, BPF_ADD, true);
 }
 
 static int bpf_fill_alu32_sub_imm_regs(struct bpf_test *self)
 {
-	return __bpf_fill_alu_imm_regs(self, BPF_SUB, F_ALU32);
+	return __bpf_fill_alu_imm_regs(self, BPF_SUB, true);
 }
 
 static int bpf_fill_alu32_mul_imm_regs(struct bpf_test *self)
 {
-	return __bpf_fill_alu_imm_regs(self, BPF_MUL, F_ALU32);
+	return __bpf_fill_alu_imm_regs(self, BPF_MUL, true);
 }
 
 static int bpf_fill_alu32_div_imm_regs(struct bpf_test *self)
 {
-	return __bpf_fill_alu_imm_regs(self, BPF_DIV, F_ALU32);
+	return __bpf_fill_alu_imm_regs(self, BPF_DIV, true);
 }
 
 static int bpf_fill_alu32_mod_imm_regs(struct bpf_test *self)
 {
-	return __bpf_fill_alu_imm_regs(self, BPF_MOD, F_ALU32);
-}
-
-/* Signed ALU32 K registers */
-static int bpf_fill_alu32_sdiv_imm_regs(struct bpf_test *self)
-{
-	return __bpf_fill_alu_imm_regs(self, BPF_DIV, F_ALU32 | F_SIGNED);
-}
-
-static int bpf_fill_alu32_smod_imm_regs(struct bpf_test *self)
-{
-	return __bpf_fill_alu_imm_regs(self, BPF_MOD, F_ALU32 | F_SIGNED);
+	return __bpf_fill_alu_imm_regs(self, BPF_MOD, true);
 }
 
 /*
@@ -1521,7 +1406,7 @@ static int __bpf_fill_alu_reg_pairs(struct bpf_test *self, u8 op, bool alu32)
 	int rd, rs;
 	int i = 0;
 
-	insns = kmalloc_objs(*insns, len);
+	insns = kmalloc_array(len, sizeof(*insns), GFP_KERNEL);
 	if (!insns)
 		return -ENOMEM;
 
@@ -1537,8 +1422,8 @@ static int __bpf_fill_alu_reg_pairs(struct bpf_test *self, u8 op, bool alu32)
 	if (op == BPF_LSH || op == BPF_RSH || op == BPF_ARSH)
 		src &= 31;
 
-	__bpf_alu_result(&res, dst, src, op, 0);
-	__bpf_alu_result(&same, src, src, op, 0);
+	__bpf_alu_result(&res, dst, src, op);
+	__bpf_alu_result(&same, src, src, op);
 
 	if (alu32) {
 		res = (u32)res;
@@ -1721,7 +1606,7 @@ static int __bpf_emit_atomic64(struct bpf_test *self, void *arg,
 		res = src;
 		break;
 	default:
-		__bpf_alu_result(&res, dst, src, BPF_OP(op), 0);
+		__bpf_alu_result(&res, dst, src, BPF_OP(op));
 	}
 
 	keep = 0x0123456789abcdefULL;
@@ -1768,7 +1653,7 @@ static int __bpf_emit_atomic32(struct bpf_test *self, void *arg,
 		res = src;
 		break;
 	default:
-		__bpf_alu_result(&res, (u32)dst, (u32)src, BPF_OP(op), 0);
+		__bpf_alu_result(&res, (u32)dst, (u32)src, BPF_OP(op));
 	}
 
 	keep = 0x0123456789abcdefULL;
@@ -2012,7 +1897,7 @@ static int __bpf_fill_atomic_reg_pairs(struct bpf_test *self, u8 width, u8 op)
 	u64 mem, upd, res;
 	int rd, rs, i = 0;
 
-	insn = kmalloc_objs(*insn, len);
+	insn = kmalloc_array(len, sizeof(*insn), GFP_KERNEL);
 	if (!insn)
 		return -ENOMEM;
 
@@ -2034,7 +1919,7 @@ static int __bpf_fill_atomic_reg_pairs(struct bpf_test *self, u8 width, u8 op)
 		res = mem;
 		break;
 	default:
-		__bpf_alu_result(&res, mem, upd, BPF_OP(op), 0);
+		__bpf_alu_result(&res, mem, upd, BPF_OP(op));
 	}
 
 	/* Test all operand registers */
@@ -2258,7 +2143,7 @@ static int bpf_fill_ld_imm64_magn(struct bpf_test *self)
 	int bit, adj, sign;
 	int i = 0;
 
-	insn = kmalloc_objs(*insn, len);
+	insn = kmalloc_array(len, sizeof(*insn), GFP_KERNEL);
 	if (!insn)
 		return -ENOMEM;
 
@@ -2312,7 +2197,7 @@ static int __bpf_fill_ld_imm64_bytes(struct bpf_test *self,
 	u32 rand = 1;
 	int i = 0;
 
-	insn = kmalloc_objs(*insn, len);
+	insn = kmalloc_array(len, sizeof(*insn), GFP_KERNEL);
 	if (!insn)
 		return -ENOMEM;
 
@@ -2819,7 +2704,7 @@ static int __bpf_fill_staggered_jumps(struct bpf_test *self,
 	struct bpf_insn *insns;
 	int off, ind;
 
-	insns = kmalloc_objs(*insns, len);
+	insns = kmalloc_array(len, sizeof(*insns), GFP_KERNEL);
 	if (!insns)
 		return -ENOMEM;
 
@@ -12449,22 +12334,6 @@ static struct bpf_test tests[] = {
 		{ { 0, 1 } },
 		.fill_helper = bpf_fill_alu64_mod_imm_regs,
 	},
-	{
-		"ALU64_SDIV_K: registers",
-		{ },
-		INTERNAL,
-		{ },
-		{ { 0, 1 } },
-		.fill_helper = bpf_fill_alu64_sdiv_imm_regs,
-	},
-	{
-		"ALU64_SMOD_K: registers",
-		{ },
-		INTERNAL,
-		{ },
-		{ { 0, 1 } },
-		.fill_helper = bpf_fill_alu64_smod_imm_regs,
-	},
 	/* ALU32 K registers */
 	{
 		"ALU32_MOV_K: registers",
@@ -12561,22 +12430,6 @@ static struct bpf_test tests[] = {
 		{ },
 		{ { 0, 1 } },
 		.fill_helper = bpf_fill_alu32_mod_imm_regs,
-	},
-	{
-		"ALU32_SDIV_K: registers",
-		{ },
-		INTERNAL,
-		{ },
-		{ { 0, 1 } },
-		.fill_helper = bpf_fill_alu32_sdiv_imm_regs,
-	},
-	{
-		"ALU32_SMOD_K: registers",
-		{ },
-		INTERNAL,
-		{ },
-		{ { 0, 1 } },
-		.fill_helper = bpf_fill_alu32_smod_imm_regs,
 	},
 	/* ALU64 X register combinations */
 	{
@@ -13008,24 +12861,6 @@ static struct bpf_test tests[] = {
 		.fill_helper = bpf_fill_alu64_mod_imm,
 		.nr_testruns = NR_PATTERN_RUNS,
 	},
-	{
-		"ALU64_SDIV_K: all immediate value magnitudes",
-		{ },
-		INTERNAL | FLAG_NO_DATA,
-		{ },
-		{ { 0, 1 } },
-		.fill_helper = bpf_fill_alu64_sdiv_imm,
-		.nr_testruns = NR_PATTERN_RUNS,
-	},
-	{
-		"ALU64_SMOD_K: all immediate value magnitudes",
-		{ },
-		INTERNAL | FLAG_NO_DATA,
-		{ },
-		{ { 0, 1 } },
-		.fill_helper = bpf_fill_alu64_smod_imm,
-		.nr_testruns = NR_PATTERN_RUNS,
-	},
 	/* ALU32 immediate magnitudes */
 	{
 		"ALU32_MOV_K: all immediate value magnitudes",
@@ -13106,24 +12941,6 @@ static struct bpf_test tests[] = {
 		{ },
 		{ { 0, 1 } },
 		.fill_helper = bpf_fill_alu32_mod_imm,
-		.nr_testruns = NR_PATTERN_RUNS,
-	},
-	{
-		"ALU32_SDIV_K: all immediate value magnitudes",
-		{ },
-		INTERNAL | FLAG_NO_DATA,
-		{ },
-		{ { 0, 1 } },
-		.fill_helper = bpf_fill_alu32_sdiv_imm,
-		.nr_testruns = NR_PATTERN_RUNS,
-	},
-	{
-		"ALU32_SMOD_K: all immediate value magnitudes",
-		{ },
-		INTERNAL | FLAG_NO_DATA,
-		{ },
-		{ { 0, 1 } },
-		.fill_helper = bpf_fill_alu32_smod_imm,
 		.nr_testruns = NR_PATTERN_RUNS,
 	},
 	/* ALU64 register magnitudes */
@@ -14417,38 +14234,6 @@ static struct bpf_test tests[] = {
 	},
 	/* Conditional branch conversions */
 	{
-		"Long conditional jump: taken at runtime (32 bits)",
-		{ },
-		INTERNAL | FLAG_NO_DATA,
-		{ },
-		{ { 0, 1 } },
-		.fill_helper = bpf_fill_max_jmp_taken_32,
-	},
-	{
-		"Long conditional jump: not taken at runtime (32 bits)",
-		{ },
-		INTERNAL | FLAG_NO_DATA,
-		{ },
-		{ { 0, 2 } },
-		.fill_helper = bpf_fill_max_jmp_not_taken_32,
-	},
-	{
-		"Long conditional jump: always taken, known at JIT time (32 bits)",
-		{ },
-		INTERNAL | FLAG_NO_DATA,
-		{ },
-		{ { 0, 1 } },
-		.fill_helper = bpf_fill_max_jmp_always_taken_32,
-	},
-	{
-		"Long conditional jump: never taken, known at JIT time (32 bits)",
-		{ },
-		INTERNAL | FLAG_NO_DATA,
-		{ },
-		{ { 0, 2 } },
-		.fill_helper = bpf_fill_max_jmp_never_taken_32,
-	},
-	{
 		"Long conditional jump: taken at runtime",
 		{ },
 		INTERNAL | FLAG_NO_DATA,
@@ -15624,7 +15409,7 @@ static __init int prepare_tail_call_tests(struct bpf_array **pprogs)
 	int which, err;
 
 	/* Allocate the table of programs to be used for tail calls */
-	progs = kzalloc_flex(*progs, ptrs, ntests + 1);
+	progs = kzalloc(struct_size(progs, ptrs, ntests + 1), GFP_KERNEL);
 	if (!progs)
 		goto out_nomem;
 

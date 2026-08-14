@@ -140,11 +140,6 @@ int __init ima_init(void)
 	rc = ima_init_digests();
 	if (rc != 0)
 		return rc;
-
-	rc = ima_init_htable();
-	if (rc != 0)
-		return rc;
-
 	rc = ima_add_boot_aggregate();	/* boot aggregate must be first entry */
 	if (rc != 0)
 		return rc;
@@ -156,8 +151,6 @@ int __init ima_init(void)
 		return rc;
 
 	ima_init_key_queue();
-
-	ima_init_reboot_notifier();
 
 	ima_measure_critical_data("kernel_info", "kernel_version",
 				  UTS_RELEASE, strlen(UTS_RELEASE), false,

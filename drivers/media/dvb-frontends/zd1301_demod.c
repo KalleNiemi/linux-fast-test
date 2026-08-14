@@ -470,7 +470,7 @@ static int zd1301_demod_probe(struct platform_device *pdev)
 		goto err;
 	}
 
-	dev = kzalloc_obj(*dev);
+	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
 	if (!dev) {
 		ret = -ENOMEM;
 		goto err;
@@ -531,7 +531,7 @@ static struct platform_driver zd1301_demod_driver = {
 		.suppress_bind_attrs = true,
 	},
 	.probe          = zd1301_demod_probe,
-	.remove         = zd1301_demod_remove,
+	.remove_new     = zd1301_demod_remove,
 };
 module_platform_driver(zd1301_demod_driver);
 

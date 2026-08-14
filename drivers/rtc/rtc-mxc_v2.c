@@ -8,6 +8,7 @@
 #include <linux/clk.h>
 #include <linux/io.h>
 #include <linux/module.h>
+#include <linux/mod_devicetable.h>
 #include <linux/platform_device.h>
 #include <linux/pm_wakeirq.h>
 #include <linux/rtc.h>
@@ -301,7 +302,7 @@ static int mxc_rtc_probe(struct platform_device *pdev)
 	if (pdata->irq < 0)
 		return pdata->irq;
 
-	device_init_wakeup(&pdev->dev, true);
+	device_init_wakeup(&pdev->dev, 1);
 	ret = dev_pm_set_wake_irq(&pdev->dev, pdata->irq);
 	if (ret)
 		dev_err(&pdev->dev, "failed to enable irq wake\n");
@@ -380,7 +381,7 @@ static struct platform_driver mxc_rtc_driver = {
 		.of_match_table = mxc_ids,
 	},
 	.probe = mxc_rtc_probe,
-	.remove = mxc_rtc_remove,
+	.remove_new = mxc_rtc_remove,
 };
 
 module_platform_driver(mxc_rtc_driver);

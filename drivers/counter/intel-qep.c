@@ -188,21 +188,25 @@ static int intel_qep_ceiling_write(struct counter_device *counter,
 				   struct counter_count *count, u64 max)
 {
 	struct intel_qep *qep = counter_priv(counter);
+	int ret = 0;
 
 	/* Intel QEP ceiling configuration only supports 32-bit values */
 	if (max != (u32)max)
 		return -ERANGE;
 
-	guard(mutex)(&qep->lock);
-
-	if (qep->enabled)
-		return -EBUSY;
+	mutex_lock(&qep->lock);
+	if (qep->enabled) {
+		ret = -EBUSY;
+		goto out;
+	}
 
 	pm_runtime_get_sync(qep->dev);
 	intel_qep_writel(qep, INTEL_QEPMAX, max);
 	pm_runtime_put(qep->dev);
 
-	return 0;
+out:
+	mutex_unlock(&qep->lock);
+	return ret;
 }
 
 static int intel_qep_enable_read(struct counter_device *counter,
@@ -222,11 +226,10 @@ static int intel_qep_enable_write(struct counter_device *counter,
 	u32 reg;
 	bool changed;
 
-	guard(mutex)(&qep->lock);
-
+	mutex_lock(&qep->lock);
 	changed = val ^ qep->enabled;
 	if (!changed)
-		return 0;
+		goto out;
 
 	pm_runtime_get_sync(qep->dev);
 	reg = intel_qep_readl(qep, INTEL_QEPCON);
@@ -243,6 +246,8 @@ static int intel_qep_enable_write(struct counter_device *counter,
 	pm_runtime_put(qep->dev);
 	qep->enabled = val;
 
+out:
+	mutex_unlock(&qep->lock);
 	return 0;
 }
 
@@ -274,6 +279,7 @@ static int intel_qep_spike_filter_ns_write(struct counter_device *counter,
 	struct intel_qep *qep = counter_priv(counter);
 	u32 reg;
 	bool enable;
+	int ret = 0;
 
 	/*
 	 * Spike filter length is (MAX_COUNT + 2) clock periods.
@@ -294,10 +300,11 @@ static int intel_qep_spike_filter_ns_write(struct counter_device *counter,
 	if (length > INTEL_QEPFLT_MAX_COUNT(length))
 		return -ERANGE;
 
-	guard(mutex)(&qep->lock);
-
-	if (qep->enabled)
-		return -EBUSY;
+	mutex_lock(&qep->lock);
+	if (qep->enabled) {
+		ret = -EBUSY;
+		goto out;
+	}
 
 	pm_runtime_get_sync(qep->dev);
 	reg = intel_qep_readl(qep, INTEL_QEPCON);
@@ -309,7 +316,9 @@ static int intel_qep_spike_filter_ns_write(struct counter_device *counter,
 	intel_qep_writel(qep, INTEL_QEPCON, reg);
 	pm_runtime_put(qep->dev);
 
-	return 0;
+out:
+	mutex_unlock(&qep->lock);
+	return ret;
 }
 
 static int intel_qep_preset_enable_read(struct counter_device *counter,
@@ -333,11 +342,13 @@ static int intel_qep_preset_enable_write(struct counter_device *counter,
 {
 	struct intel_qep *qep = counter_priv(counter);
 	u32 reg;
+	int ret = 0;
 
-	guard(mutex)(&qep->lock);
-
-	if (qep->enabled)
-		return -EBUSY;
+	mutex_lock(&qep->lock);
+	if (qep->enabled) {
+		ret = -EBUSY;
+		goto out;
+	}
 
 	pm_runtime_get_sync(qep->dev);
 	reg = intel_qep_readl(qep, INTEL_QEPCON);
@@ -349,7 +360,10 @@ static int intel_qep_preset_enable_write(struct counter_device *counter,
 	intel_qep_writel(qep, INTEL_QEPCON, reg);
 	pm_runtime_put(qep->dev);
 
-	return 0;
+out:
+	mutex_unlock(&qep->lock);
+
+	return ret;
 }
 
 static struct counter_comp intel_qep_count_ext[] = {
@@ -394,15 +408,17 @@ static int intel_qep_probe(struct pci_dev *pci, const struct pci_device_id *id)
 
 	pci_set_master(pci);
 
-	regs = pcim_iomap_region(pci, 0, pci_name(pci));
-	if (IS_ERR(regs))
-		return PTR_ERR(regs);
+	ret = pcim_iomap_regions(pci, BIT(0), pci_name(pci));
+	if (ret)
+		return ret;
+
+	regs = pcim_iomap_table(pci)[0];
+	if (!regs)
+		return -ENOMEM;
 
 	qep->dev = dev;
 	qep->regs = regs;
-	ret = devm_mutex_init(dev, &qep->lock);
-	if (ret)
-		return ret;
+	mutex_init(&qep->lock);
 
 	intel_qep_init(qep);
 	pci_set_drvdata(pci, qep);
@@ -507,4 +523,4 @@ MODULE_AUTHOR("Jarkko Nikula <jarkko.nikula@linux.intel.com>");
 MODULE_AUTHOR("Raymond Tan <raymond.tan@intel.com>");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Intel Quadrature Encoder Peripheral driver");
-MODULE_IMPORT_NS("COUNTER");
+MODULE_IMPORT_NS(COUNTER);

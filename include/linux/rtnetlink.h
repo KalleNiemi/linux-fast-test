@@ -7,6 +7,7 @@
 #include <linux/netdevice.h>
 #include <linux/wait.h>
 #include <linux/refcount.h>
+#include <linux/cleanup.h>
 #include <uapi/linux/rtnetlink.h>
 
 extern int rtnetlink_send(struct sk_buff *skb, struct net *net, u32 pid, u32 group, int echo);
@@ -43,9 +44,10 @@ extern void rtnl_lock(void);
 extern void rtnl_unlock(void);
 extern int rtnl_trylock(void);
 extern int rtnl_is_locked(void);
-extern int rtnl_lock_interruptible(void);
 extern int rtnl_lock_killable(void);
 extern bool refcount_dec_and_rtnl_lock(refcount_t *r);
+
+DEFINE_LOCK_GUARD_0(rtnl, rtnl_lock(), rtnl_unlock())
 
 extern wait_queue_head_t netdev_unregistering_wq;
 extern atomic_t dev_unreg_count;
@@ -79,7 +81,7 @@ static inline bool lockdep_rtnl_is_held(void)
  * rtnl_dereference - fetch RCU pointer when updates are prevented by RTNL
  * @p: The pointer to read, prior to dereferencing
  *
- * Return: the value of the specified RCU-protected pointer, but omit
+ * Return the value of the specified RCU-protected pointer, but omit
  * the READ_ONCE(), because caller holds RTNL.
  */
 #define rtnl_dereference(p)					\
@@ -103,7 +105,6 @@ void __rtnl_net_unlock(struct net *net);
 void rtnl_net_lock(struct net *net);
 void rtnl_net_unlock(struct net *net);
 int rtnl_net_trylock(struct net *net);
-int rtnl_net_lock_killable(struct net *net);
 int rtnl_net_lock_cmp_fn(const struct lockdep_map *a, const struct lockdep_map *b);
 
 bool rtnl_net_is_locked(struct net *net);
@@ -138,11 +139,6 @@ static inline void rtnl_net_unlock(struct net *net)
 static inline int rtnl_net_trylock(struct net *net)
 {
 	return rtnl_trylock();
-}
-
-static inline int rtnl_net_lock_killable(struct net *net)
-{
-	return rtnl_lock_killable();
 }
 
 static inline void ASSERT_RTNL_NET(struct net *net)
@@ -184,12 +180,6 @@ void netdev_xmit_skip_txqueue(bool skip);
 void rtnetlink_init(void);
 void __rtnl_unlock(void);
 void rtnl_kfree_skbs(struct sk_buff *head, struct sk_buff *tail);
-
-/* Shared by rtnl_fdb_dump() and various ndo_fdb_dump() helpers. */
-struct ndo_fdb_dump_context {
-	unsigned long ifindex;
-	unsigned long fdb_idx;
-};
 
 extern int ndo_dflt_fdb_dump(struct sk_buff *skb,
 			     struct netlink_callback *cb,
@@ -240,6 +230,6 @@ rtnl_notify_needed(const struct net *net, u16 nlflags, u32 group)
 	return (nlflags & NLM_F_ECHO) || rtnl_has_listeners(net, group);
 }
 
-void netif_set_operstate(struct net_device *dev, int newstate);
+void netdev_set_operstate(struct net_device *dev, int newstate);
 
 #endif	/* __LINUX_RTNETLINK_H */

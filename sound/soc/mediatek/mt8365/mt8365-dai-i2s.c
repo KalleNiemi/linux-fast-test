@@ -313,7 +313,7 @@ static int mt8365_dai_set_config(struct mtk_base_afe *afe,
 	}
 
 	if ((be->fmt_mode & SND_SOC_DAIFMT_MASTER_MASK) ==
-	    SND_SOC_DAIFMT_CBP_CFP) {
+	    SND_SOC_DAIFMT_CBM_CFM) {
 		val |= AFE_I2S_CON_SRC_SLAVE;
 		val &= ~(u32)AFE_I2S_CON_FROM_IO_MUX;//from consys
 	}
@@ -463,6 +463,7 @@ static int mt8365_afe_set_2nd_i2s_asrc_enable(struct mtk_base_afe *afe,
 void mt8365_afe_set_i2s_out_enable(struct mtk_base_afe *afe, bool enable)
 {
 	int i;
+	unsigned long flags;
 	struct mt8365_afe_private *afe_priv = afe->platform_priv;
 	struct mtk_afe_i2s_priv *i2s_data = NULL;
 
@@ -474,7 +475,7 @@ void mt8365_afe_set_i2s_out_enable(struct mtk_base_afe *afe, bool enable)
 	if (!i2s_data)
 		return;
 
-	guard(spinlock_irqsave)(&afe_priv->afe_ctrl_lock);
+	spin_lock_irqsave(&afe_priv->afe_ctrl_lock, flags);
 
 	if (enable) {
 		i2s_data->i2s_out_on_ref_cnt++;
@@ -489,6 +490,8 @@ void mt8365_afe_set_i2s_out_enable(struct mtk_base_afe *afe, bool enable)
 		else if (i2s_data->i2s_out_on_ref_cnt < 0)
 			i2s_data->i2s_out_on_ref_cnt = 0;
 	}
+
+	spin_unlock_irqrestore(&afe_priv->afe_ctrl_lock, flags);
 }
 
 static void mt8365_dai_set_enable(struct mtk_base_afe *afe,
@@ -520,7 +523,7 @@ static int mt8365_dai_i2s_startup(struct snd_pcm_substream *substream,
 	bool i2s_in_slave =
 		(substream->stream == SNDRV_PCM_STREAM_CAPTURE) &&
 		((be->fmt_mode & SND_SOC_DAIFMT_MASTER_MASK) ==
-		SND_SOC_DAIFMT_CBP_CFP);
+		SND_SOC_DAIFMT_CBM_CFM);
 
 	mt8365_afe_enable_main_clk(afe);
 
@@ -548,7 +551,7 @@ static void mt8365_dai_i2s_shutdown(struct snd_pcm_substream *substream,
 	bool i2s_in_slave =
 		(substream->stream == SNDRV_PCM_STREAM_CAPTURE) &&
 		((be->fmt_mode & SND_SOC_DAIFMT_MASTER_MASK) ==
-		SND_SOC_DAIFMT_CBP_CFP);
+		SND_SOC_DAIFMT_CBM_CFM);
 
 	if (be->prepared[substream->stream]) {
 		if (reset_i2s_out_change)
@@ -610,7 +613,7 @@ static int mt8365_dai_i2s_prepare(struct snd_pcm_substream *substream,
 
 	if (apply_i2s_in_change) {
 		if ((be->fmt_mode & SND_SOC_DAIFMT_MASTER_MASK)
-		    == SND_SOC_DAIFMT_CBP_CFP) {
+		    == SND_SOC_DAIFMT_CBM_CFM) {
 			ret = mt8365_afe_set_2nd_i2s_asrc(afe, 32000, rate,
 							  (unsigned int)bit_width,
 							  0, 0, 1);
@@ -656,7 +659,7 @@ static int mt8365_dai_i2s_prepare(struct snd_pcm_substream *substream,
 		mt8365_dai_set_enable(afe, i2s_data, true, true);
 
 		if ((be->fmt_mode & SND_SOC_DAIFMT_MASTER_MASK)
-		    == SND_SOC_DAIFMT_CBP_CFP)
+		    == SND_SOC_DAIFMT_CBM_CFM)
 			mt8365_afe_set_2nd_i2s_asrc_enable(afe, true);
 
 		be->prepared[SNDRV_PCM_STREAM_CAPTURE] = true;
@@ -709,7 +712,7 @@ static int mt8365_afe_2nd_i2s_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 
 	be->fmt_mode |= (fmt & SND_SOC_DAIFMT_INV_MASK);
 
-	if (((fmt & SND_SOC_DAIFMT_MASTER_MASK) == SND_SOC_DAIFMT_CBP_CFP))
+	if (((fmt & SND_SOC_DAIFMT_MASTER_MASK) == SND_SOC_DAIFMT_CBM_CFM))
 		be->fmt_mode |= (fmt & SND_SOC_DAIFMT_MASTER_MASK);
 
 	return 0;

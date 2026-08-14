@@ -26,7 +26,6 @@
 #include <drm/drm_gem_atomic_helper.h>
 #include <drm/drm_gem_dma_helper.h>
 #include <drm/drm_plane.h>
-#include <drm/drm_print.h>
 #include <drm/drm_vblank.h>
 
 #include "lcdif_drv.h"
@@ -422,7 +421,7 @@ static void lcdif_crtc_mode_set_nofb(struct drm_crtc_state *crtc_state,
 }
 
 static int lcdif_crtc_atomic_check(struct drm_crtc *crtc,
-				   struct drm_atomic_commit *state)
+				   struct drm_atomic_state *state)
 {
 	struct drm_device *drm = crtc->dev;
 	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state,
@@ -434,6 +433,7 @@ static int lcdif_crtc_atomic_check(struct drm_crtc *crtc,
 	struct drm_connector *connector;
 	struct drm_encoder *encoder;
 	struct drm_bridge_state *bridge_state;
+	struct drm_bridge *bridge;
 	u32 bus_format, bus_flags;
 	bool format_set = false, flags_set = false;
 	int ret, i;
@@ -453,8 +453,7 @@ static int lcdif_crtc_atomic_check(struct drm_crtc *crtc,
 
 		encoder = connector_state->best_encoder;
 
-		struct drm_bridge *bridge __free(drm_bridge_put) =
-			drm_bridge_chain_get_first_bridge(encoder);
+		bridge = drm_bridge_chain_get_first_bridge(encoder);
 		if (!bridge)
 			continue;
 
@@ -503,7 +502,7 @@ static int lcdif_crtc_atomic_check(struct drm_crtc *crtc,
 }
 
 static void lcdif_crtc_atomic_flush(struct drm_crtc *crtc,
-				    struct drm_atomic_commit *state)
+				    struct drm_atomic_state *state)
 {
 	struct lcdif_drm_private *lcdif = to_lcdif_drm_private(crtc->dev);
 	struct drm_pending_vblank_event *event;
@@ -528,7 +527,7 @@ static void lcdif_crtc_atomic_flush(struct drm_crtc *crtc,
 }
 
 static void lcdif_crtc_atomic_enable(struct drm_crtc *crtc,
-				     struct drm_atomic_commit *state)
+				     struct drm_atomic_state *state)
 {
 	struct lcdif_drm_private *lcdif = to_lcdif_drm_private(crtc->dev);
 	struct drm_crtc_state *new_cstate = drm_atomic_get_new_crtc_state(state, crtc);
@@ -558,7 +557,7 @@ static void lcdif_crtc_atomic_enable(struct drm_crtc *crtc,
 }
 
 static void lcdif_crtc_atomic_disable(struct drm_crtc *crtc,
-				      struct drm_atomic_commit *state)
+				      struct drm_atomic_state *state)
 {
 	struct lcdif_drm_private *lcdif = to_lcdif_drm_private(crtc->dev);
 	struct drm_device *drm = lcdif->drm;
@@ -595,7 +594,7 @@ static void lcdif_crtc_reset(struct drm_crtc *crtc)
 
 	crtc->state = NULL;
 
-	state = kzalloc_obj(*state);
+	state = kzalloc(sizeof(*state), GFP_KERNEL);
 	if (state)
 		__drm_atomic_helper_crtc_reset(crtc, &state->base);
 }
@@ -609,7 +608,7 @@ lcdif_crtc_atomic_duplicate_state(struct drm_crtc *crtc)
 	if (WARN_ON(!crtc->state))
 		return NULL;
 
-	new = kzalloc_obj(*new);
+	new = kzalloc(sizeof(*new), GFP_KERNEL);
 	if (!new)
 		return NULL;
 
@@ -664,7 +663,7 @@ static const struct drm_crtc_funcs lcdif_crtc_funcs = {
  */
 
 static int lcdif_plane_atomic_check(struct drm_plane *plane,
-				    struct drm_atomic_commit *state)
+				    struct drm_atomic_state *state)
 {
 	struct drm_plane_state *plane_state = drm_atomic_get_new_plane_state(state,
 									     plane);
@@ -681,7 +680,7 @@ static int lcdif_plane_atomic_check(struct drm_plane *plane,
 }
 
 static void lcdif_plane_primary_atomic_update(struct drm_plane *plane,
-					      struct drm_atomic_commit *state)
+					      struct drm_atomic_state *state)
 {
 	struct lcdif_drm_private *lcdif = to_lcdif_drm_private(plane->dev);
 	struct drm_plane_state *new_pstate = drm_atomic_get_new_plane_state(state,

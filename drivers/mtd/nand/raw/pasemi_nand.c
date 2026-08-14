@@ -113,7 +113,7 @@ static int pasemi_nand_probe(struct platform_device *ofdev)
 	dev_dbg(dev, "pasemi_nand at %pR\n", &res);
 
 	/* Allocate memory for MTD device structure and private data */
-	ddata = kzalloc_obj(*ddata);
+	ddata = kzalloc(sizeof(*ddata), GFP_KERNEL);
 	if (!ddata) {
 		err = -ENOMEM;
 		goto out;
@@ -237,7 +237,7 @@ static struct platform_driver pasemi_nand_driver =
 		.of_match_table = pasemi_nand_match,
 	},
 	.probe		= pasemi_nand_probe,
-	.remove		= pasemi_nand_remove,
+	.remove_new	= pasemi_nand_remove,
 };
 
 module_platform_driver(pasemi_nand_driver);

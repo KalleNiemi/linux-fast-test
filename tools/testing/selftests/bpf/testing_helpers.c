@@ -5,8 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-#include <sys/mman.h>
-#include <alloca.h>
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 #include "disasm.h"
@@ -214,7 +212,6 @@ int parse_test_list_file(const char *path,
 			break;
 	}
 
-	free(buf);
 	fclose(f);
 	return err;
 }
@@ -370,7 +367,7 @@ int delete_module(const char *name, int flags)
 	return syscall(__NR_delete_module, name, flags);
 }
 
-int try_unload_module(const char *name, int retries, bool verbose)
+int unload_module(const char *name, bool verbose)
 {
 	int ret, cnt = 0;
 
@@ -381,7 +378,7 @@ int try_unload_module(const char *name, int retries, bool verbose)
 		ret = delete_module(name, 0);
 		if (!ret || errno != EAGAIN)
 			break;
-		if (++cnt > retries) {
+		if (++cnt > 10000) {
 			fprintf(stdout, "Unload of %s timed out\n", name);
 			break;
 		}
@@ -402,12 +399,7 @@ int try_unload_module(const char *name, int retries, bool verbose)
 	return 0;
 }
 
-int unload_module(const char *name, bool verbose)
-{
-	return try_unload_module(name, 10000, verbose);
-}
-
-static int __load_module(const char *path, const char *param_values, bool verbose)
+int load_module(const char *path, bool verbose)
 {
 	int fd;
 
@@ -419,7 +411,7 @@ static int __load_module(const char *path, const char *param_values, bool verbos
 		fprintf(stdout, "Can't find %s kernel module: %d\n", path, -errno);
 		return -ENOENT;
 	}
-	if (finit_module(fd, param_values, 0)) {
+	if (finit_module(fd, "", 0)) {
 		fprintf(stdout, "Failed to load %s into the kernel: %d\n", path, -errno);
 		close(fd);
 		return -EINVAL;
@@ -429,16 +421,6 @@ static int __load_module(const char *path, const char *param_values, bool verbos
 	if (verbose)
 		fprintf(stdout, "Successfully loaded %s.\n", path);
 	return 0;
-}
-
-int load_module_params(const char *path, const char *param_values, bool verbose)
-{
-	return __load_module(path, param_values, verbose);
-}
-
-int load_module(const char *path, bool verbose)
-{
-	return __load_module(path, "", verbose);
 }
 
 int unload_bpf_testmod(bool verbose)
@@ -517,20 +499,4 @@ bool is_jit_enabled(void)
 	}
 
 	return enabled;
-}
-
-int stack_mprotect(void)
-{
-	void *buf;
-	long sz;
-	int ret;
-
-	sz = sysconf(_SC_PAGESIZE);
-	if (sz < 0)
-		return sz;
-
-	buf = alloca(sz * 3);
-	ret = mprotect((void *)(((unsigned long)(buf + sz)) & ~(sz - 1)), sz,
-		       PROT_READ | PROT_WRITE | PROT_EXEC);
-	return ret;
 }

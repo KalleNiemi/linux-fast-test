@@ -5,26 +5,25 @@
  * Copyright 2010-2011 Analog Devices Inc.
  */
 
-#include <linux/bits.h>
 #include <linux/clk.h>
-#include <linux/dev_printk.h>
-#include <linux/err.h>
-#include <linux/kstrtox.h>
-#include <linux/module.h>
-#include <linux/mutex.h>
-#include <linux/regulator/consumer.h>
-#include <linux/spi/spi.h>
-#include <linux/string.h>
+#include <linux/interrupt.h>
+#include <linux/workqueue.h>
+#include <linux/device.h>
+#include <linux/kernel.h>
+#include <linux/slab.h>
 #include <linux/sysfs.h>
-#include <linux/types.h>
-
-#include <asm/byteorder.h>
+#include <linux/list.h>
+#include <linux/spi/spi.h>
+#include <linux/regulator/consumer.h>
+#include <linux/err.h>
+#include <linux/module.h>
 #include <asm/div64.h>
 
 #include <linux/iio/iio.h>
 #include <linux/iio/sysfs.h>
-
 #include "dds.h"
+
+#include "ad9834.h"
 
 /* Registers */
 
@@ -166,7 +165,7 @@ static ssize_t ad9834_write(struct device *dev,
 		break;
 	case AD9834_OPBITEN:
 		if (st->control & AD9834_MODE) {
-			ret = -EINVAL;  /* AD9834 reserved mode */
+			ret = -EINVAL;  /* AD9843 reserved mode */
 			break;
 		}
 
@@ -241,7 +240,7 @@ static ssize_t ad9834_store_wavetype(struct device *dev,
 				st->control &= ~AD9834_OPBITEN;
 				st->control |= AD9834_MODE;
 			} else if (st->control & AD9834_OPBITEN) {
-				ret = -EINVAL;	/* AD9834 reserved mode */
+				ret = -EINVAL;	/* AD9843 reserved mode */
 			} else {
 				st->control |= AD9834_MODE;
 			}
@@ -283,12 +282,16 @@ ssize_t ad9834_show_out0_wavetype_available(struct device *dev,
 {
 	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
 	struct ad9834_state *st = iio_priv(indio_dev);
+	char *str;
 
 	if (st->devid == ID_AD9833 || st->devid == ID_AD9837)
-		return sysfs_emit(buf, "sine triangle square\n");
-	if (st->control & AD9834_OPBITEN)
-		return sysfs_emit(buf, "sine\n");
-	return sysfs_emit(buf, "sine triangle\n");
+		str = "sine triangle square";
+	else if (st->control & AD9834_OPBITEN)
+		str = "sine";
+	else
+		str = "sine triangle";
+
+	return sprintf(buf, "%s\n", str);
 }
 
 static IIO_DEVICE_ATTR(out_altvoltage0_out0_wavetype_available, 0444,
@@ -301,10 +304,14 @@ ssize_t ad9834_show_out1_wavetype_available(struct device *dev,
 {
 	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
 	struct ad9834_state *st = iio_priv(indio_dev);
+	char *str;
 
 	if (st->control & AD9834_MODE)
-		return sysfs_emit(buf, "\n");
-	return sysfs_emit(buf, "square\n");
+		str = "";
+	else
+		str = "square";
+
+	return sprintf(buf, "%s\n", str);
 }
 
 static IIO_DEVICE_ATTR(out_altvoltage0_out1_wavetype_available, 0444,
@@ -380,25 +387,46 @@ static const struct iio_info ad9833_info = {
 	.attrs = &ad9833_attribute_group,
 };
 
+static void ad9834_disable_reg(void *data)
+{
+	struct regulator *reg = data;
+
+	regulator_disable(reg);
+}
+
 static int ad9834_probe(struct spi_device *spi)
 {
 	struct ad9834_state *st;
 	struct iio_dev *indio_dev;
+	struct regulator *reg;
 	int ret;
 
-	ret = devm_regulator_get_enable(&spi->dev, "avdd");
+	reg = devm_regulator_get(&spi->dev, "avdd");
+	if (IS_ERR(reg))
+		return PTR_ERR(reg);
+
+	ret = regulator_enable(reg);
+	if (ret) {
+		dev_err(&spi->dev, "Failed to enable specified AVDD supply\n");
+		return ret;
+	}
+
+	ret = devm_add_action_or_reset(&spi->dev, ad9834_disable_reg, reg);
 	if (ret)
-		return dev_err_probe(&spi->dev, ret, "Failed to enable specified AVDD supply\n");
+		return ret;
 
 	indio_dev = devm_iio_device_alloc(&spi->dev, sizeof(*st));
-	if (!indio_dev)
-		return -ENOMEM;
+	if (!indio_dev) {
+		ret = -ENOMEM;
+		return ret;
+	}
 	st = iio_priv(indio_dev);
 	mutex_init(&st->lock);
 	st->mclk = devm_clk_get_enabled(&spi->dev, NULL);
-	if (IS_ERR(st->mclk))
-		return dev_err_probe(&spi->dev, PTR_ERR(st->mclk),
-				     "Failed to enable master clock\n");
+	if (IS_ERR(st->mclk)) {
+		dev_err(&spi->dev, "Failed to enable master clock\n");
+		return PTR_ERR(st->mclk);
+	}
 
 	st->spi = spi;
 	st->devid = spi_get_device_id(spi)->driver_data;
@@ -440,9 +468,10 @@ static int ad9834_probe(struct spi_device *spi)
 
 	st->data = cpu_to_be16(AD9834_REG_CMD | st->control);
 	ret = spi_sync(st->spi, &st->msg);
-	if (ret)
-		return dev_err_probe(&spi->dev, ret,
-				     "device init failed\n");
+	if (ret) {
+		dev_err(&spi->dev, "device init failed\n");
+		return ret;
+	}
 
 	ret = ad9834_write_frequency(st, AD9834_REG_FREQ0, 1000000);
 	if (ret)
@@ -468,7 +497,7 @@ static const struct spi_device_id ad9834_id[] = {
 	{"ad9834", ID_AD9834},
 	{"ad9837", ID_AD9837},
 	{"ad9838", ID_AD9838},
-	{ }
+	{}
 };
 MODULE_DEVICE_TABLE(spi, ad9834_id);
 
@@ -477,7 +506,7 @@ static const struct of_device_id ad9834_of_match[] = {
 	{.compatible = "adi,ad9834"},
 	{.compatible = "adi,ad9837"},
 	{.compatible = "adi,ad9838"},
-	{ }
+	{}
 };
 
 MODULE_DEVICE_TABLE(of, ad9834_of_match);

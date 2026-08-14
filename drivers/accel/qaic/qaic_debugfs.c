@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 /* Copyright (c) 2020, The Linux Foundation. All rights reserved. */
-/* Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries. */
+/* Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved. */
 
 #include <linux/debugfs.h>
 #include <linux/device.h>
@@ -27,8 +27,6 @@
 struct bootlog_msg {
 	/* Buffer for bootlog messages */
 	char str[BOOTLOG_MSG_SIZE];
-	/* Length of bootlog message */
-	size_t len;
 	/* Root struct of device, used to access device resources */
 	struct qaic_device *qdev;
 	/* Work struct to schedule work coming on QAIC_LOGGING channel */
@@ -48,24 +46,38 @@ static int bootlog_show(struct seq_file *s, void *unused)
 {
 	struct bootlog_page *page;
 	struct qaic_device *qdev;
-	size_t len;
+	void *page_end;
 	void *log;
 
 	qdev = s->private;
 	mutex_lock(&qdev->bootlog_mutex);
 	list_for_each_entry(page, &qdev->bootlog, node) {
 		log = page + 1;
-		len = page->offset - sizeof(*page);
-		seq_write(s, log, len);
+		page_end = (void *)page + page->offset;
+		while (log < page_end) {
+			seq_printf(s, "%s", (char *)log);
+			log += strlen(log) + 1;
+		}
 	}
 	mutex_unlock(&qdev->bootlog_mutex);
 
 	return 0;
 }
 
-DEFINE_SHOW_ATTRIBUTE(bootlog);
+static int bootlog_fops_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, bootlog_show, inode->i_private);
+}
 
-static int fifo_size_show(struct seq_file *s, void *unused)
+static const struct file_operations bootlog_fops = {
+	.owner = THIS_MODULE,
+	.open = bootlog_fops_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+static int read_dbc_fifo_size(struct seq_file *s, void *unused)
 {
 	struct dma_bridge_chan *dbc = s->private;
 
@@ -73,9 +85,20 @@ static int fifo_size_show(struct seq_file *s, void *unused)
 	return 0;
 }
 
-DEFINE_SHOW_ATTRIBUTE(fifo_size);
+static int fifo_size_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, read_dbc_fifo_size, inode->i_private);
+}
 
-static int queued_show(struct seq_file *s, void *unused)
+static const struct file_operations fifo_size_fops = {
+	.owner = THIS_MODULE,
+	.open = fifo_size_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+static int read_dbc_queued(struct seq_file *s, void *unused)
 {
 	struct dma_bridge_chan *dbc = s->private;
 	u32 tail = 0, head = 0;
@@ -92,7 +115,18 @@ static int queued_show(struct seq_file *s, void *unused)
 	return 0;
 }
 
-DEFINE_SHOW_ATTRIBUTE(queued);
+static int queued_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, read_dbc_queued, inode->i_private);
+}
+
+static const struct file_operations queued_fops = {
+	.owner = THIS_MODULE,
+	.open = queued_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
 
 void qaic_debugfs_init(struct qaic_drm_device *qddev)
 {
@@ -181,14 +215,15 @@ static void bootlog_commit(struct qaic_device *qdev, unsigned int size)
 static void bootlog_log(struct work_struct *work)
 {
 	struct bootlog_msg *msg = container_of(work, struct bootlog_msg, work);
+	unsigned int len = strlen(msg->str) + 1;
 	struct qaic_device *qdev = msg->qdev;
 	void *log;
 
 	mutex_lock(&qdev->bootlog_mutex);
-	log = bootlog_get_space(qdev, msg->len);
+	log = bootlog_get_space(qdev, len);
 	if (log) {
-		memcpy(log, msg, msg->len);
-		bootlog_commit(qdev, msg->len);
+		memcpy(log, msg, len);
+		bootlog_commit(qdev, len);
 	}
 	mutex_unlock(&qdev->bootlog_mutex);
 
@@ -239,6 +274,7 @@ static int qaic_bootlog_mhi_probe(struct mhi_device *mhi_dev, const struct mhi_d
 mhi_unprepare:
 	mhi_unprepare_from_transfer(mhi_dev);
 destroy_workqueue:
+	flush_workqueue(qdev->bootlog_wq);
 	destroy_workqueue(qdev->bootlog_wq);
 out:
 	return ret;
@@ -251,6 +287,7 @@ static void qaic_bootlog_mhi_remove(struct mhi_device *mhi_dev)
 	qdev = dev_get_drvdata(&mhi_dev->dev);
 
 	mhi_unprepare_from_transfer(qdev->bootlog_ch);
+	flush_workqueue(qdev->bootlog_wq);
 	destroy_workqueue(qdev->bootlog_wq);
 	qdev->bootlog_ch = NULL;
 }
@@ -263,18 +300,14 @@ static void qaic_bootlog_mhi_dl_xfer_cb(struct mhi_device *mhi_dev, struct mhi_r
 {
 	struct qaic_device *qdev = dev_get_drvdata(&mhi_dev->dev);
 	struct bootlog_msg *msg = mhi_result->buf_addr;
-	int status = mhi_result->transaction_status;
 
-	if (status && status != -EOVERFLOW) {
+	if (mhi_result->transaction_status) {
 		devm_kfree(&qdev->pdev->dev, msg);
 		return;
 	}
 
-	msg->len = mhi_result->bytes_xferd;
-
-	/* Exclude trailing null to normalize AIC100/AIC200 line endings */
-	if (msg->len && msg->str[msg->len - 1] == '\0')
-		msg->len--;
+	/* Force a null at the end of the transferred string */
+	msg->str[mhi_result->bytes_xferd - 1] = 0;
 
 	queue_work(qdev->bootlog_wq, &msg->work);
 }

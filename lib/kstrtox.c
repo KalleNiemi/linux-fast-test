@@ -39,30 +39,25 @@ const char *_parse_integer_fixup_radix(const char *s, unsigned int *base)
 	return s;
 }
 
-/**
- * _parse_integer_limit - Convert integer string representation to an integer
- * @s: Integer string representation
- * @base: Radix
- * @p: Where to store result
- * @max_chars: Maximum amount of characters to convert
+/*
+ * Convert non-negative integer string representation in explicitly given radix
+ * to an integer. A maximum of max_chars characters will be converted.
  *
- * Convert non-negative integer string representation in explicitly given
- * radix to an integer. If overflow occurs, value at @p is set to ULLONG_MAX.
+ * Return number of characters consumed maybe or-ed with overflow bit.
+ * If overflow occurs, result integer (incorrect) is still returned.
  *
- * This function is the workhorse of other string conversion functions and it
- * is discouraged to use it explicitly. Consider kstrto*() family instead.
- *
- * Return: Number of characters consumed, maybe ORed with overflow bit
+ * Don't you dare use this function.
  */
 noinline
 unsigned int _parse_integer_limit(const char *s, unsigned int base, unsigned long long *p,
 				  size_t max_chars)
 {
-	unsigned int rv, overflow = 0;
 	unsigned long long res;
+	unsigned int rv;
 
 	res = 0;
-	for (rv = 0; rv < max_chars; rv++, s++) {
+	rv = 0;
+	while (max_chars--) {
 		unsigned int c = *s;
 		unsigned int lc = _tolower(c);
 		unsigned int val;
@@ -81,17 +76,15 @@ unsigned int _parse_integer_limit(const char *s, unsigned int base, unsigned lon
 		 * it in the max base we support (16)
 		 */
 		if (unlikely(res & (~0ull << 60))) {
-			if (check_mul_overflow(res, base, &res) ||
-			    check_add_overflow(res, val, &res)) {
-				res = ULLONG_MAX;
-				overflow = KSTRTOX_OVERFLOW;
-			}
-		} else {
-			res = res * base + val;
+			if (res > div_u64(ULLONG_MAX - val, base))
+				rv |= KSTRTOX_OVERFLOW;
 		}
+		res = res * base + val;
+		rv++;
+		s++;
 	}
 	*p = res;
-	return rv | overflow;
+	return rv;
 }
 
 noinline
@@ -347,8 +340,8 @@ EXPORT_SYMBOL(kstrtos8);
  * @s: input string
  * @res: result
  *
- * This routine returns 0 iff the first character is one of 'EeYyTt1DdNnFf0',
- * or [oO][NnFf] for "on" and "off". Otherwise it will return -EINVAL.  Value
+ * This routine returns 0 iff the first character is one of 'YyTt1NnFf0', or
+ * [oO][NnFf] for "on" and "off". Otherwise it will return -EINVAL.  Value
  * pointed to by res is updated upon finding a match.
  */
 noinline
@@ -358,8 +351,6 @@ int kstrtobool(const char *s, bool *res)
 		return -EINVAL;
 
 	switch (s[0]) {
-	case 'e':
-	case 'E':
 	case 'y':
 	case 'Y':
 	case 't':
@@ -367,8 +358,6 @@ int kstrtobool(const char *s, bool *res)
 	case '1':
 		*res = true;
 		return 0;
-	case 'd':
-	case 'D':
 	case 'n':
 	case 'N':
 	case 'f':

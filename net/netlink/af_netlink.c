@@ -39,7 +39,6 @@
 #include <linux/fs.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
-#include <linux/uio.h>
 #include <linux/skbuff.h>
 #include <linux/netdevice.h>
 #include <linux/rtnetlink.h>
@@ -357,7 +356,7 @@ static void netlink_overrun(struct sock *sk)
 			sk_error_report(sk);
 		}
 	}
-	sk_drops_inc(sk);
+	atomic_inc(&sk->sk_drops);
 }
 
 static void netlink_rcv_wake(struct sock *sk)
@@ -597,8 +596,10 @@ static void netlink_remove(struct sock *sk)
 
 	table = &nl_table[sk->sk_protocol];
 	if (!rhashtable_remove_fast(&table->hash, &nlk_sk(sk)->node,
-				    netlink_rhashtable_params))
+				    netlink_rhashtable_params)) {
+		WARN_ON(refcount_read(&sk->sk_refcnt) == 1);
 		__sock_put(sk);
+	}
 
 	netlink_table_grab();
 	if (nlk_sk(sk)->subscriptions) {
@@ -769,7 +770,6 @@ static int netlink_release(struct socket *sock)
 			nlk->cb.done(&nlk->cb);
 		module_put(nlk->cb.module);
 		kfree_skb(nlk->cb.skb);
-		WRITE_ONCE(nlk->cb_running, false);
 	}
 
 	module_put(nlk->module);
@@ -967,7 +967,7 @@ static void netlink_undo_bind(int group, long unsigned int groups,
 			nlk->netlink_unbind(sock_net(sk), undo + 1);
 }
 
-static int netlink_bind(struct socket *sock, struct sockaddr_unsized *addr,
+static int netlink_bind(struct socket *sock, struct sockaddr *addr,
 			int addr_len)
 {
 	struct sock *sk = sock->sk;
@@ -1055,7 +1055,7 @@ unlock:
 	return err;
 }
 
-static int netlink_connect(struct socket *sock, struct sockaddr_unsized *addr,
+static int netlink_connect(struct socket *sock, struct sockaddr *addr,
 			   int alen, int flags)
 {
 	int err = 0;
@@ -1154,16 +1154,11 @@ static struct sock *netlink_getsockbyportid(struct sock *ssk, u32 portid)
 	return sock;
 }
 
-struct sock *netlink_getsockbyfd(int fd)
+struct sock *netlink_getsockbyfilp(struct file *filp)
 {
-	CLASS(fd, f)(fd);
-	struct inode *inode;
+	struct inode *inode = file_inode(filp);
 	struct sock *sock;
 
-	if (fd_empty(f))
-		return ERR_PTR(-EBADF);
-
-	inode = file_inode(fd_file(f));
 	if (!S_ISSOCK(inode->i_mode))
 		return ERR_PTR(-ENOTSOCK);
 
@@ -1283,7 +1278,6 @@ static struct sk_buff *netlink_trim(struct sk_buff *skb, gfp_t allocation)
 {
 	int delta;
 
-	skb_assert_len(skb);
 	WARN_ON(skb->sk != NULL);
 	delta = skb->end - skb->tail;
 	if (is_vmalloc_addr(skb->head) || delta * 2 < skb->truesize)
@@ -1722,18 +1716,18 @@ static int netlink_setsockopt(struct socket *sock, int level, int optname,
 }
 
 static int netlink_getsockopt(struct socket *sock, int level, int optname,
-			      sockopt_t *opt)
+			      char __user *optval, int __user *optlen)
 {
 	struct sock *sk = sock->sk;
 	struct netlink_sock *nlk = nlk_sk(sk);
 	unsigned int flag;
 	int len, val;
-	u32 group;
 
 	if (level != SOL_NETLINK)
 		return -ENOPROTOOPT;
 
-	len = opt->optlen;
+	if (get_user(len, optlen))
+		return -EFAULT;
 	if (len < 0)
 		return -EINVAL;
 
@@ -1757,14 +1751,14 @@ static int netlink_getsockopt(struct socket *sock, int level, int optname,
 
 			idx = pos / sizeof(unsigned long);
 			shift = (pos % sizeof(unsigned long)) * 8;
-			group = (u32)(nlk->groups[idx] >> shift);
-			if (copy_to_iter(&group, sizeof(u32),
-					 &opt->iter_out) != sizeof(u32)) {
+			if (put_user((u32)(nlk->groups[idx] >> shift),
+				     (u32 __user *)(optval + pos))) {
 				err = -EFAULT;
 				break;
 			}
 		}
-		opt->optlen = ALIGN(BITS_TO_BYTES(nlk->ngroups), sizeof(u32));
+		if (put_user(ALIGN(BITS_TO_BYTES(nlk->ngroups), sizeof(u32)), optlen))
+			err = -EFAULT;
 		netlink_unlock_table();
 		return err;
 	}
@@ -1790,8 +1784,8 @@ static int netlink_getsockopt(struct socket *sock, int level, int optname,
 	len = sizeof(int);
 	val = test_bit(flag, &nlk->flags);
 
-	opt->optlen = len;
-	if (copy_to_iter(&val, len, &opt->iter_out) != len)
+	if (put_user(len, optlen) ||
+	    copy_to_user(optval, &val, len))
 		return -EFAULT;
 
 	return 0;
@@ -2114,8 +2108,8 @@ int __netlink_change_ngroups(struct sock *sk, unsigned int groups)
  * This changes the number of multicast groups that are available
  * on a certain netlink family. Note that it is not possible to
  * change the number of groups to below 32. Also note that it does
- * not implicitly clear listeners from groups that are removed when
- * the number of groups is reduced.
+ * not implicitly call netlink_clear_multicast_users() when the
+ * number of groups is reduced.
  *
  * @sk: The kernel netlink socket, as returned by netlink_kernel_create().
  * @groups: The new number of groups.
@@ -2277,7 +2271,7 @@ static int netlink_dump(struct sock *sk, bool lock_taken)
 	}
 
 	/* NLMSG_GOODSIZE is small to avoid high order allocations being
-	 * required, but it makes sense to _attempt_ a 32KiB allocation
+	 * required, but it makes sense to _attempt_ a 16K bytes allocation
 	 * to reduce number of system calls on dump operations, if user
 	 * ever provided a big enough buffer.
 	 */
@@ -2306,7 +2300,7 @@ static int netlink_dump(struct sock *sk, bool lock_taken)
 	}
 
 	/* Trim skb to allocated size. User is expected to provide buffer as
-	 * large as max(min_dump_alloc, 32KiB (max_recvmsg_len capped at
+	 * large as max(min_dump_alloc, 16KiB (mac_recvmsg_len capped at
 	 * netlink_recvmsg())). dump will pack as many smaller messages as
 	 * could fit within the allocated skb. skb is typically allocated
 	 * with larger space than required (could be as much as near 2x the
@@ -2477,7 +2471,7 @@ void netlink_ack(struct sk_buff *in_skb, struct nlmsghdr *nlh, int err,
 	unsigned int flags = 0;
 	size_t tlvlen;
 
-	/* Error messages get the original request appended, unless the user
+	/* Error messages get the original request appened, unless the user
 	 * requests to cap the error message, and get extra error data if
 	 * requested.
 	 */
@@ -2706,7 +2700,7 @@ static int netlink_native_seq_show(struct seq_file *seq, void *v)
 		struct sock *s = v;
 		struct netlink_sock *nlk = nlk_sk(s);
 
-		seq_printf(seq, "%pK %-3d %-10u %08x %-8d %-8d %-5d %-8d %-8u %-8llu\n",
+		seq_printf(seq, "%pK %-3d %-10u %08x %-8d %-8d %-5d %-8d %-8u %-8lu\n",
 			   s,
 			   s->sk_protocol,
 			   nlk->portid,
@@ -2715,7 +2709,7 @@ static int netlink_native_seq_show(struct seq_file *seq, void *v)
 			   sk_wmem_alloc_get(s),
 			   READ_ONCE(nlk->cb_running),
 			   refcount_read(&s->sk_refcnt),
-			   sk_drops_read(s),
+			   atomic_read(&s->sk_drops),
 			   sock_i_ino(s)
 			);
 
@@ -2819,7 +2813,7 @@ static const struct proto_ops netlink_ops = {
 	.listen =	sock_no_listen,
 	.shutdown =	sock_no_shutdown,
 	.setsockopt =	netlink_setsockopt,
-	.getsockopt_iter = netlink_getsockopt,
+	.getsockopt =	netlink_getsockopt,
 	.sendmsg =	netlink_sendmsg,
 	.recvmsg =	netlink_recvmsg,
 	.mmap =		sock_no_mmap,
@@ -2891,7 +2885,8 @@ static const struct rhashtable_params netlink_rhashtable_params = {
 };
 
 #if defined(CONFIG_BPF_SYSCALL) && defined(CONFIG_PROC_FS)
-BTF_ID_LIST_SINGLE(btf_netlink_sock_id, struct, netlink_sock)
+BTF_ID_LIST(btf_netlink_sock_id)
+BTF_ID(struct, netlink_sock)
 
 static const struct bpf_iter_seq_info netlink_seq_info = {
 	.seq_ops		= &netlink_seq_ops,
@@ -2933,14 +2928,18 @@ static int __init netlink_proto_init(void)
 
 	BUILD_BUG_ON(sizeof(struct netlink_skb_parms) > sizeof_field(struct sk_buff, cb));
 
-	nl_table = kzalloc_objs(*nl_table, MAX_LINKS);
+	nl_table = kcalloc(MAX_LINKS, sizeof(*nl_table), GFP_KERNEL);
 	if (!nl_table)
 		goto panic;
 
 	for (i = 0; i < MAX_LINKS; i++) {
 		if (rhashtable_init(&nl_table[i].hash,
-				    &netlink_rhashtable_params) < 0)
+				    &netlink_rhashtable_params) < 0) {
+			while (--i > 0)
+				rhashtable_destroy(&nl_table[i].hash);
+			kfree(nl_table);
 			goto panic;
+		}
 	}
 
 	netlink_add_usersock_entry();

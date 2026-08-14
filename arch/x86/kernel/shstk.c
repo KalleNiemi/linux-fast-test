@@ -18,6 +18,7 @@
 #include <linux/sizes.h>
 #include <linux/user.h>
 #include <linux/syscalls.h>
+#include <linux/highmem.h>
 #include <asm/msr.h>
 #include <asm/fpu/xstate.h>
 #include <asm/fpu/types.h>
@@ -100,9 +101,17 @@ static int create_rstor_token(unsigned long ssp, unsigned long *token_addr)
 static unsigned long alloc_shstk(unsigned long addr, unsigned long size,
 				 unsigned long token_offset, bool set_res_tok)
 {
-	unsigned long mapped_addr;
+	int flags = MAP_ANONYMOUS | MAP_PRIVATE | MAP_ABOVE4G;
+	struct mm_struct *mm = current->mm;
+	unsigned long mapped_addr, unused;
 
-	mapped_addr = vm_mmap_shadow_stack(addr, size, MAP_ABOVE4G);
+	if (addr)
+		flags |= MAP_FIXED_NOREPLACE;
+
+	mmap_write_lock(mm);
+	mapped_addr = do_mmap(NULL, addr, size, PROT_READ, flags,
+			      VM_SHADOW_STACK | VM_WRITE, 0, &unused, NULL);
+	mmap_write_unlock(mm);
 
 	if (!set_res_tok || IS_ERR_VALUE(mapped_addr))
 		goto out;
@@ -165,8 +174,8 @@ static int shstk_setup(void)
 		return PTR_ERR((void *)addr);
 
 	fpregs_lock_and_load();
-	wrmsrq(MSR_IA32_PL3_SSP, addr + size);
-	wrmsrq(MSR_IA32_U_CET, CET_SHSTK_EN);
+	wrmsrl(MSR_IA32_PL3_SSP, addr + size);
+	wrmsrl(MSR_IA32_U_CET, CET_SHSTK_EN);
 	fpregs_unlock();
 
 	shstk->base = addr;
@@ -183,7 +192,7 @@ void reset_thread_features(void)
 	current->thread.features_locked = 0;
 }
 
-unsigned long shstk_alloc_thread_stack(struct task_struct *tsk, u64 clone_flags,
+unsigned long shstk_alloc_thread_stack(struct task_struct *tsk, unsigned long clone_flags,
 				       unsigned long stack_size)
 {
 	struct thread_shstk *shstk = &tsk->thread.shstk;
@@ -231,51 +240,11 @@ static unsigned long get_user_shstk_addr(void)
 
 	fpregs_lock_and_load();
 
-	rdmsrq(MSR_IA32_PL3_SSP, ssp);
+	rdmsrl(MSR_IA32_PL3_SSP, ssp);
 
 	fpregs_unlock();
 
 	return ssp;
-}
-
-int shstk_pop(u64 *val)
-{
-	int ret = 0;
-	u64 ssp;
-
-	if (!features_enabled(ARCH_SHSTK_SHSTK))
-		return -ENOTSUPP;
-
-	fpregs_lock_and_load();
-
-	rdmsrq(MSR_IA32_PL3_SSP, ssp);
-	if (val && get_user(*val, (__user u64 *)ssp))
-		ret = -EFAULT;
-	else
-		wrmsrq(MSR_IA32_PL3_SSP, ssp + SS_FRAME_SIZE);
-	fpregs_unlock();
-
-	return ret;
-}
-
-int shstk_push(u64 val)
-{
-	u64 ssp;
-	int ret;
-
-	if (!features_enabled(ARCH_SHSTK_SHSTK))
-		return -ENOTSUPP;
-
-	fpregs_lock_and_load();
-
-	rdmsrq(MSR_IA32_PL3_SSP, ssp);
-	ssp -= SS_FRAME_SIZE;
-	ret = write_user_shstk_64((__user void *)ssp, val);
-	if (!ret)
-		wrmsrq(MSR_IA32_PL3_SSP, ssp);
-	fpregs_unlock();
-
-	return ret;
 }
 
 #define SHSTK_DATA_BIT BIT(63)
@@ -294,11 +263,29 @@ static int put_shstk_data(u64 __user *addr, u64 data)
 	return 0;
 }
 
+/* Copy from aligned address in userspace without risk of page fault. */
+static int shstk_copy_user_gup(unsigned long *ldata, unsigned long __user *addr)
+{
+	struct page *page;
+	void *kaddr;
+
+	mmap_assert_locked(current->mm);
+	if (get_user_pages((unsigned long)addr, 1, 0, &page) != 1)
+		return -EFAULT;
+
+	kaddr = kmap_local_page(page);
+	*ldata = *(unsigned long *)(kaddr + offset_in_page(addr));
+	kunmap_local(kaddr);
+	put_page(page);
+
+	return 0;
+}
+
 static int get_shstk_data(unsigned long *data, unsigned long __user *addr)
 {
 	unsigned long ldata;
 
-	if (unlikely(get_user(ldata, addr)))
+	if (shstk_copy_user_gup(&ldata, addr))
 		return -EFAULT;
 
 	if (!(ldata & SHSTK_DATA_BIT))
@@ -326,8 +313,9 @@ static int shstk_push_sigframe(unsigned long *ssp)
 
 static int shstk_pop_sigframe(unsigned long *ssp)
 {
+	struct vm_area_struct *vma;
 	unsigned long token_addr;
-	unsigned int seq;
+	int err = 1;
 
 	/*
 	 * It is possible for the SSP to be off the end of a shadow stack by 4
@@ -338,35 +326,20 @@ static int shstk_pop_sigframe(unsigned long *ssp)
 	if (!IS_ALIGNED(*ssp, 8))
 		return -EINVAL;
 
-	do {
-		struct vm_area_struct *vma;
-		bool valid_vma;
-		int err;
+	if (mmap_read_lock_killable(current->mm))
+		return -EINTR;
 
-		if (mmap_read_lock_killable(current->mm))
-			return -EINTR;
+	err = get_shstk_data(&token_addr, (unsigned long __user *)*ssp);
+	if (unlikely(err))
+		goto out_err;
 
-		vma = find_vma(current->mm, *ssp);
-		valid_vma = vma && (vma->vm_flags & VM_SHADOW_STACK);
+	vma = find_vma(current->mm, *ssp);
+	if (!vma || !(vma->vm_flags & VM_SHADOW_STACK)) {
+		err = -EFAULT;
+		goto out_err;
+	}
 
-		/*
-		 * VMAs can change between get_shstk_data() and find_vma().
-		 * Watch for changes and ensure that 'token_addr' comes from
-		 * 'vma' by recording a seqcount.
-		 *
-		 * Ignore the return value of mmap_lock_speculate_try_begin()
-		 * because the mmap lock excludes the possibility of writers.
-		 */
-		mmap_lock_speculate_try_begin(current->mm, &seq);
-		mmap_read_unlock(current->mm);
-
-		if (!valid_vma)
-			return -EINVAL;
-
-		err = get_shstk_data(&token_addr, (unsigned long __user *)*ssp);
-		if (err)
-			return err;
-	} while (mmap_lock_speculate_retry(current->mm, seq));
+	mmap_read_unlock(current->mm);
 
 	/* Restore SSP aligned? */
 	if (unlikely(!IS_ALIGNED(token_addr, 8)))
@@ -379,6 +352,9 @@ static int shstk_pop_sigframe(unsigned long *ssp)
 	*ssp = token_addr;
 
 	return 0;
+out_err:
+	mmap_read_unlock(current->mm);
+	return err;
 }
 
 int setup_signal_shadow_stack(struct ksignal *ksig)
@@ -409,7 +385,7 @@ int setup_signal_shadow_stack(struct ksignal *ksig)
 		return -EFAULT;
 
 	fpregs_lock_and_load();
-	wrmsrq(MSR_IA32_PL3_SSP, ssp);
+	wrmsrl(MSR_IA32_PL3_SSP, ssp);
 	fpregs_unlock();
 
 	return 0;
@@ -433,7 +409,7 @@ int restore_signal_shadow_stack(void)
 		return err;
 
 	fpregs_lock_and_load();
-	wrmsrq(MSR_IA32_PL3_SSP, ssp);
+	wrmsrl(MSR_IA32_PL3_SSP, ssp);
 	fpregs_unlock();
 
 	return 0;
@@ -497,7 +473,7 @@ static int wrss_control(bool enable)
 		return 0;
 
 	fpregs_lock_and_load();
-	rdmsrq(MSR_IA32_U_CET, msrval);
+	rdmsrl(MSR_IA32_U_CET, msrval);
 
 	if (enable) {
 		features_set(ARCH_SHSTK_WRSS);
@@ -510,7 +486,7 @@ static int wrss_control(bool enable)
 		msrval &= ~CET_WRSS_EN;
 	}
 
-	wrmsrq(MSR_IA32_U_CET, msrval);
+	wrmsrl(MSR_IA32_U_CET, msrval);
 
 unlock:
 	fpregs_unlock();
@@ -529,8 +505,8 @@ static int shstk_disable(void)
 
 	fpregs_lock_and_load();
 	/* Disable WRSS too when disabling shadow stack */
-	wrmsrq(MSR_IA32_U_CET, 0);
-	wrmsrq(MSR_IA32_PL3_SSP, 0);
+	wrmsrl(MSR_IA32_U_CET, 0);
+	wrmsrl(MSR_IA32_PL3_SSP, 0);
 	fpregs_unlock();
 
 	shstk_free(current);

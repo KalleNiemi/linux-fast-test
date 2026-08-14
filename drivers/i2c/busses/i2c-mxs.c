@@ -108,14 +108,6 @@ enum mxs_i2c_devtype {
  * @cmd_complete: completion object for transaction wait
  * @cmd_err: error code for last transaction
  * @adapter: i2c subsystem adapter node
- * @timing0: I2C TIMING0 register value
- * @timing1: I2C TIMING1 register value
- * @timing2: I2C TIMING2 register value
- * @dmach: DMA channel
- * @pio_data: PIO data for DMA
- * @addr_data: address data for DMA
- * @sg_io: scatterlist for I/O
- * @dma_read: flag indicating DMA read
  */
 struct mxs_i2c_dev {
 	struct device *dev;
@@ -695,7 +687,7 @@ static irqreturn_t mxs_i2c_isr(int this_irq, void *dev_id)
 }
 
 static const struct i2c_algorithm mxs_i2c_algo = {
-	.xfer = mxs_i2c_xfer,
+	.master_xfer = mxs_i2c_xfer,
 	.functionality = mxs_i2c_func,
 };
 
@@ -889,7 +881,7 @@ static struct platform_driver mxs_i2c_driver = {
 		   .of_match_table = mxs_i2c_dt_ids,
 		   },
 	.probe = mxs_i2c_probe,
-	.remove = mxs_i2c_remove,
+	.remove_new = mxs_i2c_remove,
 };
 
 static int __init mxs_i2c_init(void)

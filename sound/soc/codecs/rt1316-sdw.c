@@ -8,6 +8,7 @@
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/pm_runtime.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/regmap.h>
 #include <sound/core.h>
@@ -301,6 +302,7 @@ static int rt1316_io_init(struct device *dev, struct sdw_slave *slave)
 	/* Mark Slave initialization complete */
 	rt1316->hw_init = true;
 
+	pm_runtime_mark_last_busy(&slave->dev);
 	pm_runtime_put_autosuspend(&slave->dev);
 
 	dev_dbg(&slave->dev, "%s hw_init complete\n", __func__);
@@ -715,9 +717,11 @@ static int rt1316_sdw_probe(struct sdw_slave *slave,
 	return rt1316_sdw_init(&slave->dev, regmap, slave);
 }
 
-static void rt1316_sdw_remove(struct sdw_slave *slave)
+static int rt1316_sdw_remove(struct sdw_slave *slave)
 {
 	pm_runtime_disable(&slave->dev);
+
+	return 0;
 }
 
 static const struct sdw_device_id rt1316_id[] = {
@@ -726,7 +730,7 @@ static const struct sdw_device_id rt1316_id[] = {
 };
 MODULE_DEVICE_TABLE(sdw, rt1316_id);
 
-static int rt1316_dev_suspend(struct device *dev)
+static int __maybe_unused rt1316_dev_suspend(struct device *dev)
 {
 	struct rt1316_sdw_priv *rt1316 = dev_get_drvdata(dev);
 
@@ -740,21 +744,29 @@ static int rt1316_dev_suspend(struct device *dev)
 
 #define RT1316_PROBE_TIMEOUT 5000
 
-static int rt1316_dev_resume(struct device *dev)
+static int __maybe_unused rt1316_dev_resume(struct device *dev)
 {
 	struct sdw_slave *slave = dev_to_sdw_dev(dev);
 	struct rt1316_sdw_priv *rt1316 = dev_get_drvdata(dev);
-	int ret;
+	unsigned long time;
 
 	if (!rt1316->first_hw_init)
 		return 0;
 
-	ret = sdw_slave_wait_for_init(slave, RT1316_PROBE_TIMEOUT);
-	if (ret) {
+	if (!slave->unattach_request)
+		goto regmap_sync;
+
+	time = wait_for_completion_timeout(&slave->initialization_complete,
+				msecs_to_jiffies(RT1316_PROBE_TIMEOUT));
+	if (!time) {
+		dev_err(&slave->dev, "%s: Initialization not complete, timed out\n", __func__);
 		sdw_show_ping_status(slave->bus, true);
-		return ret;
+
+		return -ETIMEDOUT;
 	}
 
+regmap_sync:
+	slave->unattach_request = 0;
 	regcache_cache_only(rt1316->regmap, false);
 	regcache_sync(rt1316->regmap);
 
@@ -762,14 +774,14 @@ static int rt1316_dev_resume(struct device *dev)
 }
 
 static const struct dev_pm_ops rt1316_pm = {
-	SYSTEM_SLEEP_PM_OPS(rt1316_dev_suspend, rt1316_dev_resume)
-	RUNTIME_PM_OPS(rt1316_dev_suspend, rt1316_dev_resume, NULL)
+	SET_SYSTEM_SLEEP_PM_OPS(rt1316_dev_suspend, rt1316_dev_resume)
+	SET_RUNTIME_PM_OPS(rt1316_dev_suspend, rt1316_dev_resume, NULL)
 };
 
 static struct sdw_driver rt1316_sdw_driver = {
 	.driver = {
 		.name = "rt1316-sdca",
-		.pm = pm_ptr(&rt1316_pm),
+		.pm = &rt1316_pm,
 	},
 	.probe = rt1316_sdw_probe,
 	.remove = rt1316_sdw_remove,

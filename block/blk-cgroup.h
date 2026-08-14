@@ -140,8 +140,6 @@ struct blkg_policy_data {
 	struct blkcg_gq			*blkg;
 	int				plid;
 	bool				online;
-
-	struct rcu_head			rcu_head;
 };
 
 /*
@@ -220,21 +218,14 @@ struct blkg_conf_ctx {
 };
 
 void blkg_conf_init(struct blkg_conf_ctx *ctx, char *input);
-int blkg_conf_open_bdev(struct blkg_conf_ctx *ctx)
-	__cond_acquires(0, &ctx->bdev->bd_queue->rq_qos_mutex);
+int blkg_conf_open_bdev(struct blkg_conf_ctx *ctx);
 int blkg_conf_prep(struct blkcg *blkcg, const struct blkcg_policy *pol,
-		   struct blkg_conf_ctx *ctx)
-	__cond_acquires(0, &ctx->bdev->bd_disk->queue->queue_lock);
-void blkg_conf_unprep(struct blkg_conf_ctx *ctx)
-	__releases(ctx->bdev->bd_disk->queue->queue_lock);
-void blkg_conf_close_bdev(struct blkg_conf_ctx *ctx)
-	__releases(&ctx->bdev->bd_queue->rq_qos_mutex);
+		   struct blkg_conf_ctx *ctx);
+void blkg_conf_exit(struct blkg_conf_ctx *ctx);
 
 /**
  * bio_issue_as_root_blkg - see if this bio needs to be issued as root blkg
- * @bio: the target &bio
- *
- * Return: true if this bio needs to be submitted with the root blkg context.
+ * @return: true if this bio needs to be submitted with the root blkg context.
  *
  * In order to avoid priority inversions we sometimes need to issue a bio as if
  * it were attached to the root blkg, and then backcharge to the actual owning
@@ -254,7 +245,7 @@ static inline bool bio_issue_as_root_blkg(struct bio *bio)
  * @q: request_queue of interest
  *
  * Lookup blkg for the @blkcg - @q pair.
- *
+
  * Must be called in a RCU critical section.
  */
 static inline struct blkcg_gq *blkg_lookup(struct blkcg *blkcg,
@@ -277,16 +268,16 @@ static inline struct blkcg_gq *blkg_lookup(struct blkcg *blkcg,
 }
 
 /**
- * blkg_to_pd - get policy private data
+ * blkg_to_pdata - get policy private data
  * @blkg: blkg of interest
  * @pol: policy of interest
  *
  * Return pointer to private data associated with the @blkg-@pol pair.
  */
 static inline struct blkg_policy_data *blkg_to_pd(struct blkcg_gq *blkg,
-						  const struct blkcg_policy *pol)
+						  struct blkcg_policy *pol)
 {
-	return blkg ? READ_ONCE(blkg->pd[pol->plid]) : NULL;
+	return blkg ? blkg->pd[pol->plid] : NULL;
 }
 
 static inline struct blkcg_policy_data *blkcg_to_cpd(struct blkcg *blkcg,
@@ -296,7 +287,7 @@ static inline struct blkcg_policy_data *blkcg_to_cpd(struct blkcg *blkcg,
 }
 
 /**
- * pd_to_blkg - get blkg associated with policy private data
+ * pdata_to_blkg - get blkg associated with policy private data
  * @pd: policy private data of interest
  *
  * @pd is policy private data.  Determine the blkg it's associated with.
@@ -374,6 +365,11 @@ static inline void blkg_put(struct blkcg_gq *blkg)
 	css_for_each_descendant_post((pos_css), &(p_blkg)->blkcg->css)	\
 		if (((d_blkg) = blkg_lookup(css_to_blkcg(pos_css),	\
 					    (p_blkg)->q)))
+
+static inline void blkcg_bio_issue_init(struct bio *bio)
+{
+	bio_issue_init(&bio->bi_issue, bio_sectors(bio));
+}
 
 static inline void blkcg_use_delay(struct blkcg_gq *blkg)
 {
@@ -493,10 +489,11 @@ static inline void blkcg_deactivate_policy(struct gendisk *disk,
 					   const struct blkcg_policy *pol) { }
 
 static inline struct blkg_policy_data *blkg_to_pd(struct blkcg_gq *blkg,
-						  const struct blkcg_policy *pol) { return NULL; }
+						  struct blkcg_policy *pol) { return NULL; }
 static inline struct blkcg_gq *pd_to_blkg(struct blkg_policy_data *pd) { return NULL; }
 static inline void blkg_get(struct blkcg_gq *blkg) { }
 static inline void blkg_put(struct blkcg_gq *blkg) { }
+static inline void blkcg_bio_issue_init(struct bio *bio) { }
 static inline void blk_cgroup_bio_start(struct bio *bio) { }
 static inline bool blk_cgroup_mergeable(struct request *rq, struct bio *bio) { return true; }
 

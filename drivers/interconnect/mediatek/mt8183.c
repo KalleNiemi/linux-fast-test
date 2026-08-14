@@ -8,6 +8,7 @@
 #include <linux/device.h>
 #include <linux/interconnect.h>
 #include <linux/interconnect-provider.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <dt-bindings/interconnect/mediatek,mt8183.h>
@@ -132,7 +133,7 @@ static struct platform_driver mtk_emi_icc_mt8183_driver = {
 		.sync_state = icc_sync_state,
 	},
 	.probe = mtk_emi_icc_probe,
-	.remove = mtk_emi_icc_remove,
+	.remove_new = mtk_emi_icc_remove,
 
 };
 module_platform_driver(mtk_emi_icc_mt8183_driver);

@@ -1,8 +1,11 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
    HIDP implementation for Linux Bluetooth stack (BlueZ).
    Copyright (C) 2003-2004 Marcel Holtmann <marcel@holtmann.org>
    Copyright (C) 2013 David Herrmann <dh.herrmann@gmail.com>
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License version 2 as
+   published by the Free Software Foundation;
 
    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
    OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -415,7 +418,7 @@ static int hidp_raw_request(struct hid_device *hid, unsigned char reportnum,
 
 static void hidp_idle_timeout(struct timer_list *t)
 {
-	struct hidp_session *session = timer_container_of(session, t, timer);
+	struct hidp_session *session = from_timer(session, t, timer);
 
 	/* The HIDP user-space API only contains calls to add and remove
 	 * devices. There is no way to forward events of any kind. Therefore,
@@ -443,7 +446,7 @@ static void hidp_set_timer(struct hidp_session *session)
 static void hidp_del_timer(struct hidp_session *session)
 {
 	if (session->idle_to > 0)
-		timer_delete_sync(&session->timer);
+		del_timer_sync(&session->timer);
 }
 
 static void hidp_process_report(struct hidp_session *session, int type,
@@ -543,10 +546,9 @@ static int hidp_process_data(struct hidp_session *session, struct sk_buff *skb,
 	}
 
 	if (test_bit(HIDP_WAITING_FOR_RETURN, &session->flags) &&
-	    param == session->waiting_report_type) {
+				param == session->waiting_report_type) {
 		if (session->waiting_report_number < 0 ||
-		    (skb->len &&
-		     session->waiting_report_number == skb->data[0])) {
+		    session->waiting_report_number == skb->data[0]) {
 			/* hidp_get_raw_report() is waiting on this report. */
 			session->report_return = skb;
 			done_with_skb = 0;
@@ -561,18 +563,16 @@ static int hidp_process_data(struct hidp_session *session, struct sk_buff *skb,
 static void hidp_recv_ctrl_frame(struct hidp_session *session,
 					struct sk_buff *skb)
 {
-	unsigned char type, param;
-	u8 *hdr;
+	unsigned char hdr, type, param;
 	int free_skb = 1;
 
 	BT_DBG("session %p skb %p len %u", session, skb, skb->len);
 
-	hdr = skb_pull_data(skb, 1);
-	if (!hdr)
-		goto free;
+	hdr = skb->data[0];
+	skb_pull(skb, 1);
 
-	type = *hdr & HIDP_HEADER_TRANS_MASK;
-	param = *hdr & HIDP_HEADER_PARAM_MASK;
+	type = hdr & HIDP_HEADER_TRANS_MASK;
+	param = hdr & HIDP_HEADER_PARAM_MASK;
 
 	switch (type) {
 	case HIDP_TRANS_HANDSHAKE:
@@ -593,7 +593,6 @@ static void hidp_recv_ctrl_frame(struct hidp_session *session,
 		break;
 	}
 
-free:
 	if (free_skb)
 		kfree_skb(skb);
 }
@@ -601,15 +600,14 @@ free:
 static void hidp_recv_intr_frame(struct hidp_session *session,
 				struct sk_buff *skb)
 {
-	u8 *hdr;
+	unsigned char hdr;
 
 	BT_DBG("session %p skb %p len %u", session, skb, skb->len);
 
-	hdr = skb_pull_data(skb, 1);
-	if (!hdr)
-		goto free;
+	hdr = skb->data[0];
+	skb_pull(skb, 1);
 
-	if (*hdr == (HIDP_TRANS_DATA | HIDP_DATA_RTYPE_INPUT)) {
+	if (hdr == (HIDP_TRANS_DATA | HIDP_DATA_RTYPE_INPUT)) {
 		hidp_set_timer(session);
 
 		if (session->input)
@@ -621,10 +619,9 @@ static void hidp_recv_intr_frame(struct hidp_session *session,
 			BT_DBG("report len %d", skb->len);
 		}
 	} else {
-		BT_DBG("Unsupported protocol header 0x%02x", *hdr);
+		BT_DBG("Unsupported protocol header 0x%02x", hdr);
 	}
 
-free:
 	kfree_skb(skb);
 }
 
@@ -936,7 +933,7 @@ static int hidp_session_new(struct hidp_session **out, const bdaddr_t *bdaddr,
 	ctrl = bt_sk(ctrl_sock->sk);
 	intr = bt_sk(intr_sock->sk);
 
-	session = kzalloc_obj(*session);
+	session = kzalloc(sizeof(*session), GFP_KERNEL);
 	if (!session)
 		return -ENOMEM;
 
@@ -1049,28 +1046,6 @@ static struct hidp_session *hidp_session_find(const bdaddr_t *bdaddr)
 	up_read(&hidp_session_sem);
 
 	return session;
-}
-
-/*
- * Consume session->conn: clear the member under hidp_session_sem, then
- * l2cap_unregister_user() and l2cap_conn_put() the snapshot outside the
- * sem.  At most one caller wins; later callers see NULL and skip.  The
- * reference is the one hidp_session_new() took via l2cap_conn_get().
- */
-static void hidp_session_unregister_conn(struct hidp_session *session)
-{
-	struct l2cap_conn *conn;
-
-	down_write(&hidp_session_sem);
-	conn = session->conn;
-	if (conn)
-		session->conn = NULL;
-	up_write(&hidp_session_sem);
-
-	if (conn) {
-		l2cap_unregister_user(conn, &session->user);
-		l2cap_conn_put(conn);
-	}
 }
 
 /*
@@ -1349,7 +1324,8 @@ static int hidp_session_thread(void *arg)
 	 * Instead, this call has the same semantics as if user-space tried to
 	 * delete the session.
 	 */
-	hidp_session_unregister_conn(session);
+	if (session->conn)
+		l2cap_unregister_user(session->conn, &session->user);
 
 	hidp_session_put(session);
 
@@ -1455,7 +1431,7 @@ int hidp_connection_del(struct hidp_conndel_req *req)
 				         HIDP_CTRL_VIRTUAL_CABLE_UNPLUG,
 				       NULL, 0);
 	else
-		hidp_session_unregister_conn(session);
+		l2cap_unregister_user(session->conn, &session->user);
 
 	hidp_session_put(session);
 

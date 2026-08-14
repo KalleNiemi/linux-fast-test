@@ -181,7 +181,7 @@ static int bcm4908_dma_alloc_buf_descs(struct bcm4908_enet *enet,
 		goto err_free_buf_descs;
 	}
 
-	ring->slots = kzalloc_objs(*ring->slots, ring->length);
+	ring->slots = kcalloc(ring->length, sizeof(*ring->slots), GFP_KERNEL);
 	if (!ring->slots)
 		goto err_free_buf_descs;
 
@@ -789,7 +789,7 @@ static struct platform_driver bcm4908_enet_driver = {
 		.of_match_table = bcm4908_enet_of_match,
 	},
 	.probe	= bcm4908_enet_probe,
-	.remove = bcm4908_enet_remove,
+	.remove_new = bcm4908_enet_remove,
 };
 module_platform_driver(bcm4908_enet_driver);
 

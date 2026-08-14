@@ -163,10 +163,10 @@ struct ata_port_operations ahci_ops = {
 
 	.freeze			= ahci_freeze,
 	.thaw			= ahci_thaw,
-	.reset.softreset	= ahci_softreset,
-	.reset.hardreset	= ahci_hardreset,
-	.reset.postreset	= ahci_postreset,
-	.pmp_reset.softreset	= ahci_softreset,
+	.softreset		= ahci_softreset,
+	.hardreset		= ahci_hardreset,
+	.postreset		= ahci_postreset,
+	.pmp_softreset		= ahci_softreset,
 	.error_handler		= ahci_error_handler,
 	.post_internal_cmd	= ahci_post_internal_cmd,
 	.dev_config		= ahci_dev_config,
@@ -193,7 +193,7 @@ EXPORT_SYMBOL_GPL(ahci_ops);
 
 struct ata_port_operations ahci_pmp_retry_srst_ops = {
 	.inherits		= &ahci_ops,
-	.reset.softreset	= ahci_pmp_retry_softreset,
+	.softreset		= ahci_pmp_retry_softreset,
 };
 EXPORT_SYMBOL_GPL(ahci_pmp_retry_srst_ops);
 
@@ -542,7 +542,6 @@ void ahci_save_initial_config(struct device *dev, struct ahci_host_priv *hpriv)
 		hpriv->saved_port_map = port_map;
 	}
 
-	/* mask_port_map not set means that all ports are available */
 	if (hpriv->mask_port_map) {
 		dev_warn(dev, "masking port_map 0x%lx -> 0x%lx\n",
 			port_map,
@@ -552,7 +551,11 @@ void ahci_save_initial_config(struct device *dev, struct ahci_host_priv *hpriv)
 
 	/* cross check port_map and cap.n_ports */
 	if (port_map) {
-		int map_ports = hweight_long(port_map);
+		int map_ports = 0;
+
+		for (i = 0; i < AHCI_MAX_PORTS; i++)
+			if (port_map & (1 << i))
+				map_ports++;
 
 		/* If PI has more ports than n_ports, whine, clear
 		 * port_map and let it be generated from n_ports.
@@ -1031,7 +1034,7 @@ static void ahci_sw_activity(struct ata_link *link)
 
 static void ahci_sw_activity_blink(struct timer_list *t)
 {
-	struct ahci_em_priv *emp = timer_container_of(emp, t, timer);
+	struct ahci_em_priv *emp = from_timer(emp, t, timer);
 	struct ata_link *link = emp->link;
 	struct ata_port *ap = link->ap;
 
@@ -1523,7 +1526,6 @@ int ahci_do_softreset(struct ata_link *link, unsigned int *class,
 	ata_link_err(link, "softreset failed (%s)\n", reason);
 	return rc;
 }
-EXPORT_SYMBOL_GPL(ahci_do_softreset);
 
 int ahci_check_ready(struct ata_link *link)
 {
@@ -1541,6 +1543,7 @@ static int ahci_softreset(struct ata_link *link, unsigned int *class,
 
 	return ahci_do_softreset(link, class, pmp, deadline, ahci_check_ready);
 }
+EXPORT_SYMBOL_GPL(ahci_do_softreset);
 
 static int ahci_bad_pmp_check_ready(struct ata_link *link)
 {
@@ -2208,7 +2211,6 @@ static void ahci_thaw(struct ata_port *ap)
 }
 
 void ahci_error_handler(struct ata_port *ap)
-	__must_hold(&ap->host->eh_mutex)
 {
 	struct ahci_host_priv *hpriv = ap->host->private_data;
 
@@ -2633,7 +2635,7 @@ void ahci_print_info(struct ata_host *host, const char *scc_s)
 		,
 
 		hweight32(impl),
-		ahci_nr_ports(cap),
+		(cap & 0x1f) + 1,
 		impl);
 
 	dev_info(host->dev,

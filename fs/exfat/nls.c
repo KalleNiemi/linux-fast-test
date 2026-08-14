@@ -616,6 +616,9 @@ static int exfat_nls_to_ucs2(struct super_block *sb,
 		unilen++;
 	}
 
+	if (p_cstring[i] != '\0')
+		lossy |= NLS_NAME_OVERLEN;
+
 	*uniname = '\0';
 	p_uniname->name_len = unilen;
 	p_uniname->name_hash = exfat_calc_chksum16(upname, unilen << 1, 0,
@@ -769,18 +772,13 @@ int exfat_create_upcase_table(struct super_block *sb)
 
 			tbl_clu  = le32_to_cpu(ep->dentry.upcase.start_clu);
 			tbl_size = le64_to_cpu(ep->dentry.upcase.size);
-			if (tbl_size) {
-				sector = exfat_cluster_to_sector(sbi, tbl_clu);
-				num_sectors = ((tbl_size - 1) >> blksize_bits) + 1;
-				ret = exfat_load_upcase_table(sb, sector, num_sectors,
-					le32_to_cpu(ep->dentry.upcase.checksum));
-			} else {
-				exfat_fs_error(sb,
-					       "bad upcase table size (0 bytes). Please run fsck");
-				ret = -EINVAL;
-			}
-			brelse(bh);
 
+			sector = exfat_cluster_to_sector(sbi, tbl_clu);
+			num_sectors = ((tbl_size - 1) >> blksize_bits) + 1;
+			ret = exfat_load_upcase_table(sb, sector, num_sectors,
+				le32_to_cpu(ep->dentry.upcase.checksum));
+
+			brelse(bh);
 			if (ret && ret != -EIO) {
 				/* free memory from exfat_load_upcase_table call */
 				exfat_free_upcase_table(sbi);
@@ -791,11 +789,9 @@ int exfat_create_upcase_table(struct super_block *sb)
 			return ret;
 		}
 
-		if (exfat_get_next_cluster(sb, &clu.dir))
+		if (exfat_get_next_cluster(sb, &(clu.dir)))
 			return -EIO;
 	}
-
-	exfat_fs_error(sb, "no upcase table entry. Please run fsck");
 
 load_default:
 	/* load default upcase table */
@@ -805,5 +801,4 @@ load_default:
 void exfat_free_upcase_table(struct exfat_sb_info *sbi)
 {
 	kvfree(sbi->vol_utbl);
-	sbi->vol_utbl = NULL;
 }

@@ -14,6 +14,7 @@
 #include <linux/pci.h>
 #include <linux/percpu-defs.h>
 #include <linux/init.h>
+#include <linux/mod_devicetable.h>
 
 #include <asm/msr.h>
 #include <asm/cpufeature.h>
@@ -50,8 +51,10 @@ static unsigned int amd_powersave_bias_target(struct cpufreq_policy *policy,
 	if (!policy->freq_table)
 		return freq_next;
 
-	rdmsrq_on_cpu(policy->cpu, MSR_AMD64_FREQ_SENSITIVITY_ACTUAL, &actual.q);
-	rdmsrq_on_cpu(policy->cpu, MSR_AMD64_FREQ_SENSITIVITY_REFERENCE, &reference.q);
+	rdmsr_on_cpu(policy->cpu, MSR_AMD64_FREQ_SENSITIVITY_ACTUAL,
+		&actual.l, &actual.h);
+	rdmsr_on_cpu(policy->cpu, MSR_AMD64_FREQ_SENSITIVITY_REFERENCE,
+		&reference.l, &reference.h);
 	actual.h &= 0x00ffffff;
 	reference.h &= 0x00ffffff;
 
@@ -126,7 +129,7 @@ static int __init amd_freq_sensitivity_init(void)
 		pci_dev_put(pcidev);
 	}
 
-	if (rdmsrq_safe(MSR_AMD64_FREQ_SENSITIVITY_ACTUAL, &val))
+	if (rdmsrl_safe(MSR_AMD64_FREQ_SENSITIVITY_ACTUAL, &val))
 		return -ENODEV;
 
 	if (!(val >> CLASS_CODE_SHIFT))

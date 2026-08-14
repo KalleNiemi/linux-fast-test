@@ -222,17 +222,18 @@ static int scd30_read_raw(struct iio_dev *indio_dev, struct iio_chan_spec const 
 			return IIO_VAL_INT;
 		}
 
-		if (!iio_device_claim_direct(indio_dev))
-			return -EBUSY;
+		ret = iio_device_claim_direct_mode(indio_dev);
+		if (ret)
+			return ret;
 
 		ret = scd30_read(state);
 		if (ret) {
-			iio_device_release_direct(indio_dev);
+			iio_device_release_direct_mode(indio_dev);
 			return ret;
 		}
 
 		*val = state->meas[chan->address];
-		iio_device_release_direct(indio_dev);
+		iio_device_release_direct_mode(indio_dev);
 		return IIO_VAL_INT;
 	case IIO_CHAN_INFO_SCALE:
 		*val = 0;
@@ -379,13 +380,11 @@ static ssize_t calibration_auto_enable_show(struct device *dev, struct device_at
 	int ret;
 	u16 val;
 
-	guard(mutex)(&state->lock);
-
+	mutex_lock(&state->lock);
 	ret = scd30_command_read(state, CMD_ASC, &val);
-	if (ret)
-		return ret;
+	mutex_unlock(&state->lock);
 
-	return sysfs_emit(buf, "%d\n", val);
+	return ret ?: sysfs_emit(buf, "%d\n", val);
 }
 
 static ssize_t calibration_auto_enable_store(struct device *dev, struct device_attribute *attr,
@@ -400,13 +399,11 @@ static ssize_t calibration_auto_enable_store(struct device *dev, struct device_a
 	if (ret)
 		return ret;
 
-	guard(mutex)(&state->lock);
-
+	mutex_lock(&state->lock);
 	ret = scd30_command_write(state, CMD_ASC, val);
-	if (ret)
-		return ret;
+	mutex_unlock(&state->lock);
 
-	return len;
+	return ret ?: len;
 }
 
 static ssize_t calibration_forced_value_show(struct device *dev, struct device_attribute *attr,
@@ -417,13 +414,11 @@ static ssize_t calibration_forced_value_show(struct device *dev, struct device_a
 	int ret;
 	u16 val;
 
-	guard(mutex)(&state->lock);
-
+	mutex_lock(&state->lock);
 	ret = scd30_command_read(state, CMD_FRC, &val);
-	if (ret)
-		return ret;
+	mutex_unlock(&state->lock);
 
-	return sysfs_emit(buf, "%d\n", val);
+	return ret ?: sysfs_emit(buf, "%d\n", val);
 }
 
 static ssize_t calibration_forced_value_store(struct device *dev, struct device_attribute *attr,
@@ -441,13 +436,11 @@ static ssize_t calibration_forced_value_store(struct device *dev, struct device_
 	if (val < SCD30_FRC_MIN_PPM || val > SCD30_FRC_MAX_PPM)
 		return -EINVAL;
 
-	guard(mutex)(&state->lock);
-
+	mutex_lock(&state->lock);
 	ret = scd30_command_write(state, CMD_FRC, val);
-	if (ret)
-		return ret;
+	mutex_unlock(&state->lock);
 
-	return len;
+	return ret ?: len;
 }
 
 static IIO_DEVICE_ATTR_RO(sampling_frequency_available, 0);
@@ -598,39 +591,29 @@ out:
 	return IRQ_HANDLED;
 }
 
-static int scd30_trigger_handler_helper(struct iio_dev *indio_dev, int *scan_data,
-					size_t scan_data_size)
-{
-	struct scd30_state *state = iio_priv(indio_dev);
-	int ret;
-
-	guard(mutex)(&state->lock);
-
-	if (!iio_trigger_using_own(indio_dev))
-		ret = scd30_read_poll(state);
-	else
-		ret = scd30_read_meas(state);
-	memcpy(scan_data, state->meas, scan_data_size);
-
-	return ret;
-}
-
 static irqreturn_t scd30_trigger_handler(int irq, void *p)
 {
 	struct iio_poll_func *pf = p;
 	struct iio_dev *indio_dev = pf->indio_dev;
+	struct scd30_state *state = iio_priv(indio_dev);
 	struct {
 		int data[SCD30_MEAS_COUNT];
-		aligned_s64 ts;
-	} scan = { };
+		s64 ts __aligned(8);
+	} scan;
 	int ret;
 
-	ret = scd30_trigger_handler_helper(indio_dev, scan.data, sizeof(scan.data));
+	mutex_lock(&state->lock);
+	if (!iio_trigger_using_own(indio_dev))
+		ret = scd30_read_poll(state);
+	else
+		ret = scd30_read_meas(state);
+	memset(&scan, 0, sizeof(scan));
+	memcpy(scan.data, state->meas, sizeof(state->meas));
+	mutex_unlock(&state->lock);
 	if (ret)
 		goto out;
 
-	iio_push_to_buffers_with_ts(indio_dev, &scan, sizeof(scan),
-				    iio_get_time_ns(indio_dev));
+	iio_push_to_buffers_with_timestamp(indio_dev, &scan, iio_get_time_ns(indio_dev));
 out:
 	iio_trigger_notify_done(indio_dev->trig);
 	return IRQ_HANDLED;
@@ -664,7 +647,7 @@ static int scd30_setup_trigger(struct iio_dev *indio_dev)
 	trig = devm_iio_trigger_alloc(dev, "%s-dev%d", indio_dev->name,
 				      iio_device_id(indio_dev));
 	if (!trig)
-		return -ENOMEM;
+		return dev_err_probe(dev, -ENOMEM, "failed to allocate trigger\n");
 
 	trig->ops = &scd30_trigger_ops;
 	iio_trigger_set_drvdata(trig, indio_dev);
@@ -768,7 +751,7 @@ int scd30_probe(struct device *dev, int irq, const char *name, void *priv,
 
 	return devm_iio_device_register(dev, indio_dev);
 }
-EXPORT_SYMBOL_NS(scd30_probe, "IIO_SCD30");
+EXPORT_SYMBOL_NS(scd30_probe, IIO_SCD30);
 
 MODULE_AUTHOR("Tomasz Duszynski <tomasz.duszynski@octakon.com>");
 MODULE_DESCRIPTION("Sensirion SCD30 carbon dioxide sensor core driver");

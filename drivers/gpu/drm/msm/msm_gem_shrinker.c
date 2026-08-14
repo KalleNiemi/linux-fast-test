@@ -43,66 +43,7 @@ msm_gem_shrinker_count(struct shrinker *shrinker, struct shrink_control *sc)
 }
 
 static bool
-with_vm_locks(void (*fn)(struct drm_gem_object *obj),
-	      struct drm_gem_object *obj)
-{
-	/*
-	 * Track last locked entry for for unwinding locks in error and
-	 * success paths
-	 */
-	struct drm_gpuvm_bo *vm_bo, *last_locked = NULL;
-	bool locked = true;
-
-	drm_gem_for_each_gpuvm_bo (vm_bo, obj) {
-		struct dma_resv *resv = drm_gpuvm_resv(vm_bo->vm);
-
-		if (resv == obj->resv)
-			continue;
-
-		/*
-		 * dma_resv_lock can't be used due to acquiring 'ticket' before the
-		 * fs_reclaim lock, which is held in shrinker context
-		 */
-		if (!dma_resv_trylock(resv)) {
-			locked = false;
-			goto out_unlock;
-		}
-
-		/*
-		 * Hold a ref to prevent the vm_bo from being freed
-		 * and removed from the obj's gpuva list, as that would
-		 * would result in missing the unlock below
-		 */
-		drm_gpuvm_bo_get(vm_bo);
-
-		last_locked = vm_bo;
-	}
-
-	fn(obj);
-
-out_unlock:
-	if (last_locked) {
-		drm_gem_for_each_gpuvm_bo (vm_bo, obj) {
-			struct dma_resv *resv = drm_gpuvm_resv(vm_bo->vm);
-
-			if (resv == obj->resv)
-				continue;
-
-			dma_resv_unlock(resv);
-
-			/* Drop the ref taken while locking: */
-			drm_gpuvm_bo_put(vm_bo);
-
-			if (last_locked == vm_bo)
-				break;
-		}
-	}
-
-	return locked;
-}
-
-static bool
-purge(struct drm_gem_object *obj, struct ww_acquire_ctx *unused)
+purge(struct drm_gem_object *obj)
 {
 	if (!is_purgeable(to_msm_bo(obj)))
 		return false;
@@ -110,11 +51,13 @@ purge(struct drm_gem_object *obj, struct ww_acquire_ctx *unused)
 	if (msm_gem_active(obj))
 		return false;
 
-	return with_vm_locks(msm_gem_purge, obj);
+	msm_gem_purge(obj);
+
+	return true;
 }
 
 static bool
-evict(struct drm_gem_object *obj, struct ww_acquire_ctx *unused)
+evict(struct drm_gem_object *obj)
 {
 	if (is_unevictable(to_msm_bo(obj)))
 		return false;
@@ -122,32 +65,34 @@ evict(struct drm_gem_object *obj, struct ww_acquire_ctx *unused)
 	if (msm_gem_active(obj))
 		return false;
 
-	return with_vm_locks(msm_gem_evict, obj);
+	msm_gem_evict(obj);
+
+	return true;
 }
 
 static bool
 wait_for_idle(struct drm_gem_object *obj)
 {
-	enum dma_resv_usage usage = DMA_RESV_USAGE_BOOKKEEP;
+	enum dma_resv_usage usage = dma_resv_usage_rw(true);
 	return dma_resv_wait_timeout(obj->resv, usage, false, 10) > 0;
 }
 
 static bool
-active_purge(struct drm_gem_object *obj, struct ww_acquire_ctx *ticket)
+active_purge(struct drm_gem_object *obj)
 {
 	if (!wait_for_idle(obj))
 		return false;
 
-	return purge(obj, ticket);
+	return purge(obj);
 }
 
 static bool
-active_evict(struct drm_gem_object *obj, struct ww_acquire_ctx *ticket)
+active_evict(struct drm_gem_object *obj)
 {
 	if (!wait_for_idle(obj))
 		return false;
 
-	return evict(obj, ticket);
+	return evict(obj);
 }
 
 static unsigned long
@@ -156,7 +101,7 @@ msm_gem_shrinker_scan(struct shrinker *shrinker, struct shrink_control *sc)
 	struct msm_drm_private *priv = shrinker->private_data;
 	struct {
 		struct drm_gem_lru *lru;
-		bool (*shrink)(struct drm_gem_object *obj, struct ww_acquire_ctx *ticket);
+		bool (*shrink)(struct drm_gem_object *obj);
 		bool cond;
 		unsigned long freed;
 		unsigned long remaining;
@@ -174,14 +119,10 @@ msm_gem_shrinker_scan(struct shrinker *shrinker, struct shrink_control *sc)
 	for (unsigned i = 0; (nr > 0) && (i < ARRAY_SIZE(stages)); i++) {
 		if (!stages[i].cond)
 			continue;
-		/*
-		 * 'ticket' not needed on trylock paths
-		 */
 		stages[i].freed =
-			drm_gem_lru_scan(priv->dev, stages[i].lru, nr,
-					 &stages[i].remaining,
-					 stages[i].shrink,
-					 NULL);
+			drm_gem_lru_scan(stages[i].lru, nr,
+					&stages[i].remaining,
+					 stages[i].shrink);
 		nr -= stages[i].freed;
 		freed += stages[i].freed;
 		remaining += stages[i].remaining;
@@ -222,7 +163,7 @@ msm_gem_shrinker_shrink(struct drm_device *dev, unsigned long nr_to_scan)
 static const int vmap_shrink_limit = 15;
 
 static bool
-vmap_shrink(struct drm_gem_object *obj, struct ww_acquire_ctx *ticket)
+vmap_shrink(struct drm_gem_object *obj)
 {
 	if (!is_vunmapable(to_msm_bo(obj)))
 		return false;
@@ -247,11 +188,10 @@ msm_gem_shrinker_vmap(struct notifier_block *nb, unsigned long event, void *ptr)
 	unsigned long remaining = 0;
 
 	for (idx = 0; lrus[idx] && unmapped < vmap_shrink_limit; idx++) {
-		unmapped += drm_gem_lru_scan(priv->dev, lrus[idx],
+		unmapped += drm_gem_lru_scan(lrus[idx],
 					     vmap_shrink_limit - unmapped,
 					     &remaining,
-					     vmap_shrink,
-					     NULL);
+					     vmap_shrink);
 	}
 
 	*(unsigned long *)ptr += unmapped;

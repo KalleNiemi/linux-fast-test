@@ -9,6 +9,7 @@
 
 #include <linux/gpio/driver.h>
 #include <linux/mfd/altera-a10sr.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/property.h>
 
@@ -34,15 +35,15 @@ static int altr_a10sr_gpio_get(struct gpio_chip *chip, unsigned int offset)
 	return !!(val & BIT(offset - ALTR_A10SR_LED_VALID_SHIFT));
 }
 
-static int altr_a10sr_gpio_set(struct gpio_chip *chip, unsigned int offset,
-			       int value)
+static void altr_a10sr_gpio_set(struct gpio_chip *chip, unsigned int offset,
+				int value)
 {
 	struct altr_a10sr_gpio *gpio = gpiochip_get_data(chip);
 
-	return regmap_update_bits(gpio->regmap, ALTR_A10SR_LED_REG,
-				  BIT(ALTR_A10SR_LED_VALID_SHIFT + offset),
-				  value ?
-				  BIT(ALTR_A10SR_LED_VALID_SHIFT + offset) : 0);
+	regmap_update_bits(gpio->regmap, ALTR_A10SR_LED_REG,
+			   BIT(ALTR_A10SR_LED_VALID_SHIFT + offset),
+			   value ? BIT(ALTR_A10SR_LED_VALID_SHIFT + offset)
+			   : 0);
 }
 
 static int altr_a10sr_gpio_direction_input(struct gpio_chip *gc,

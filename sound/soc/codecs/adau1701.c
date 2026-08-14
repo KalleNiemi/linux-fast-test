@@ -325,7 +325,9 @@ static int adau1701_reset(struct snd_soc_component *component, unsigned int clkd
 			__assign_bit(1, values, 1);
 			break;
 		}
-		gpiod_multi_set_value_cansleep(adau1701->gpio_pll_mode, values);
+		gpiod_set_array_value_cansleep(adau1701->gpio_pll_mode->ndescs,
+				adau1701->gpio_pll_mode->desc, adau1701->gpio_pll_mode->info,
+				values);
 	}
 
 	adau1701->pll_clkdiv = clkdiv;
@@ -860,10 +862,10 @@ exit_regulators_disable:
 }
 
 static const struct i2c_device_id adau1701_i2c_id[] = {
-	{ .name = "adau1401" },
-	{ .name = "adau1401a" },
-	{ .name = "adau1701" },
-	{ .name = "adau1702" },
+	{ "adau1401" },
+	{ "adau1401a" },
+	{ "adau1701" },
+	{ "adau1702" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, adau1701_i2c_id);

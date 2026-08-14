@@ -30,7 +30,12 @@ static unsigned int dcc_timeout __read_mostly = 300;
 static char *irc_buffer;
 static DEFINE_SPINLOCK(irc_buffer_lock);
 
-nf_nat_irc_hook_fn __rcu *nf_nat_irc_hook __read_mostly;
+unsigned int (*nf_nat_irc_hook)(struct sk_buff *skb,
+				enum ip_conntrack_info ctinfo,
+				unsigned int protoff,
+				unsigned int matchoff,
+				unsigned int matchlen,
+				struct nf_conntrack_expect *exp) __read_mostly;
 EXPORT_SYMBOL_GPL(nf_nat_irc_hook);
 
 #define HELPER_NAME "irc"
@@ -116,7 +121,7 @@ static int help(struct sk_buff *skb, unsigned int protoff,
 	__be16 port;
 	int i, ret = NF_ACCEPT;
 	char *addr_beg_p, *addr_end_p;
-	nf_nat_irc_hook_fn *nf_nat_irc;
+	typeof(nf_nat_irc_hook) nf_nat_irc;
 	unsigned int datalen;
 
 	/* If packet is coming from IRC server */
@@ -255,14 +260,11 @@ static int help(struct sk_buff *skb, unsigned int protoff,
 }
 
 static struct nf_conntrack_helper irc[MAX_PORTS] __read_mostly;
-static struct nf_conntrack_helper *irc_ptr[MAX_PORTS] __read_mostly;
 static struct nf_conntrack_expect_policy irc_exp_policy;
 
 static int __init nf_conntrack_irc_init(void)
 {
 	int i, ret;
-
-	nf_conntrack_helper_deprecated(HELPER_NAME);
 
 	if (max_dcc_channels < 1) {
 		pr_err("max_dcc_channels must not be zero\n");
@@ -292,7 +294,7 @@ static int __init nf_conntrack_irc_init(void)
 				  0, help, NULL, THIS_MODULE);
 	}
 
-	ret = nf_conntrack_helpers_register(&irc[0], ports_c, irc_ptr);
+	ret = nf_conntrack_helpers_register(&irc[0], ports_c);
 	if (ret) {
 		pr_err("failed to register helpers\n");
 		kfree(irc_buffer);
@@ -304,7 +306,7 @@ static int __init nf_conntrack_irc_init(void)
 
 static void __exit nf_conntrack_irc_fini(void)
 {
-	nf_conntrack_helpers_unregister(irc_ptr, ports_c);
+	nf_conntrack_helpers_unregister(irc, ports_c);
 	kfree(irc_buffer);
 }
 

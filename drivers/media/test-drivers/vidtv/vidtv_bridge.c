@@ -492,7 +492,7 @@ static int vidtv_bridge_probe(struct platform_device *pdev)
 	struct vidtv_dvb *dvb;
 	int ret;
 
-	dvb = kzalloc_obj(*dvb);
+	dvb = kzalloc(sizeof(*dvb), GFP_KERNEL);
 	if (!dvb)
 		return -ENOMEM;
 
@@ -580,7 +580,7 @@ static struct platform_driver vidtv_bridge_driver = {
 		.name = VIDTV_PDEV_NAME,
 	},
 	.probe    = vidtv_bridge_probe,
-	.remove = vidtv_bridge_remove,
+	.remove_new = vidtv_bridge_remove,
 };
 
 static void __exit vidtv_bridge_exit(void)

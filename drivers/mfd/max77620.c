@@ -29,11 +29,11 @@
 #include <linux/mfd/core.h>
 #include <linux/mfd/max77620.h>
 #include <linux/init.h>
-#include <linux/module.h>
 #include <linux/of.h>
-#include <linux/reboot.h>
 #include <linux/regmap.h>
 #include <linux/slab.h>
+
+static struct max77620_chip *max77620_scratch;
 
 static const struct resource gpio_resources[] = {
 	DEFINE_RES_IRQ(MAX77620_IRQ_TOP_GPIO),
@@ -483,15 +483,13 @@ static int max77620_read_es_version(struct max77620_chip *chip)
 	return ret;
 }
 
-static int max77620_pm_power_off(struct sys_off_data *data)
+static void max77620_pm_power_off(void)
 {
-	struct max77620_chip *chip = data->cb_data;
+	struct max77620_chip *chip = max77620_scratch;
 
 	regmap_update_bits(chip->rmap, MAX77620_REG_ONOFFCNFG1,
 			   MAX77620_ONOFFCNFG1_SFT_RST,
 			   MAX77620_ONOFFCNFG1_SFT_RST);
-
-	return NOTIFY_DONE;
 }
 
 static int max77620_probe(struct i2c_client *client)
@@ -502,6 +500,7 @@ static int max77620_probe(struct i2c_client *client)
 	struct regmap_irq_chip *chip_desc;
 	const struct mfd_cell *mfd_cells;
 	int n_mfd_cells;
+	bool pm_off;
 	int ret;
 
 	chip = devm_kzalloc(&client->dev, sizeof(*chip), GFP_KERNEL);
@@ -573,14 +572,10 @@ static int max77620_probe(struct i2c_client *client)
 		return ret;
 	}
 
-	if (of_device_is_system_power_controller(client->dev.of_node)) {
-		ret = devm_register_sys_off_handler(&client->dev,
-						    SYS_OFF_MODE_POWER_OFF,
-						    SYS_OFF_PRIO_DEFAULT,
-						    max77620_pm_power_off, chip);
-		if (ret)
-			return dev_err_probe(&client->dev, ret,
-					"failed to register power-off handler\n");
+	pm_off = of_device_is_system_power_controller(client->dev.of_node);
+	if (pm_off && !pm_power_off) {
+		max77620_scratch = chip;
+		pm_power_off = max77620_pm_power_off;
 	}
 
 	return 0;
@@ -712,7 +707,3 @@ static struct i2c_driver max77620_driver = {
 	.id_table = max77620_id,
 };
 builtin_i2c_driver(max77620_driver);
-
-MODULE_DESCRIPTION("Maxim Semiconductor MAX77620 and MAX20024 PMIC Support");
-MODULE_AUTHOR("Laxman Dewangan <ldewangan@nvidia.com>");
-MODULE_LICENSE("GPL");

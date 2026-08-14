@@ -21,7 +21,6 @@
 #include <linux/errno.h>
 #include <linux/limits.h>
 #include <linux/linkage.h>
-#include <linux/minmax.h>
 #include <linux/stddef.h>
 #include <linux/string.h>
 #include <linux/types.h>
@@ -89,10 +88,20 @@ char *strcpy(char *dest, const char *src)
 EXPORT_SYMBOL(strcpy);
 #endif
 
-#ifdef __BIG_ENDIAN
-# define ALLBUTLAST_BYTE_MASK (~255ul)
-#else
-# define ALLBUTLAST_BYTE_MASK (~0ul >> 8)
+#ifndef __HAVE_ARCH_STRNCPY
+char *strncpy(char *dest, const char *src, size_t count)
+{
+	char *tmp = dest;
+
+	while (count) {
+		if ((*tmp = *src) != 0)
+			src++;
+		tmp++;
+		count--;
+	}
+	return dest;
+}
+EXPORT_SYMBOL(strncpy);
 #endif
 
 ssize_t sized_strscpy(char *dest, const char *src, size_t count)
@@ -110,8 +119,11 @@ ssize_t sized_strscpy(char *dest, const char *src, size_t count)
 	 * If src is unaligned, don't cross a page boundary,
 	 * since we don't know if the next page is mapped.
 	 */
-	if ((long)src & (sizeof(long) - 1))
-		max = min(PAGE_SIZE - ((long)src & (PAGE_SIZE - 1)), max);
+	if ((long)src & (sizeof(long) - 1)) {
+		size_t limit = PAGE_SIZE - ((long)src & (PAGE_SIZE - 1));
+		if (limit < max)
+			max = limit;
+	}
 #else
 	/* If src or dest is unaligned, don't do word-at-a-time. */
 	if (((long) dest | (long) src) & (sizeof(long) - 1))
@@ -142,18 +154,13 @@ ssize_t sized_strscpy(char *dest, const char *src, size_t count)
 			*(unsigned long *)(dest+res) = c & zero_bytemask(data);
 			return res + find_zero(data);
 		}
-		count -= sizeof(unsigned long);
-		if (unlikely(!count)) {
-			c &= ALLBUTLAST_BYTE_MASK;
-			*(unsigned long *)(dest+res) = c;
-			return -E2BIG;
-		}
 		*(unsigned long *)(dest+res) = c;
 		res += sizeof(unsigned long);
+		count -= sizeof(unsigned long);
 		max -= sizeof(unsigned long);
 	}
 
-	while (count > 1) {
+	while (count) {
 		char c;
 
 		c = src[res];
@@ -164,11 +171,11 @@ ssize_t sized_strscpy(char *dest, const char *src, size_t count)
 		count--;
 	}
 
-	/* Force NUL-termination. */
-	dest[res] = '\0';
+	/* Hit buffer length without finding a NUL; force NUL-termination. */
+	if (res)
+		dest[res-1] = '\0';
 
-	/* Return E2BIG if the source didn't stop */
-	return src[res] ? -E2BIG : res;
+	return -E2BIG;
 }
 EXPORT_SYMBOL(sized_strscpy);
 

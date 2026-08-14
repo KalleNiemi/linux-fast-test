@@ -16,6 +16,7 @@
 #include <linux/err.h>
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/string.h>
@@ -1251,7 +1252,7 @@ list_del:
 /* The OCS driver is a platform device. */
 static struct platform_driver kmb_ocs_hcu_driver = {
 	.probe = kmb_ocs_hcu_probe,
-	.remove = kmb_ocs_hcu_remove,
+	.remove_new = kmb_ocs_hcu_remove,
 	.driver = {
 			.name = DRV_NAME,
 			.of_match_table = kmb_ocs_hcu_of_match,

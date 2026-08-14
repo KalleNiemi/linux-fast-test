@@ -502,6 +502,7 @@ static int bcm2835aux_spi_probe(struct platform_device *pdev)
 	host->handle_err = bcm2835aux_spi_handle_err;
 	host->prepare_message = bcm2835aux_spi_prepare_message;
 	host->unprepare_message = bcm2835aux_spi_unprepare_message;
+	host->dev.of_node = pdev->dev.of_node;
 	host->use_gpio_descriptors = true;
 
 	bs = spi_controller_get_devdata(host);
@@ -576,7 +577,7 @@ static struct platform_driver bcm2835aux_spi_driver = {
 		.of_match_table	= bcm2835aux_spi_match,
 	},
 	.probe		= bcm2835aux_spi_probe,
-	.remove		= bcm2835aux_spi_remove,
+	.remove_new	= bcm2835aux_spi_remove,
 };
 module_platform_driver(bcm2835aux_spi_driver);
 

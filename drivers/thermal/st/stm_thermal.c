@@ -16,7 +16,6 @@
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/thermal.h>
-#include <linux/units.h>
 
 #include "../thermal_hwmon.h"
 
@@ -77,6 +76,7 @@
 
 /* Constants */
 #define ADJUST			100
+#define ONE_MHZ			1000000
 #define POLL_TIMEOUT		5000
 #define STARTUP_TIME		40
 #define TS1_T0_VAL0		30000  /* 30 celsius */
@@ -205,7 +205,7 @@ static int stm_thermal_calibration(struct stm_thermal_sensor *sensor)
 		return -EINVAL;
 
 	prescaler = 0;
-	clk_freq /= HZ_PER_MHZ;
+	clk_freq /= ONE_MHZ;
 	if (clk_freq) {
 		while (prescaler <= clk_freq)
 			prescaler++;
@@ -582,7 +582,7 @@ static struct platform_driver stm_thermal_driver = {
 		.of_match_table = stm_thermal_of_match,
 	},
 	.probe		= stm_thermal_probe,
-	.remove		= stm_thermal_remove,
+	.remove_new	= stm_thermal_remove,
 };
 module_platform_driver(stm_thermal_driver);
 

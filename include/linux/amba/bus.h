@@ -13,7 +13,7 @@
 
 #include <linux/clk.h>
 #include <linux/device.h>
-#include <linux/device-id/amba.h>
+#include <linux/mod_devicetable.h>
 #include <linux/err.h>
 #include <linux/resource.h>
 #include <linux/regulator/consumer.h>
@@ -116,7 +116,6 @@ extern const struct bus_type amba_bustype;
 #ifdef CONFIG_ARM_AMBA
 int __amba_driver_register(struct amba_driver *, struct module *);
 void amba_driver_unregister(struct amba_driver *);
-bool dev_is_amba(const struct device *dev);
 #else
 static inline int __amba_driver_register(struct amba_driver *drv,
 					 struct module *owner)
@@ -125,10 +124,6 @@ static inline int __amba_driver_register(struct amba_driver *drv,
 }
 static inline void amba_driver_unregister(struct amba_driver *drv)
 {
-}
-static inline bool dev_is_amba(const struct device *dev)
-{
-	return false;
 }
 #endif
 

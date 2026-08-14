@@ -9,7 +9,6 @@
 #include <asm/realmode.h>
 #include <asm/tlbflush.h>
 #include <asm/crash.h>
-#include <asm/msr.h>
 #include <asm/sev.h>
 
 struct real_mode_header *real_mode_header;
@@ -46,7 +45,7 @@ void load_trampoline_pgtable(void)
 
 void __init reserve_real_mode(void)
 {
-	phys_addr_t mem, limit = x86_init.resources.realmode_limit;
+	phys_addr_t mem;
 	size_t size = real_mode_size_needed();
 
 	if (!size)
@@ -54,9 +53,10 @@ void __init reserve_real_mode(void)
 
 	WARN_ON(slab_is_available());
 
-	mem = memblock_phys_alloc_range(size, PAGE_SIZE, 0, limit);
+	/* Has to be under 1M so we can execute real-mode AP code. */
+	mem = memblock_phys_alloc_range(size, PAGE_SIZE, 0, 1<<20);
 	if (!mem)
-		pr_info("No memory below %pa for the real-mode trampoline\n", &limit);
+		pr_info("No sub-1M memory is available for the trampoline\n");
 	else
 		set_real_mode_mem(mem);
 
@@ -65,8 +65,6 @@ void __init reserve_real_mode(void)
 	 * setup_arch().
 	 */
 	memblock_reserve(0, SZ_1M);
-
-	memblock_clear_kho_scratch(0, SZ_1M);
 }
 
 static void __init sme_sev_setup_real_mode(struct trampoline_header *th)
@@ -147,7 +145,7 @@ static void __init setup_real_mode(void)
 	 * Some AMD processors will #GP(0) if EFER.LMA is set in WRMSR
 	 * so we need to mask it out.
 	 */
-	rdmsrq(MSR_EFER, efer);
+	rdmsrl(MSR_EFER, efer);
 	trampoline_header->efer = efer & ~EFER_LMA;
 
 	trampoline_header->start = (u64) secondary_startup_64;

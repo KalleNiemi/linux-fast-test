@@ -8,6 +8,7 @@
 #include <linux/delay.h>
 #include <linux/init.h>
 #include <linux/io.h>
+#include <linux/mod_devicetable.h>
 #include <linux/platform_device.h>
 #include <linux/reset-controller.h>
 
@@ -118,7 +119,6 @@ static int bcm6345_reset_probe(struct platform_device *pdev)
 
 static const struct of_device_id bcm6345_reset_of_match[] = {
 	{ .compatible = "brcm,bcm6345-reset" },
-	{ .compatible = "brcm,bcm63xx-ephy-ctrl" },
 	{ /* sentinel */ },
 };
 

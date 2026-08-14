@@ -749,23 +749,22 @@ unsigned long inno_hdmi_phy_rk3228_clk_recalc_rate(struct clk_hw *hw,
 	return vco;
 }
 
-static int inno_hdmi_phy_rk3228_clk_determine_rate(struct clk_hw *hw,
-						   struct clk_rate_request *req)
+static long inno_hdmi_phy_rk3228_clk_round_rate(struct clk_hw *hw,
+						unsigned long rate,
+						unsigned long *parent_rate)
 {
 	const struct pre_pll_config *cfg = pre_pll_cfg_table;
 
-	req->rate = (req->rate / 1000) * 1000;
+	rate = (rate / 1000) * 1000;
 
 	for (; cfg->pixclock != 0; cfg++)
-		if (cfg->pixclock == req->rate && !cfg->fracdiv)
+		if (cfg->pixclock == rate && !cfg->fracdiv)
 			break;
 
 	if (cfg->pixclock == 0)
 		return -EINVAL;
 
-	req->rate = cfg->pixclock;
-
-	return 0;
+	return cfg->pixclock;
 }
 
 static int inno_hdmi_phy_rk3228_clk_set_rate(struct clk_hw *hw,
@@ -836,7 +835,7 @@ static const struct clk_ops inno_hdmi_phy_rk3228_clk_ops = {
 	.unprepare = inno_hdmi_phy_rk3228_clk_unprepare,
 	.is_prepared = inno_hdmi_phy_rk3228_clk_is_prepared,
 	.recalc_rate = inno_hdmi_phy_rk3228_clk_recalc_rate,
-	.determine_rate = inno_hdmi_phy_rk3228_clk_determine_rate,
+	.round_rate = inno_hdmi_phy_rk3228_clk_round_rate,
 	.set_rate = inno_hdmi_phy_rk3228_clk_set_rate,
 };
 
@@ -907,23 +906,22 @@ unsigned long inno_hdmi_phy_rk3328_clk_recalc_rate(struct clk_hw *hw,
 	return inno->pixclock;
 }
 
-static int inno_hdmi_phy_rk3328_clk_determine_rate(struct clk_hw *hw,
-						   struct clk_rate_request *req)
+static long inno_hdmi_phy_rk3328_clk_round_rate(struct clk_hw *hw,
+						unsigned long rate,
+						unsigned long *parent_rate)
 {
 	const struct pre_pll_config *cfg = pre_pll_cfg_table;
 
-	req->rate = (req->rate / 1000) * 1000;
+	rate = (rate / 1000) * 1000;
 
 	for (; cfg->pixclock != 0; cfg++)
-		if (cfg->pixclock == req->rate)
+		if (cfg->pixclock == rate)
 			break;
 
 	if (cfg->pixclock == 0)
 		return -EINVAL;
 
-	req->rate = cfg->pixclock;
-
-	return 0;
+	return cfg->pixclock;
 }
 
 static int inno_hdmi_phy_rk3328_clk_set_rate(struct clk_hw *hw,
@@ -991,7 +989,7 @@ static const struct clk_ops inno_hdmi_phy_rk3328_clk_ops = {
 	.unprepare = inno_hdmi_phy_rk3328_clk_unprepare,
 	.is_prepared = inno_hdmi_phy_rk3328_clk_is_prepared,
 	.recalc_rate = inno_hdmi_phy_rk3328_clk_recalc_rate,
-	.determine_rate = inno_hdmi_phy_rk3328_clk_determine_rate,
+	.round_rate = inno_hdmi_phy_rk3328_clk_round_rate,
 	.set_rate = inno_hdmi_phy_rk3328_clk_set_rate,
 };
 
@@ -1426,8 +1424,8 @@ static const struct of_device_id inno_hdmi_phy_of_match[] = {
 MODULE_DEVICE_TABLE(of, inno_hdmi_phy_of_match);
 
 static struct platform_driver inno_hdmi_phy_driver = {
-	.probe = inno_hdmi_phy_probe,
-	.remove = inno_hdmi_phy_remove,
+	.probe  = inno_hdmi_phy_probe,
+	.remove_new = inno_hdmi_phy_remove,
 	.driver = {
 		.name = "inno-hdmi-phy",
 		.of_match_table = inno_hdmi_phy_of_match,

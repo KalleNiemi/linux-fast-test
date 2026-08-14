@@ -11,8 +11,8 @@
 
 #include <linux/clk.h>
 #include <linux/of_graph.h>
+#include <linux/platform_data/simplefb.h>
 
-#include <video/pixel_format.h>
 #include <video/videomode.h>
 
 #include <drm/drm_atomic.h>
@@ -22,7 +22,6 @@
 #include <drm/drm_framebuffer.h>
 #include <drm/drm_gem_dma_helper.h>
 #include <drm/drm_of.h>
-#include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_vblank.h>
 
@@ -74,17 +73,7 @@ static const struct drm_crtc_funcs hdlcd_crtc_funcs = {
 	.disable_vblank = hdlcd_crtc_disable_vblank,
 };
 
-static const struct {
-	u32 fourcc;
-	struct pixel_format pixel;
-} supported_formats[] = {
-	{ DRM_FORMAT_RGB565, PIXEL_FORMAT_RGB565 },
-	{ DRM_FORMAT_XRGB1555, PIXEL_FORMAT_XRGB1555 },
-	{ DRM_FORMAT_RGB888, PIXEL_FORMAT_RGB888 },
-	{ DRM_FORMAT_XRGB8888, PIXEL_FORMAT_XRGB8888 },
-	{ DRM_FORMAT_XBGR8888, PIXEL_FORMAT_XBGR8888 },
-	{ DRM_FORMAT_XRGB2101010, PIXEL_FORMAT_XRGB2101010},
-};
+static struct simplefb_format supported_formats[] = SIMPLEFB_FORMATS;
 
 /*
  * Setup the HDLCD registers for decoding the pixels out of the framebuffer
@@ -94,12 +83,15 @@ static int hdlcd_set_pxl_fmt(struct drm_crtc *crtc)
 	unsigned int btpp;
 	struct hdlcd_drm_private *hdlcd = crtc_to_hdlcd_priv(crtc);
 	const struct drm_framebuffer *fb = crtc->primary->state->fb;
-	const struct pixel_format *format = NULL;
+	uint32_t pixel_format;
+	struct simplefb_format *format = NULL;
 	int i;
 
+	pixel_format = fb->format->format;
+
 	for (i = 0; i < ARRAY_SIZE(supported_formats); i++) {
-		if (supported_formats[i].fourcc == fb->format->format)
-			format = &supported_formats[i].pixel;
+		if (supported_formats[i].fourcc == pixel_format)
+			format = &supported_formats[i];
 	}
 
 	if (WARN_ON(!format))
@@ -175,7 +167,7 @@ static void hdlcd_crtc_mode_set_nofb(struct drm_crtc *crtc)
 }
 
 static void hdlcd_crtc_atomic_enable(struct drm_crtc *crtc,
-				     struct drm_atomic_commit *state)
+				     struct drm_atomic_state *state)
 {
 	struct hdlcd_drm_private *hdlcd = crtc_to_hdlcd_priv(crtc);
 
@@ -186,7 +178,7 @@ static void hdlcd_crtc_atomic_enable(struct drm_crtc *crtc,
 }
 
 static void hdlcd_crtc_atomic_disable(struct drm_crtc *crtc,
-				      struct drm_atomic_commit *state)
+				      struct drm_atomic_state *state)
 {
 	struct hdlcd_drm_private *hdlcd = crtc_to_hdlcd_priv(crtc);
 
@@ -212,7 +204,7 @@ static enum drm_mode_status hdlcd_crtc_mode_valid(struct drm_crtc *crtc,
 }
 
 static void hdlcd_crtc_atomic_begin(struct drm_crtc *crtc,
-				    struct drm_atomic_commit *state)
+				    struct drm_atomic_state *state)
 {
 	struct drm_pending_vblank_event *event = crtc->state->event;
 
@@ -236,7 +228,7 @@ static const struct drm_crtc_helper_funcs hdlcd_crtc_helper_funcs = {
 };
 
 static int hdlcd_plane_atomic_check(struct drm_plane *plane,
-				    struct drm_atomic_commit *state)
+				    struct drm_atomic_state *state)
 {
 	struct drm_plane_state *new_plane_state = drm_atomic_get_new_plane_state(state,
 										 plane);
@@ -267,7 +259,7 @@ static int hdlcd_plane_atomic_check(struct drm_plane *plane,
 }
 
 static void hdlcd_plane_atomic_update(struct drm_plane *plane,
-				      struct drm_atomic_commit *state)
+				      struct drm_atomic_state *state)
 {
 	struct drm_plane_state *new_plane_state = drm_atomic_get_new_plane_state(state,
 										 plane);

@@ -3,7 +3,7 @@
  * Copyright (C) 2017-2023 Oracle.  All Rights Reserved.
  * Author: Darrick J. Wong <djwong@kernel.org>
  */
-#include "xfs_platform.h"
+#include "xfs.h"
 #include "xfs_fs.h"
 #include "xfs_shared.h"
 #include "xfs_format.h"
@@ -18,8 +18,6 @@
 #include "xfs_inode.h"
 #include "scrub/scrub.h"
 #include "scrub/common.h"
-#include "scrub/bitmap.h"
-#include "scrub/agino_bitmap.h"
 
 int
 xchk_setup_agheader(
@@ -71,10 +69,6 @@ STATIC size_t
 xchk_superblock_ondisk_size(
 	struct xfs_mount	*mp)
 {
-	if (xfs_has_zoned(mp))
-		return offsetofend(struct xfs_dsb, sb_rtreserved);
-	if (xfs_has_metadir(mp))
-		return offsetofend(struct xfs_dsb, sb_pad);
 	if (xfs_has_metauuid(mp))
 		return offsetofend(struct xfs_dsb, sb_meta_uuid);
 	if (xfs_has_crc(mp))
@@ -175,19 +169,11 @@ xchk_superblock(
 	if (sb->sb_rootino != cpu_to_be64(mp->m_sb.sb_rootino))
 		xchk_block_set_preen(sc, bp);
 
-	if (xfs_has_metadir(sc->mp)) {
-		if (sb->sb_rbmino != cpu_to_be64(0))
-			xchk_block_set_corrupt(sc, bp);
+	if (sb->sb_rbmino != cpu_to_be64(mp->m_sb.sb_rbmino))
+		xchk_block_set_preen(sc, bp);
 
-		if (sb->sb_rsumino != cpu_to_be64(0))
-			xchk_block_set_corrupt(sc, bp);
-	} else {
-		if (sb->sb_rbmino != cpu_to_be64(mp->m_sb.sb_rbmino))
-			xchk_block_set_preen(sc, bp);
-
-		if (sb->sb_rsumino != cpu_to_be64(mp->m_sb.sb_rsumino))
-			xchk_block_set_preen(sc, bp);
-	}
+	if (sb->sb_rsumino != cpu_to_be64(mp->m_sb.sb_rsumino))
+		xchk_block_set_preen(sc, bp);
 
 	if (sb->sb_rextsize != cpu_to_be32(mp->m_sb.sb_rextsize))
 		xchk_block_set_corrupt(sc, bp);
@@ -263,19 +249,11 @@ xchk_superblock(
 	 * sb_icount, sb_ifree, sb_fdblocks, sb_frexents
 	 */
 
-	if (xfs_has_metadir(mp)) {
-		if (sb->sb_uquotino != cpu_to_be64(0))
-			xchk_block_set_corrupt(sc, bp);
+	if (sb->sb_uquotino != cpu_to_be64(mp->m_sb.sb_uquotino))
+		xchk_block_set_preen(sc, bp);
 
-		if (sb->sb_gquotino != cpu_to_be64(0))
-			xchk_block_set_corrupt(sc, bp);
-	} else {
-		if (sb->sb_uquotino != cpu_to_be64(mp->m_sb.sb_uquotino))
-			xchk_block_set_preen(sc, bp);
-
-		if (sb->sb_gquotino != cpu_to_be64(mp->m_sb.sb_gquotino))
-			xchk_block_set_preen(sc, bp);
-	}
+	if (sb->sb_gquotino != cpu_to_be64(mp->m_sb.sb_gquotino))
+		xchk_block_set_preen(sc, bp);
 
 	/*
 	 * Skip the quota flags since repair will force quotacheck.
@@ -384,13 +362,8 @@ xchk_superblock(
 		if (sb->sb_spino_align != cpu_to_be32(mp->m_sb.sb_spino_align))
 			xchk_block_set_corrupt(sc, bp);
 
-		if (xfs_has_metadir(mp)) {
-			if (sb->sb_pquotino != cpu_to_be64(0))
-				xchk_block_set_corrupt(sc, bp);
-		} else {
-			if (sb->sb_pquotino != cpu_to_be64(mp->m_sb.sb_pquotino))
-				xchk_block_set_preen(sc, bp);
-		}
+		if (sb->sb_pquotino != cpu_to_be64(mp->m_sb.sb_pquotino))
+			xchk_block_set_preen(sc, bp);
 
 		/* Don't care about sb_lsn */
 	}
@@ -398,23 +371,6 @@ xchk_superblock(
 	if (xfs_has_metauuid(mp)) {
 		/* The metadata UUID must be the same for all supers */
 		if (!uuid_equal(&sb->sb_meta_uuid, &mp->m_sb.sb_meta_uuid))
-			xchk_block_set_corrupt(sc, bp);
-	}
-
-	if (xfs_has_metadir(mp)) {
-		if (sb->sb_metadirino != cpu_to_be64(mp->m_sb.sb_metadirino))
-			xchk_block_set_preen(sc, bp);
-
-		if (sb->sb_rgcount != cpu_to_be32(mp->m_sb.sb_rgcount))
-			xchk_block_set_corrupt(sc, bp);
-
-		if (sb->sb_rgextents != cpu_to_be32(mp->m_sb.sb_rgextents))
-			xchk_block_set_corrupt(sc, bp);
-
-		if (sb->sb_rgblklog != mp->m_sb.sb_rgblklog)
-			xchk_block_set_corrupt(sc, bp);
-
-		if (memchr_inv(sb->sb_pad, 0, sizeof(sb->sb_pad)))
 			xchk_block_set_corrupt(sc, bp);
 	}
 
@@ -621,7 +577,7 @@ xchk_agf(
 
 	/* Check the AG length */
 	eoag = be32_to_cpu(agf->agf_length);
-	if (eoag != pag_group(pag)->xg_block_count)
+	if (eoag != pag->block_count)
 		xchk_block_set_corrupt(sc, sc->sa.agf_bp);
 
 	/* Check the AGF btree roots and levels */
@@ -818,8 +774,8 @@ xchk_agfl(
 		xchk_block_set_corrupt(sc, sc->sa.agf_bp);
 		goto out;
 	}
-	sai.entries = kvzalloc_objs(xfs_agblock_t, sai.agflcount,
-				    XCHK_GFP_FLAGS);
+	sai.entries = kvcalloc(sai.agflcount, sizeof(xfs_agblock_t),
+			       XCHK_GFP_FLAGS);
 	if (!sai.entries) {
 		error = -ENOMEM;
 		goto out;
@@ -935,84 +891,40 @@ xchk_agi_xref(
 }
 
 /*
- * Walk the incore unlinked list for a particular AGI bucket to construct
- * the unlinked inode bitmap for later reconstruction of the unlinked list.
- * Returns 1 if we should keep checking, 0 to stop checking, or a negative
- * errno.
- */
-static int
-xchk_iunlink_bucket(
-	struct xfs_scrub		*sc,
-	unsigned int			bucket,
-	xfs_agino_t			agino)
-{
-	struct xagino_bitmap		seen;
-	int				ret;
-
-	xagino_bitmap_init(&seen);
-
-	while (agino != NULLAGINO) {
-		struct xfs_inode	*ip;
-		unsigned int		len = 1;
-
-		if (agino % XFS_AGI_UNLINKED_BUCKETS != bucket) {
-			xchk_block_set_corrupt(sc, sc->sa.agi_bp);
-			goto bad;
-		}
-
-		if (xagino_bitmap_test(&seen, agino, &len)) {
-			xchk_block_set_corrupt(sc, sc->sa.agi_bp);
-			goto bad;
-		}
-
-		ip = xfs_iunlink_lookup(sc->sa.pag, agino);
-		if (!ip) {
-			xchk_block_set_corrupt(sc, sc->sa.agi_bp);
-			goto bad;
-		}
-
-		if (!xfs_inode_on_unlinked_list(ip)) {
-			xchk_block_set_corrupt(sc, sc->sa.agi_bp);
-			goto bad;
-		}
-
-		ret = xagino_bitmap_set(&seen, agino, 1);
-		if (ret)
-			goto out_bitmap;
-
-		agino = ip->i_next_unlinked;
-	}
-	ret = 1;
-
-out_bitmap:
-	xagino_bitmap_destroy(&seen);
-	return ret;
-bad:
-	ret = 0;
-	goto out_bitmap;
-}
-
-/*
  * Check the unlinked buckets for links to bad inodes.  We hold the AGI, so
  * there cannot be any threads updating unlinked list pointers in this AG.
  */
-STATIC int
+STATIC void
 xchk_iunlink(
 	struct xfs_scrub	*sc,
 	struct xfs_agi		*agi)
 {
 	unsigned int		i;
+	struct xfs_inode	*ip;
 
 	for (i = 0; i < XFS_AGI_UNLINKED_BUCKETS; i++) {
-		int		ret;
+		xfs_agino_t	agino = be32_to_cpu(agi->agi_unlinked[i]);
 
-		ret = xchk_iunlink_bucket(sc, i,
-				be32_to_cpu(agi->agi_unlinked[i]));
-		if (ret < 1)
-			return ret;
+		while (agino != NULLAGINO) {
+			if (agino % XFS_AGI_UNLINKED_BUCKETS != i) {
+				xchk_block_set_corrupt(sc, sc->sa.agi_bp);
+				return;
+			}
+
+			ip = xfs_iunlink_lookup(sc->sa.pag, agino);
+			if (!ip) {
+				xchk_block_set_corrupt(sc, sc->sa.agi_bp);
+				return;
+			}
+
+			if (!xfs_inode_on_unlinked_list(ip)) {
+				xchk_block_set_corrupt(sc, sc->sa.agi_bp);
+				return;
+			}
+
+			agino = ip->i_next_unlinked;
+		}
 	}
-
-	return 0;
 }
 
 /* Scrub the AGI. */
@@ -1045,7 +957,7 @@ xchk_agi(
 
 	/* Check the AG length */
 	eoag = be32_to_cpu(agi->agi_length);
-	if (eoag != pag_group(pag)->xg_block_count)
+	if (eoag != pag->block_count)
 		xchk_block_set_corrupt(sc, sc->sa.agi_bp);
 
 	/* Check btree roots and levels */
@@ -1099,9 +1011,7 @@ xchk_agi(
 	if (pag->pagi_freecount != be32_to_cpu(agi->agi_freecount))
 		xchk_block_set_corrupt(sc, sc->sa.agi_bp);
 
-	error = xchk_iunlink(sc, agi);
-	if (error)
-		goto out;
+	xchk_iunlink(sc, agi);
 
 	xchk_agi_xref(sc);
 out:

@@ -26,15 +26,11 @@ static struct hnae3_ae_algo ae_algovf;
 static struct workqueue_struct *hclgevf_wq;
 
 static const struct pci_device_id ae_algovf_pci_tbl[] = {
-	{
-		PCI_VDEVICE(HUAWEI, HNAE3_DEV_ID_VF),
-		.driver_data = 0,
-	}, {
-		PCI_VDEVICE(HUAWEI, HNAE3_DEV_ID_RDMA_DCB_PFC_VF),
-		.driver_data = HNAE3_DEV_SUPPORT_ROCE_DCB_BITS,
-	},
+	{PCI_VDEVICE(HUAWEI, HNAE3_DEV_ID_VF), 0},
+	{PCI_VDEVICE(HUAWEI, HNAE3_DEV_ID_RDMA_DCB_PFC_VF),
+	 HNAE3_DEV_SUPPORT_ROCE_DCB_BITS},
 	/* required last entry */
-	{ }
+	{0, }
 };
 
 MODULE_DEVICE_TABLE(pci, ae_algovf_pci_tbl);
@@ -610,7 +606,7 @@ static int hclgevf_set_rss(struct hnae3_handle *handle, const u32 *indir,
 }
 
 static int hclgevf_set_rss_tuple(struct hnae3_handle *handle,
-				 const struct ethtool_rxfh_fields *nfc)
+				 struct ethtool_rxnfc *nfc)
 {
 	struct hclgevf_dev *hdev = hclgevf_ae_get_hdev(handle);
 	int ret;
@@ -628,7 +624,7 @@ static int hclgevf_set_rss_tuple(struct hnae3_handle *handle,
 }
 
 static int hclgevf_get_rss_tuple(struct hnae3_handle *handle,
-				 struct ethtool_rxfh_fields *nfc)
+				 struct ethtool_rxnfc *nfc)
 {
 	struct hclgevf_dev *hdev = hclgevf_ae_get_hdev(handle);
 	u8 tuple_sets;
@@ -981,7 +977,7 @@ static int hclgevf_update_mac_list(struct hnae3_handle *handle,
 		return -ENOENT;
 	}
 
-	mac_node = kzalloc_obj(*mac_node, GFP_ATOMIC);
+	mac_node = kzalloc(sizeof(*mac_node), GFP_ATOMIC);
 	if (!mac_node) {
 		spin_unlock_bh(&hdev->mac_table.mac_list_lock);
 		return -ENOMEM;
@@ -1160,7 +1156,7 @@ static void hclgevf_sync_mac_list(struct hclgevf_dev *hdev,
 			list_move_tail(&mac_node->node, &tmp_del_list);
 			break;
 		case HCLGEVF_MAC_TO_ADD:
-			new_node = kzalloc_obj(*new_node, GFP_ATOMIC);
+			new_node = kzalloc(sizeof(*new_node), GFP_ATOMIC);
 			if (!new_node)
 				goto stop_traverse;
 
@@ -2061,7 +2057,7 @@ static enum hclgevf_evt_cause hclgevf_check_evt_cause(struct hclgevf_dev *hdev,
 
 static void hclgevf_reset_timer(struct timer_list *t)
 {
-	struct hclgevf_dev *hdev = timer_container_of(hdev, t, reset_timer);
+	struct hclgevf_dev *hdev = from_timer(hdev, t, reset_timer);
 
 	hclgevf_clear_event_cause(hdev, HCLGEVF_VECTOR0_EVENT_RST);
 	hclgevf_reset_task_schedule(hdev);
@@ -2629,7 +2625,7 @@ static int hclgevf_pci_init(struct hclgevf_dev *hdev)
 
 	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
 	if (ret) {
-		dev_err(&pdev->dev, "can't set consistent PCI DMA, exiting\n");
+		dev_err(&pdev->dev, "can't set consistent PCI DMA, exiting");
 		goto err_disable_device;
 	}
 

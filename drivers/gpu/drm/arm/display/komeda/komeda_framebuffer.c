@@ -11,7 +11,6 @@
 #include <drm/drm_gem.h>
 #include <drm/drm_gem_dma_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
-#include <drm/drm_print.h>
 
 #include "komeda_framebuffer.h"
 #include "komeda_dev.h"
@@ -162,14 +161,13 @@ komeda_fb_none_afbc_size_check(struct komeda_dev *mdev, struct komeda_fb *kfb,
 
 struct drm_framebuffer *
 komeda_fb_create(struct drm_device *dev, struct drm_file *file,
-		 const struct drm_format_info *info,
 		 const struct drm_mode_fb_cmd2 *mode_cmd)
 {
 	struct komeda_dev *mdev = dev->dev_private;
 	struct komeda_fb *kfb;
 	int ret = 0, i;
 
-	kfb = kzalloc_obj(*kfb);
+	kfb = kzalloc(sizeof(*kfb), GFP_KERNEL);
 	if (!kfb)
 		return ERR_PTR(-ENOMEM);
 
@@ -183,7 +181,7 @@ komeda_fb_create(struct drm_device *dev, struct drm_file *file,
 		return ERR_PTR(-EINVAL);
 	}
 
-	drm_helper_mode_fill_fb_struct(dev, &kfb->base, info, mode_cmd);
+	drm_helper_mode_fill_fb_struct(dev, &kfb->base, mode_cmd);
 
 	if (kfb->base.modifier)
 		ret = komeda_fb_afbc_size_check(kfb, file, mode_cmd);

@@ -788,7 +788,7 @@ static void max77693_charger_remove(struct platform_device *pdev)
 }
 
 static const struct platform_device_id max77693_charger_id[] = {
-	{ .name = "max77693-charger" },
+	{ "max77693-charger", 0, },
 	{ }
 };
 MODULE_DEVICE_TABLE(platform, max77693_charger_id);
@@ -798,7 +798,7 @@ static struct platform_driver max77693_charger_driver = {
 		.name	= "max77693-charger",
 	},
 	.probe		= max77693_charger_probe,
-	.remove		= max77693_charger_remove,
+	.remove_new	= max77693_charger_remove,
 	.id_table	= max77693_charger_id,
 };
 module_platform_driver(max77693_charger_driver);

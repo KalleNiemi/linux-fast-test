@@ -19,9 +19,8 @@
  */
 
 #include <linux/bitops.h>
-#include <linux/byteorder/generic.h>
 #include <linux/count_zeros.h>
-#include <linux/export.h>
+#include <linux/byteorder/generic.h>
 #include <linux/scatterlist.h>
 #include <linux/string.h>
 #include "mpi-internal.h"
@@ -398,7 +397,7 @@ MPI mpi_read_raw_from_sgl(struct scatterlist *sgl, unsigned int nbytes)
 
 	while (sg_miter_next(&miter)) {
 		buff = miter.addr;
-		len = min(miter.length, nbytes);
+		len = min_t(unsigned, miter.length, nbytes);
 		nbytes -= len;
 
 		for (x = 0; x < len; x++) {

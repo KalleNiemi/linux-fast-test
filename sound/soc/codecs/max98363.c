@@ -14,7 +14,7 @@
 
 #include "max98363.h"
 
-static const struct reg_default max98363_reg[] = {
+static struct reg_default max98363_reg[] = {
 	{MAX98363_R2021_ERR_MON_CTRL, 0x0},
 	{MAX98363_R2022_SPK_MON_THRESH, 0x0},
 	{MAX98363_R2023_SPK_MON_DURATION, 0x0},
@@ -90,15 +90,24 @@ static int max98363_resume(struct device *dev)
 {
 	struct sdw_slave *slave = dev_to_sdw_dev(dev);
 	struct max98363_priv *max98363 = dev_get_drvdata(dev);
-	int ret;
+	unsigned long time;
 
 	if (!max98363->first_hw_init)
 		return 0;
 
-	ret = sdw_slave_wait_for_init(slave, MAX98363_PROBE_TIMEOUT);
-	if (ret)
-		return ret;
+	if (!slave->unattach_request)
+		goto regmap_sync;
 
+	time = wait_for_completion_timeout(&slave->initialization_complete,
+					   msecs_to_jiffies(MAX98363_PROBE_TIMEOUT));
+	if (!time) {
+		dev_err(dev, "Initialization not complete, timed out\n");
+		return -ETIMEDOUT;
+	}
+
+regmap_sync:
+
+	slave->unattach_request = 0;
 	regcache_cache_only(max98363->regmap, false);
 	regcache_sync(max98363->regmap);
 
@@ -179,6 +188,7 @@ static int max98363_io_init(struct sdw_slave *slave)
 	max98363->hw_init = true;
 
 out:
+	pm_runtime_mark_last_busy(dev);
 	pm_runtime_put_autosuspend(dev);
 
 	return ret;

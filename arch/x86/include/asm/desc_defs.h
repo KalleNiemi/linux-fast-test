@@ -58,7 +58,7 @@
 
 #define DESC_USER		(_DESC_DPL(3))
 
-#ifndef __ASSEMBLER__
+#ifndef __ASSEMBLY__
 
 #include <linux/types.h>
 
@@ -145,7 +145,7 @@ struct gate_struct {
 typedef struct gate_struct gate_desc;
 
 #ifndef _SETUP
-static __always_inline unsigned long gate_offset(const gate_desc *g)
+static inline unsigned long gate_offset(const gate_desc *g)
 {
 #ifdef CONFIG_X86_64
 	return g->offset_low | ((unsigned long)g->offset_middle << 16) |
@@ -166,7 +166,7 @@ struct desc_ptr {
 	unsigned long address;
 } __attribute__((packed)) ;
 
-#endif /* !__ASSEMBLER__ */
+#endif /* !__ASSEMBLY__ */
 
 /* Boot IDT definitions */
 #define	BOOT_IDT_ENTRIES	32
