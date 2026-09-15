@@ -69,6 +69,9 @@ enum afs_fs_operation {
 	yfs_FS_RemoveACL		= 64171,
 	yfs_FS_RemoveFile2		= 64173,
 	yfs_FS_StoreOpaqueACL2		= 64174,
+	yfs_FS_Rename_Replace		= 64176,
+	yfs_FS_Rename_NoReplace		= 64177,
+	yfs_FS_Rename_Exchange		= 64187,
 	yfs_FS_InlineBulkStatus		= 64536, /* YFS Fetch multiple file statuses with errors */
 	yfs_FS_FetchData64		= 64537, /* YFS Fetch file data */
 	yfs_FS_StoreData64		= 64538, /* YFS Store file data */
@@ -300,6 +303,9 @@ enum yfs_cm_operation {
 	EM(yfs_FS_RemoveACL,			"YFS.RemoveACL") \
 	EM(yfs_FS_RemoveFile2,			"YFS.RemoveFile2") \
 	EM(yfs_FS_StoreOpaqueACL2,		"YFS.StoreOpaqueACL2") \
+	EM(yfs_FS_Rename_Replace,		"YFS.Rename_Replace") \
+	EM(yfs_FS_Rename_NoReplace,		"YFS.Rename_NoReplace") \
+	EM(yfs_FS_Rename_Exchange,		"YFS.Rename_Exchange") \
 	EM(yfs_FS_InlineBulkStatus,		"YFS.InlineBulkStatus") \
 	EM(yfs_FS_FetchData64,			"YFS.FetchData64") \
 	EM(yfs_FS_StoreData64,			"YFS.StoreData64") \
@@ -338,6 +344,44 @@ enum yfs_cm_operation {
 	EM(yfs_CB_TellMeAboutYourself,		"YFSCB.TellMeAboutYourself") \
 	E_(yfs_CB_CallBack,			"YFSCB.CallBack")
 
+#define afs_cb_promise_traces \
+	EM(afs_cb_promise_clear_cb_break,	"CLEAR cb-break") \
+	EM(afs_cb_promise_clear_rmdir,		"CLEAR rmdir") \
+	EM(afs_cb_promise_clear_rotate_server,	"CLEAR rot-srv") \
+	EM(afs_cb_promise_clear_server_change,	"CLEAR srv-chg") \
+	EM(afs_cb_promise_clear_vol_init_cb,	"CLEAR vol-init-cb") \
+	EM(afs_cb_promise_set_apply_cb,		"SET apply-cb") \
+	EM(afs_cb_promise_set_new_inode,	"SET new-inode") \
+	E_(afs_cb_promise_set_new_symlink,	"SET new-symlink")
+
+#define afs_vnode_invalid_traces \
+	EM(afs_vnode_invalid_trace_cb_ro_snapshot, "cb-ro-snapshot") \
+	EM(afs_vnode_invalid_trace_cb_scrub,	"cb-scrub") \
+	EM(afs_vnode_invalid_trace_cb_v_break,	"cb-v-break") \
+	EM(afs_vnode_invalid_trace_expired,	"expired") \
+	EM(afs_vnode_invalid_trace_no_cb_promise, "no-cb-promise") \
+	EM(afs_vnode_invalid_trace_vol_expired,	"vol-expired") \
+	EM(afs_vnode_invalid_trace_zap_data,	"zap-data") \
+	E_(afs_vnode_valid_trace,		"valid")
+
+#define afs_dir_invalid_traces			\
+	EM(afs_dir_invalid_edit_add_bad_size,	"edit-add-bad-size") \
+	EM(afs_dir_invalid_edit_add_no_slots,	"edit-add-no-slots") \
+	EM(afs_dir_invalid_edit_add_too_many_blocks, "edit-add-too-many-blocks") \
+	EM(afs_dir_invalid_edit_get_block,	"edit-get-block") \
+	EM(afs_dir_invalid_edit_mkdir,		"edit-mkdir") \
+	EM(afs_dir_invalid_edit_rem_bad_size,	"edit-rem-bad-size") \
+	EM(afs_dir_invalid_edit_rem_wrong_name,	"edit-rem-wrong_name") \
+	EM(afs_dir_invalid_edit_upd_bad_size,	"edit-upd-bad-size") \
+	EM(afs_dir_invalid_edit_upd_no_dd,	"edit-upd-no-dotdot") \
+	EM(afs_dir_invalid_dv_mismatch,		"dv-mismatch") \
+	EM(afs_dir_invalid_inval_folio,		"inv-folio") \
+	EM(afs_dir_invalid_iter_stale,		"iter-stale") \
+	EM(afs_dir_invalid_reclaimed_folio,	"reclaimed-folio") \
+	EM(afs_dir_invalid_release_folio,	"rel-folio") \
+	EM(afs_dir_invalid_remote,		"remote") \
+	E_(afs_dir_invalid_subdir_removed,	"subdir-removed")
+
 #define afs_edit_dir_ops				  \
 	EM(afs_edit_dir_create,			"create") \
 	EM(afs_edit_dir_create_error,		"c_fail") \
@@ -347,6 +391,7 @@ enum yfs_cm_operation {
 	EM(afs_edit_dir_delete_error,		"d_err ") \
 	EM(afs_edit_dir_delete_inval,		"d_invl") \
 	EM(afs_edit_dir_delete_noent,		"d_nent") \
+	EM(afs_edit_dir_mkdir,			"mk_ent") \
 	EM(afs_edit_dir_update_dd,		"u_ddot") \
 	EM(afs_edit_dir_update_error,		"u_fail") \
 	EM(afs_edit_dir_update_inval,		"u_invl") \
@@ -400,6 +445,7 @@ enum yfs_cm_operation {
 	EM(afs_file_error_dir_over_end,		"DIR_ENT_OVER_END")	\
 	EM(afs_file_error_dir_small,		"DIR_SMALL")		\
 	EM(afs_file_error_dir_unmarked_ext,	"DIR_UNMARKED_EXT")	\
+	EM(afs_file_error_symlink_big,		"SYM_BIG")		\
 	EM(afs_file_error_mntpt,		"MNTPT_READ_FAILED")	\
 	E_(afs_file_error_writeback_fail,	"WRITEBACK_FAILED")
 
@@ -502,7 +548,9 @@ enum yfs_cm_operation {
 enum afs_alist_trace		{ afs_alist_traces } __mode(byte);
 enum afs_call_trace		{ afs_call_traces } __mode(byte);
 enum afs_cb_break_reason	{ afs_cb_break_reasons } __mode(byte);
+enum afs_cb_promise_trace	{ afs_cb_promise_traces } __mode(byte);
 enum afs_cell_trace		{ afs_cell_traces } __mode(byte);
+enum afs_dir_invalid_trace	{ afs_dir_invalid_traces} __mode(byte);
 enum afs_edit_dir_op		{ afs_edit_dir_ops } __mode(byte);
 enum afs_edit_dir_reason	{ afs_edit_dir_reasons } __mode(byte);
 enum afs_eproto_cause		{ afs_eproto_causes } __mode(byte);
@@ -513,6 +561,7 @@ enum afs_flock_operation	{ afs_flock_operations } __mode(byte);
 enum afs_io_error		{ afs_io_errors } __mode(byte);
 enum afs_rotate_trace		{ afs_rotate_traces } __mode(byte);
 enum afs_server_trace		{ afs_server_traces } __mode(byte);
+enum afs_vnode_invalid_trace	{ afs_vnode_invalid_traces} __mode(byte);
 enum afs_volume_trace		{ afs_volume_traces } __mode(byte);
 
 #endif /* end __AFS_GENERATE_TRACE_ENUMS_ONCE_ONLY */
@@ -528,8 +577,10 @@ enum afs_volume_trace		{ afs_volume_traces } __mode(byte);
 afs_alist_traces;
 afs_call_traces;
 afs_cb_break_reasons;
+afs_cb_promise_traces;
 afs_cell_traces;
 afs_cm_operations;
+afs_dir_invalid_traces;
 afs_edit_dir_ops;
 afs_edit_dir_reasons;
 afs_eproto_causes;
@@ -541,6 +592,7 @@ afs_fs_operations;
 afs_io_errors;
 afs_rotate_traces;
 afs_server_traces;
+afs_vnode_invalid_traces;
 afs_vl_operations;
 yfs_cm_operations;
 
@@ -617,19 +669,26 @@ TRACE_EVENT(afs_cb_call,
 		    __field(unsigned int,		call)
 		    __field(u32,			op)
 		    __field(u16,			service_id)
+		    __field(u8,				security_ix)
+		    __field(u32,			enctype)
 			     ),
 
 	    TP_fast_assign(
 		    __entry->call	= call->debug_id;
 		    __entry->op		= call->operation_ID;
 		    __entry->service_id	= call->service_id;
+		    __entry->security_ix = call->security_ix;
+		    __entry->enctype	= call->enctype;
 			   ),
 
-	    TP_printk("c=%08x %s",
+	    TP_printk("c=%08x %s sv=%u sx=%u en=%u",
 		      __entry->call,
 		      __entry->service_id == 2501 ?
 		      __print_symbolic(__entry->op, yfs_cm_operations) :
-		      __print_symbolic(__entry->op, afs_cm_operations))
+		      __print_symbolic(__entry->op, afs_cm_operations),
+		      __entry->service_id,
+		      __entry->security_ix,
+		      __entry->enctype)
 	    );
 
 TRACE_EVENT(afs_call,
@@ -685,7 +744,7 @@ TRACE_EVENT(afs_make_fs_call,
 		    }
 			   ),
 
-	    TP_printk("c=%08x %06llx:%06llx:%06x %s",
+	    TP_printk("c=%08x V=%llx i=%llx:%x %s",
 		      __entry->call,
 		      __entry->fid.vid,
 		      __entry->fid.vnode,
@@ -719,7 +778,7 @@ TRACE_EVENT(afs_make_fs_calli,
 		    }
 			   ),
 
-	    TP_printk("c=%08x %06llx:%06llx:%06x %s i=%u",
+	    TP_printk("c=%08x V=%llx i=%llx:%x %s i=%u",
 		      __entry->call,
 		      __entry->fid.vid,
 		      __entry->fid.vnode,
@@ -756,7 +815,7 @@ TRACE_EVENT(afs_make_fs_call1,
 		    __entry->name[__len] = 0;
 			   ),
 
-	    TP_printk("c=%08x %06llx:%06llx:%06x %s \"%s\"",
+	    TP_printk("c=%08x V=%llx i=%llx:%x %s \"%s\"",
 		      __entry->call,
 		      __entry->fid.vid,
 		      __entry->fid.vnode,
@@ -797,7 +856,7 @@ TRACE_EVENT(afs_make_fs_call2,
 		    __entry->name2[__len2] = 0;
 			   ),
 
-	    TP_printk("c=%08x %06llx:%06llx:%06x %s \"%s\" \"%s\"",
+	    TP_printk("c=%08x V=%llx i=%llx:%x %s \"%s\" \"%s\"",
 		      __entry->call,
 		      __entry->fid.vid,
 		      __entry->fid.vnode,
@@ -902,9 +961,9 @@ TRACE_EVENT(afs_sent_data,
 	    );
 
 TRACE_EVENT(afs_dir_check_failed,
-	    TP_PROTO(struct afs_vnode *vnode, loff_t off, loff_t i_size),
+	    TP_PROTO(struct afs_vnode *vnode, loff_t off),
 
-	    TP_ARGS(vnode, off, i_size),
+	    TP_ARGS(vnode, off),
 
 	    TP_STRUCT__entry(
 		    __field(struct afs_vnode *,		vnode)
@@ -915,7 +974,7 @@ TRACE_EVENT(afs_dir_check_failed,
 	    TP_fast_assign(
 		    __entry->vnode = vnode;
 		    __entry->off = off;
-		    __entry->i_size = i_size;
+		    __entry->i_size = i_size_read(&vnode->netfs.inode);
 			   ),
 
 	    TP_printk("vn=%p %llx/%llx",
@@ -1017,13 +1076,129 @@ TRACE_EVENT(afs_edit_dir,
 		    __entry->name[__len] = 0;
 			   ),
 
-	    TP_printk("d=%x:%x %s %s %u[%u] f=%x:%x \"%s\"",
+	    TP_printk("di=%x:%x %s %s %u[%u] fi=%x:%x \"%s\"",
 		      __entry->vnode, __entry->unique,
 		      __print_symbolic(__entry->why, afs_edit_dir_reasons),
 		      __print_symbolic(__entry->op, afs_edit_dir_ops),
 		      __entry->block, __entry->slot,
 		      __entry->f_vnode, __entry->f_unique,
 		      __entry->name)
+	    );
+
+TRACE_EVENT(afs_dir_invalid,
+	    TP_PROTO(const struct afs_vnode *dvnode, enum afs_dir_invalid_trace trace),
+
+	    TP_ARGS(dvnode, trace),
+
+	    TP_STRUCT__entry(
+		    __field(unsigned int,		vnode)
+		    __field(unsigned int,		unique)
+		    __field(enum afs_dir_invalid_trace,	trace)
+			     ),
+
+	    TP_fast_assign(
+		    __entry->vnode	= dvnode->fid.vnode;
+		    __entry->unique	= dvnode->fid.unique;
+		    __entry->trace	= trace;
+			   ),
+
+	    TP_printk("di=%x:%x %s",
+		      __entry->vnode, __entry->unique,
+		      __print_symbolic(__entry->trace, afs_dir_invalid_traces))
+	    );
+
+TRACE_EVENT(afs_cb_promise,
+	    TP_PROTO(const struct afs_vnode *vnode, enum afs_cb_promise_trace trace),
+
+	    TP_ARGS(vnode, trace),
+
+	    TP_STRUCT__entry(
+		    __field(unsigned int,		vnode)
+		    __field(unsigned int,		unique)
+		    __field(enum afs_cb_promise_trace,	trace)
+			     ),
+
+	    TP_fast_assign(
+		    __entry->vnode	= vnode->fid.vnode;
+		    __entry->unique	= vnode->fid.unique;
+		    __entry->trace	= trace;
+			   ),
+
+	    TP_printk("di=%x:%x %s",
+		      __entry->vnode, __entry->unique,
+		      __print_symbolic(__entry->trace, afs_cb_promise_traces))
+	    );
+
+TRACE_EVENT(afs_vnode_invalid,
+	    TP_PROTO(const struct afs_vnode *vnode, enum afs_vnode_invalid_trace trace),
+
+	    TP_ARGS(vnode, trace),
+
+	    TP_STRUCT__entry(
+		    __field(unsigned int,		vnode)
+		    __field(unsigned int,		unique)
+		    __field(enum afs_vnode_invalid_trace, trace)
+			     ),
+
+	    TP_fast_assign(
+		    __entry->vnode	= vnode->fid.vnode;
+		    __entry->unique	= vnode->fid.unique;
+		    __entry->trace	= trace;
+			   ),
+
+	    TP_printk("di=%x:%x %s",
+		      __entry->vnode, __entry->unique,
+		      __print_symbolic(__entry->trace, afs_vnode_invalid_traces))
+	    );
+
+TRACE_EVENT(afs_set_dv,
+	    TP_PROTO(const struct afs_vnode *dvnode, u64 new_dv),
+
+	    TP_ARGS(dvnode, new_dv),
+
+	    TP_STRUCT__entry(
+		    __field(unsigned int,		vnode)
+		    __field(unsigned int,		unique)
+		    __field(u64,			old_dv)
+		    __field(u64,			new_dv)
+			     ),
+
+	    TP_fast_assign(
+		    __entry->vnode	= dvnode->fid.vnode;
+		    __entry->unique	= dvnode->fid.unique;
+		    __entry->old_dv	= dvnode->status.data_version;
+		    __entry->new_dv	= new_dv;
+			   ),
+
+	    TP_printk("di=%x:%x dv=%llx -> dv=%llx",
+		      __entry->vnode, __entry->unique,
+		      __entry->old_dv, __entry->new_dv)
+	    );
+
+TRACE_EVENT(afs_dv_mismatch,
+	    TP_PROTO(const struct afs_vnode *dvnode, u64 before_dv, int delta, u64 new_dv),
+
+	    TP_ARGS(dvnode, before_dv, delta, new_dv),
+
+	    TP_STRUCT__entry(
+		    __field(unsigned int,		vnode)
+		    __field(unsigned int,		unique)
+		    __field(int,			delta)
+		    __field(u64,			before_dv)
+		    __field(u64,			new_dv)
+			     ),
+
+	    TP_fast_assign(
+		    __entry->vnode	= dvnode->fid.vnode;
+		    __entry->unique	= dvnode->fid.unique;
+		    __entry->delta	= delta;
+		    __entry->before_dv	= before_dv;
+		    __entry->new_dv	= new_dv;
+			   ),
+
+	    TP_printk("di=%x:%x xdv=%llx+%d dv=%llx",
+		      __entry->vnode, __entry->unique,
+		      __entry->before_dv, __entry->delta, __entry->new_dv)
 	    );
 
 TRACE_EVENT(afs_protocol_error,
@@ -1384,25 +1559,29 @@ TRACE_EVENT(afs_server,
 	    );
 
 TRACE_EVENT(afs_volume,
-	    TP_PROTO(afs_volid_t vid, int ref, enum afs_volume_trace reason),
+	    TP_PROTO(unsigned int debug_id, afs_volid_t vid, int ref,
+		     enum afs_volume_trace reason),
 
-	    TP_ARGS(vid, ref, reason),
+	    TP_ARGS(debug_id, vid, ref, reason),
 
 	    TP_STRUCT__entry(
+		    __field(unsigned int,		debug_id)
 		    __field(afs_volid_t,		vid)
 		    __field(int,			ref)
 		    __field(enum afs_volume_trace,	reason)
 			     ),
 
 	    TP_fast_assign(
-		    __entry->vid = vid;
-		    __entry->ref = ref;
-		    __entry->reason = reason;
+		    __entry->debug_id	= debug_id;
+		    __entry->vid	= vid;
+		    __entry->ref	= ref;
+		    __entry->reason	= reason;
 			   ),
 
-	    TP_printk("V=%llx %s ur=%d",
-		      __entry->vid,
+	    TP_printk("V=%08x %s vid=%llx r=%d",
+		      __entry->debug_id,
 		      __print_symbolic(__entry->reason, afs_volume_traces),
+		      __entry->vid,
 		      __entry->ref)
 	    );
 
@@ -1624,6 +1803,36 @@ TRACE_EVENT(afs_make_call,
 		      __entry->fid.vid,
 		      __entry->fid.vnode,
 		      __entry->fid.unique)
+	    );
+
+TRACE_EVENT(afs_read_recv,
+	    TP_PROTO(const struct afs_operation *op, const struct afs_call *call),
+
+	    TP_ARGS(op, call),
+
+	    TP_STRUCT__entry(
+		    __field(unsigned int,		rreq)
+		    __field(unsigned int,		sreq)
+		    __field(unsigned int,		op)
+		    __field(unsigned int,		op_flags)
+		    __field(unsigned int,		call)
+		    __field(enum afs_call_state,	call_state)
+			     ),
+
+	    TP_fast_assign(
+		    __entry->op = op->debug_id;
+		    __entry->sreq = op->fetch.subreq->debug_index;
+		    __entry->rreq = op->fetch.subreq->rreq->debug_id;
+		    __entry->op_flags = op->flags;
+		    __entry->call = call->debug_id;
+		    __entry->call_state = call->state;
+			   ),
+
+	    TP_printk("R=%08x[%x] OP=%08x c=%08x cs=%x of=%x",
+		      __entry->rreq, __entry->sreq,
+		      __entry->op,
+		      __entry->call, __entry->call_state,
+		      __entry->op_flags)
 	    );
 
 #endif /* _TRACE_AFS_H */

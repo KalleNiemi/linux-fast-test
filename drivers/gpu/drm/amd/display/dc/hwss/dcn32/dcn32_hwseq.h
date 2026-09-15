@@ -54,12 +54,10 @@ bool dcn32_set_input_transfer_func(struct dc *dc,
 				struct pipe_ctx *pipe_ctx,
 				const struct dc_plane_state *plane_state);
 
-bool dcn32_set_mpc_shaper_3dlut(
-	struct pipe_ctx *pipe_ctx, const struct dc_stream_state *stream);
+bool dcn32_set_mpc_shaper_3dlut(struct dpp *dpp_base, struct mpc *mpc,
+	int mpcc_id, const struct dc_stream_state *stream);
 
-bool dcn32_set_output_transfer_func(struct dc *dc,
-				struct pipe_ctx *pipe_ctx,
-				const struct dc_stream_state *stream);
+bool dcn32_set_output_transfer_func(struct set_output_transfer_func_params *params);
 
 void dcn32_init_hw(struct dc *dc);
 
@@ -118,11 +116,6 @@ void dcn32_disable_phantom_streams(struct dc *dc, struct dc_state *context);
 void dcn32_init_blank(
 		struct dc *dc,
 		struct timing_generator *tg);
-
-void dcn32_blank_phantom(struct dc *dc,
-		struct timing_generator *tg,
-		int width,
-		int height);
 
 bool dcn32_is_pipe_topology_transition_seamless(struct dc *dc,
 		const struct dc_state *cur_ctx,

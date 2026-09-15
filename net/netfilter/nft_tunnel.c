@@ -60,15 +60,15 @@ static void nft_tunnel_get_eval(const struct nft_expr *expr,
 			regs->verdict.code = NFT_BREAK;
 		break;
 	default:
-		WARN_ON(1);
+		DEBUG_NET_WARN_ON_ONCE(1);
 		regs->verdict.code = NFT_BREAK;
 	}
 }
 
 static const struct nla_policy nft_tunnel_policy[NFTA_TUNNEL_MAX + 1] = {
 	[NFTA_TUNNEL_KEY]	= NLA_POLICY_MAX(NLA_BE32, 255),
-	[NFTA_TUNNEL_DREG]	= { .type = NLA_U32 },
-	[NFTA_TUNNEL_MODE]	= NLA_POLICY_MAX(NLA_BE32, 255),
+	[NFTA_TUNNEL_DREG]	= NLA_POLICY_MAX(NLA_BE32, NFT_REG32_MAX),
+	[NFTA_TUNNEL_MODE]	= NLA_POLICY_MAX(NLA_BE32, NFT_TUNNEL_MODE_MAX),
 };
 
 static int nft_tunnel_get_init(const struct nft_ctx *ctx,
@@ -408,7 +408,7 @@ static const struct nla_policy nft_tunnel_key_policy[NFTA_TUNNEL_KEY_MAX + 1] = 
 	[NFTA_TUNNEL_KEY_IP]	= { .type = NLA_NESTED, },
 	[NFTA_TUNNEL_KEY_IP6]	= { .type = NLA_NESTED, },
 	[NFTA_TUNNEL_KEY_ID]	= { .type = NLA_U32, },
-	[NFTA_TUNNEL_KEY_FLAGS]	= { .type = NLA_U32, },
+	[NFTA_TUNNEL_KEY_FLAGS]	= NLA_POLICY_MASK(NLA_BE32, NFT_TUNNEL_F_MASK),
 	[NFTA_TUNNEL_KEY_TOS]	= { .type = NLA_U8, },
 	[NFTA_TUNNEL_KEY_TTL]	= { .type = NLA_U8, },
 	[NFTA_TUNNEL_KEY_SPORT]	= { .type = NLA_U16, },
@@ -471,10 +471,7 @@ static int nft_tunnel_obj_init(const struct nft_ctx *ctx,
 	}
 	if (tb[NFTA_TUNNEL_KEY_TOS])
 		info.key.tos = nla_get_u8(tb[NFTA_TUNNEL_KEY_TOS]);
-	if (tb[NFTA_TUNNEL_KEY_TTL])
-		info.key.ttl = nla_get_u8(tb[NFTA_TUNNEL_KEY_TTL]);
-	else
-		info.key.ttl = U8_MAX;
+	info.key.ttl = nla_get_u8_default(tb[NFTA_TUNNEL_KEY_TTL], U8_MAX);
 
 	if (tb[NFTA_TUNNEL_KEY_OPTS]) {
 		err = nft_tunnel_obj_opts_init(ctx, tb[NFTA_TUNNEL_KEY_OPTS],

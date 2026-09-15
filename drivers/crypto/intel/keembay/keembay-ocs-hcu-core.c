@@ -16,7 +16,6 @@
 #include <linux/err.h>
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/string.h>
@@ -1205,10 +1204,8 @@ static int kmb_ocs_hcu_probe(struct platform_device *pdev)
 	rc = devm_request_threaded_irq(&pdev->dev, hcu_dev->irq,
 				       ocs_hcu_irq_handler, NULL, 0,
 				       "keembay-ocs-hcu", hcu_dev);
-	if (rc < 0) {
-		dev_err(dev, "Could not request IRQ.\n");
+	if (rc < 0)
 		return rc;
-	}
 
 	INIT_LIST_HEAD(&hcu_dev->list);
 
@@ -1252,7 +1249,7 @@ list_del:
 /* The OCS driver is a platform device. */
 static struct platform_driver kmb_ocs_hcu_driver = {
 	.probe = kmb_ocs_hcu_probe,
-	.remove_new = kmb_ocs_hcu_remove,
+	.remove = kmb_ocs_hcu_remove,
 	.driver = {
 			.name = DRV_NAME,
 			.of_match_table = kmb_ocs_hcu_of_match,

@@ -37,19 +37,6 @@ xdr_encode_netobj(__be32 *p, const struct xdr_netobj *obj)
 }
 EXPORT_SYMBOL_GPL(xdr_encode_netobj);
 
-__be32 *
-xdr_decode_netobj(__be32 *p, struct xdr_netobj *obj)
-{
-	unsigned int	len;
-
-	if ((len = be32_to_cpu(*p++)) > XDR_MAX_NETOBJ)
-		return NULL;
-	obj->len  = len;
-	obj->data = (u8 *) p;
-	return p + XDR_QUADLEN(len);
-}
-EXPORT_SYMBOL_GPL(xdr_decode_netobj);
-
 /**
  * xdr_encode_opaque_fixed - Encode fixed length opaque data
  * @p: pointer to current position in XDR buffer.
@@ -102,21 +89,6 @@ xdr_encode_string(__be32 *p, const char *string)
 }
 EXPORT_SYMBOL_GPL(xdr_encode_string);
 
-__be32 *
-xdr_decode_string_inplace(__be32 *p, char **sp,
-			  unsigned int *lenp, unsigned int maxlen)
-{
-	u32 len;
-
-	len = be32_to_cpu(*p++);
-	if (len > maxlen)
-		return NULL;
-	*lenp = len;
-	*sp = (char *) p;
-	return p + XDR_QUADLEN(len);
-}
-EXPORT_SYMBOL_GPL(xdr_decode_string_inplace);
-
 /**
  * xdr_terminate_string - '\0'-terminate a string residing in an xdr_buf
  * @buf: XDR buffer where string resides
@@ -146,7 +118,7 @@ xdr_alloc_bvec(struct xdr_buf *buf, gfp_t gfp)
 	size_t i, n = xdr_buf_pagecount(buf);
 
 	if (n != 0 && buf->bvec == NULL) {
-		buf->bvec = kmalloc_array(n, sizeof(buf->bvec[0]), gfp);
+		buf->bvec = kmalloc_objs(buf->bvec[0], n, gfp);
 		if (!buf->bvec)
 			return -ENOMEM;
 		for (i = 0; i < n; i++) {
@@ -218,6 +190,7 @@ bvec_overflow:
 	pr_warn_once("%s: bio_vec array overflow\n", __func__);
 	return -ESERVERFAULT;
 }
+EXPORT_SYMBOL_GPL(xdr_buf_to_bvec);
 
 /**
  * xdr_buf_to_sg - Populate a scatterlist from an xdr_buf range
@@ -398,8 +371,7 @@ int xdr_buf_to_sg_alloc(const struct xdr_buf *buf, unsigned int offset,
 		unsigned int overflow_nents = nsg - sg_head_nents + 1;
 		struct scatterlist *overflow;
 
-		overflow = kmalloc_array(overflow_nents, sizeof(*overflow),
-					 gfp);
+		overflow = kmalloc_objs(*overflow, overflow_nents, gfp);
 		if (!overflow)
 			return -ENOMEM;
 
@@ -1196,21 +1168,18 @@ EXPORT_SYMBOL_GPL(xdr_init_encode);
  * xdr_init_encode_pages - Initialize an xdr_stream for encoding into pages
  * @xdr: pointer to xdr_stream struct
  * @buf: pointer to XDR buffer into which to encode data
- * @pages: list of pages to decode into
- * @rqst: pointer to controlling rpc_rqst, for debugging
  *
  */
-void xdr_init_encode_pages(struct xdr_stream *xdr, struct xdr_buf *buf,
-			   struct page **pages, struct rpc_rqst *rqst)
+void xdr_init_encode_pages(struct xdr_stream *xdr, struct xdr_buf *buf)
 {
 	xdr_reset_scratch_buffer(xdr);
 
 	xdr->buf = buf;
-	xdr->page_ptr = pages;
+	xdr->page_ptr = buf->pages;
 	xdr->iov = NULL;
-	xdr->p = page_address(*pages);
+	xdr->p = page_address(*xdr->page_ptr);
 	xdr->end = (void *)xdr->p + min_t(u32, buf->buflen, PAGE_SIZE);
-	xdr->rqst = rqst;
+	xdr->rqst = NULL;
 }
 EXPORT_SYMBOL_GPL(xdr_init_encode_pages);
 
@@ -1301,6 +1270,12 @@ out_overflow:
  * Checks that we have enough buffer space to encode 'nbytes' more
  * bytes of data. If so, update the total xdr_buf length, and
  * adjust the length of the current kvec.
+ *
+ * The returned pointer is valid only until the next call to
+ * xdr_reserve_space() or xdr_commit_encode() on @xdr. The current
+ * implementation of this API guarantees that space reserved for a
+ * four-byte data item remains valid until @xdr is destroyed, but
+ * that might not always be true in the future.
  */
 __be32 * xdr_reserve_space(struct xdr_stream *xdr, size_t nbytes)
 {
@@ -2073,7 +2048,7 @@ void xdr_buf_trim(struct xdr_buf *buf, unsigned int len)
 		trim -= cur;
 	}
 fix_len:
-	buf->len -= (len - trim);
+	buf->len -= min_t(unsigned int, buf->len, len - trim);
 }
 EXPORT_SYMBOL_GPL(xdr_buf_trim);
 
@@ -2376,155 +2351,6 @@ int xdr_encode_array2(const struct xdr_buf *buf, unsigned int base,
 	return xdr_xcode_array2(buf, base, desc, 1);
 }
 EXPORT_SYMBOL_GPL(xdr_encode_array2);
-
-int xdr_process_buf(const struct xdr_buf *buf, unsigned int offset,
-		    unsigned int len,
-		    int (*actor)(struct scatterlist *, void *), void *data)
-{
-	int i, ret = 0;
-	unsigned int page_len, thislen, page_offset;
-	struct scatterlist      sg[1];
-
-	sg_init_table(sg, 1);
-
-	if (offset >= buf->head[0].iov_len) {
-		offset -= buf->head[0].iov_len;
-	} else {
-		thislen = buf->head[0].iov_len - offset;
-		if (thislen > len)
-			thislen = len;
-		sg_set_buf(sg, buf->head[0].iov_base + offset, thislen);
-		ret = actor(sg, data);
-		if (ret)
-			goto out;
-		offset = 0;
-		len -= thislen;
-	}
-	if (len == 0)
-		goto out;
-
-	if (offset >= buf->page_len) {
-		offset -= buf->page_len;
-	} else {
-		page_len = buf->page_len - offset;
-		if (page_len > len)
-			page_len = len;
-		len -= page_len;
-		page_offset = (offset + buf->page_base) & (PAGE_SIZE - 1);
-		i = (offset + buf->page_base) >> PAGE_SHIFT;
-		thislen = PAGE_SIZE - page_offset;
-		do {
-			if (thislen > page_len)
-				thislen = page_len;
-			sg_set_page(sg, buf->pages[i], thislen, page_offset);
-			ret = actor(sg, data);
-			if (ret)
-				goto out;
-			page_len -= thislen;
-			i++;
-			page_offset = 0;
-			thislen = PAGE_SIZE;
-		} while (page_len != 0);
-		offset = 0;
-	}
-	if (len == 0)
-		goto out;
-	if (offset < buf->tail[0].iov_len) {
-		thislen = buf->tail[0].iov_len - offset;
-		if (thislen > len)
-			thislen = len;
-		sg_set_buf(sg, buf->tail[0].iov_base + offset, thislen);
-		ret = actor(sg, data);
-		len -= thislen;
-	}
-	if (len != 0)
-		ret = -EINVAL;
-out:
-	return ret;
-}
-EXPORT_SYMBOL_GPL(xdr_process_buf);
-
-/**
- * xdr_stream_decode_opaque - Decode variable length opaque
- * @xdr: pointer to xdr_stream
- * @ptr: location to store opaque data
- * @size: size of storage buffer @ptr
- *
- * Return values:
- *   On success, returns size of object stored in *@ptr
- *   %-EBADMSG on XDR buffer overflow
- *   %-EMSGSIZE on overflow of storage buffer @ptr
- */
-ssize_t xdr_stream_decode_opaque(struct xdr_stream *xdr, void *ptr, size_t size)
-{
-	ssize_t ret;
-	void *p;
-
-	ret = xdr_stream_decode_opaque_inline(xdr, &p, size);
-	if (ret <= 0)
-		return ret;
-	memcpy(ptr, p, ret);
-	return ret;
-}
-EXPORT_SYMBOL_GPL(xdr_stream_decode_opaque);
-
-/**
- * xdr_stream_decode_opaque_dup - Decode and duplicate variable length opaque
- * @xdr: pointer to xdr_stream
- * @ptr: location to store pointer to opaque data
- * @maxlen: maximum acceptable object size
- * @gfp_flags: GFP mask to use
- *
- * Return values:
- *   On success, returns size of object stored in *@ptr
- *   %-EBADMSG on XDR buffer overflow
- *   %-EMSGSIZE if the size of the object would exceed @maxlen
- *   %-ENOMEM on memory allocation failure
- */
-ssize_t xdr_stream_decode_opaque_dup(struct xdr_stream *xdr, void **ptr,
-		size_t maxlen, gfp_t gfp_flags)
-{
-	ssize_t ret;
-	void *p;
-
-	ret = xdr_stream_decode_opaque_inline(xdr, &p, maxlen);
-	if (ret > 0) {
-		*ptr = kmemdup(p, ret, gfp_flags);
-		if (*ptr != NULL)
-			return ret;
-		ret = -ENOMEM;
-	}
-	*ptr = NULL;
-	return ret;
-}
-EXPORT_SYMBOL_GPL(xdr_stream_decode_opaque_dup);
-
-/**
- * xdr_stream_decode_string - Decode variable length string
- * @xdr: pointer to xdr_stream
- * @str: location to store string
- * @size: size of storage buffer @str
- *
- * Return values:
- *   On success, returns length of NUL-terminated string stored in *@str
- *   %-EBADMSG on XDR buffer overflow
- *   %-EMSGSIZE on overflow of storage buffer @str
- */
-ssize_t xdr_stream_decode_string(struct xdr_stream *xdr, char *str, size_t size)
-{
-	ssize_t ret;
-	void *p;
-
-	ret = xdr_stream_decode_opaque_inline(xdr, &p, size);
-	if (ret > 0) {
-		memcpy(str, p, ret);
-		str[ret] = '\0';
-		return strlen(str);
-	}
-	*str = '\0';
-	return ret;
-}
-EXPORT_SYMBOL_GPL(xdr_stream_decode_string);
 
 /**
  * xdr_stream_decode_string_dup - Decode and duplicate variable length string

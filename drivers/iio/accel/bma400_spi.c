@@ -7,7 +7,6 @@
  */
 #include <linux/bits.h>
 #include <linux/init.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/regmap.h>
 #include <linux/spi/spi.h>
@@ -88,7 +87,7 @@ static int bma400_spi_probe(struct spi_device *spi)
 }
 
 static const struct spi_device_id bma400_spi_ids[] = {
-	{ "bma400", 0 },
+	{ .name = "bma400" },
 	{ }
 };
 MODULE_DEVICE_TABLE(spi, bma400_spi_ids);
@@ -112,4 +111,4 @@ module_spi_driver(bma400_spi_driver);
 MODULE_AUTHOR("Dan Robertson <dan@dlrobertson.com>");
 MODULE_DESCRIPTION("Bosch BMA400 triaxial acceleration sensor (SPI)");
 MODULE_LICENSE("GPL");
-MODULE_IMPORT_NS(IIO_BMA400);
+MODULE_IMPORT_NS("IIO_BMA400");

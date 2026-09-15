@@ -16,7 +16,7 @@
 
 #include <asm/irq_vectors.h>
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 #include <linux/percpu.h>
 #include <linux/profile.h>
@@ -110,10 +110,6 @@ static inline void lock_vector_lock(void) {}
 static inline void unlock_vector_lock(void) {}
 #endif
 
-/* Statistics */
-extern atomic_t irq_err_count;
-extern atomic_t irq_mis_count;
-
 extern void elcr_set_level_irq(unsigned int irq);
 
 extern char irq_entries_start[];
@@ -130,6 +126,6 @@ extern char spurious_entries_start[];
 typedef struct irq_desc* vector_irq_t[NR_VECTORS];
 DECLARE_PER_CPU(vector_irq_t, vector_irq);
 
-#endif /* !ASSEMBLY_ */
+#endif /* !__ASSEMBLER__ */
 
 #endif /* _ASM_X86_HW_IRQ_H */

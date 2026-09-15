@@ -24,7 +24,6 @@
 #include <linux/of.h>
 
 #define I2C_PNX_TIMEOUT_DEFAULT		10 /* msec */
-#define I2C_PNX_SPEED_KHZ_DEFAULT	100
 #define I2C_PNX_REGION_SIZE		0x100
 
 struct i2c_pnx_mif {
@@ -580,7 +579,7 @@ static u32 i2c_pnx_func(struct i2c_adapter *adapter)
 }
 
 static const struct i2c_algorithm pnx_algorithm = {
-	.master_xfer = i2c_pnx_xfer,
+	.xfer = i2c_pnx_xfer,
 	.functionality = i2c_pnx_func,
 };
 
@@ -606,12 +605,12 @@ static DEFINE_SIMPLE_DEV_PM_OPS(i2c_pnx_pm,
 
 static int i2c_pnx_probe(struct platform_device *pdev)
 {
+	u32 speed = I2C_MAX_STANDARD_MODE_FREQ;
 	unsigned long tmp;
 	int ret = 0;
 	struct i2c_pnx_algo_data *alg_data;
 	unsigned long freq;
 	struct resource *res;
-	u32 speed = I2C_PNX_SPEED_KHZ_DEFAULT * 1000;
 
 	alg_data = devm_kzalloc(&pdev->dev, sizeof(*alg_data), GFP_KERNEL);
 	if (!alg_data)
@@ -733,7 +732,7 @@ static struct platform_driver i2c_pnx_driver = {
 		.pm = pm_sleep_ptr(&i2c_pnx_pm),
 	},
 	.probe = i2c_pnx_probe,
-	.remove_new = i2c_pnx_remove,
+	.remove = i2c_pnx_remove,
 };
 
 static int __init i2c_adap_pnx_init(void)

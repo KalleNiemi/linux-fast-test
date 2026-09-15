@@ -42,9 +42,11 @@ struct seq_midisynth {
 	struct snd_rawmidi *rmidi;
 	int device;
 	int subdevice;
+	struct snd_rawmidi_substream __rcu *input_substream;
+	snd_use_lock_t input_use_lock;	/* in-flight event_input users */
 	struct snd_rawmidi_file input_rfile;
-	spinlock_t output_lock;		/* protects output_rfile publication */
 	snd_use_lock_t output_use_lock;	/* in-flight event_input users */
+	struct snd_rawmidi_substream __rcu *output_substream;
 	struct snd_rawmidi_file output_rfile;
 	int seq_client;
 	int seq_port;
@@ -76,6 +78,14 @@ static void snd_midi_input_event(struct snd_rawmidi_substream *substream)
 	msynth = runtime->private_data;
 	if (msynth == NULL)
 		return;
+
+	scoped_guard(rcu) {
+		if (rcu_dereference(msynth->input_substream) != substream)
+			return;
+
+		snd_use_lock_use(&msynth->input_use_lock);
+	}
+
 	memset(&ev, 0, sizeof(ev));
 	while (runtime->avail > 0) {
 		res = snd_rawmidi_kernel_read(substream, buf, sizeof(buf));
@@ -95,6 +105,8 @@ static void snd_midi_input_event(struct snd_rawmidi_substream *substream)
 			memset(&ev, 0, sizeof(ev));
 		}
 	}
+
+	snd_use_lock_free(&msynth->input_use_lock);
 }
 
 static int dump_midi(struct snd_rawmidi_substream *substream, const char *buf, int count)
@@ -134,8 +146,8 @@ static int event_process_midi(struct snd_seq_event *ev, int direct,
 	if (snd_BUG_ON(!msynth))
 		return -EINVAL;
 
-	scoped_guard(spinlock_irqsave, &msynth->output_lock) {
-		substream = msynth->output_rfile.output;
+	scoped_guard(rcu) {
+		substream = rcu_dereference(msynth->output_substream);
 		if (!substream)
 			return -ENODEV;
 		snd_use_lock_use(&msynth->output_use_lock);
@@ -177,7 +189,7 @@ static int snd_seq_midisynth_new(struct seq_midisynth *msynth,
 	msynth->card = card;
 	msynth->device = device;
 	msynth->subdevice = subdevice;
-	spin_lock_init(&msynth->output_lock);
+	snd_use_lock_init(&msynth->input_use_lock);
 	snd_use_lock_init(&msynth->output_use_lock);
 	return 0;
 }
@@ -188,28 +200,31 @@ static int midisynth_subscribe(void *private_data, struct snd_seq_port_subscribe
 	int err;
 	struct seq_midisynth *msynth = private_data;
 	struct snd_rawmidi_runtime *runtime;
+	struct snd_rawmidi_file rfile = {};
 	struct snd_rawmidi_params params;
 
 	/* open midi port */
 	err = snd_rawmidi_kernel_open(msynth->rmidi, msynth->subdevice,
 				      SNDRV_RAWMIDI_LFLG_INPUT,
-				      &msynth->input_rfile);
+				      &rfile);
 	if (err < 0) {
 		pr_debug("ALSA: seq_midi: midi input open failed!!!\n");
 		return err;
 	}
-	runtime = msynth->input_rfile.input->runtime;
+	runtime = rfile.input->runtime;
 	memset(&params, 0, sizeof(params));
 	params.avail_min = 1;
 	params.buffer_size = input_buffer_size;
-	err = snd_rawmidi_input_params(msynth->input_rfile.input, &params);
+	err = snd_rawmidi_input_params(rfile.input, &params);
 	if (err < 0) {
-		snd_rawmidi_kernel_release(&msynth->input_rfile);
+		snd_rawmidi_kernel_release(&rfile);
 		return err;
 	}
 	snd_midi_event_reset_encode(msynth->parser);
 	runtime->event = snd_midi_input_event;
 	runtime->private_data = msynth;
+	msynth->input_rfile = rfile;
+	rcu_assign_pointer(msynth->input_substream, rfile.input);
 	snd_rawmidi_kernel_read(msynth->input_rfile.input, NULL, 0);
 	return 0;
 }
@@ -219,10 +234,19 @@ static int midisynth_unsubscribe(void *private_data, struct snd_seq_port_subscri
 {
 	int err;
 	struct seq_midisynth *msynth = private_data;
+	struct snd_rawmidi_file rfile;
 
-	if (snd_BUG_ON(!msynth->input_rfile.input))
+	rcu_assign_pointer(msynth->input_substream, NULL);
+	synchronize_rcu();
+	snd_use_lock_sync(&msynth->input_use_lock);
+
+	rfile = msynth->input_rfile;
+	msynth->input_rfile = (struct snd_rawmidi_file){};
+
+	if (snd_BUG_ON(!rfile.input))
 		return -EINVAL;
-	err = snd_rawmidi_kernel_release(&msynth->input_rfile);
+
+	err = snd_rawmidi_kernel_release(&rfile);
 	return err;
 }
 
@@ -252,8 +276,8 @@ static int midisynth_use(void *private_data, struct snd_seq_port_subscribe *info
 		return err;
 	}
 	snd_midi_event_reset_decode(msynth->parser);
-	scoped_guard(spinlock_irqsave, &msynth->output_lock)
-		msynth->output_rfile = rfile;
+	msynth->output_rfile = rfile;
+	rcu_assign_pointer(msynth->output_substream, rfile.output);
 	return 0;
 }
 
@@ -261,17 +285,16 @@ static int midisynth_use(void *private_data, struct snd_seq_port_subscribe *info
 static int midisynth_unuse(void *private_data, struct snd_seq_port_subscribe *info)
 {
 	struct seq_midisynth *msynth = private_data;
-	struct snd_rawmidi_file rfile = {};
+	struct snd_rawmidi_file rfile;
 
-	scoped_guard(spinlock_irqsave, &msynth->output_lock) {
-		rfile = msynth->output_rfile;
-		msynth->output_rfile = (struct snd_rawmidi_file){};
-	}
+	rcu_assign_pointer(msynth->output_substream, NULL);
+	synchronize_rcu();
+	snd_use_lock_sync(&msynth->output_use_lock);
+	rfile = msynth->output_rfile;
+	msynth->output_rfile = (struct snd_rawmidi_file){};
 
 	if (snd_BUG_ON(!rfile.output))
 		return -EINVAL;
-
-	snd_use_lock_sync(&msynth->output_use_lock);
 	snd_rawmidi_drain_output(rfile.output);
 	return snd_rawmidi_kernel_release(&rfile);
 }
@@ -292,13 +315,10 @@ static void snd_seq_midisynth_delete(struct seq_midisynth *msynth)
 
 /* register new midi synth port */
 static int
-snd_seq_midisynth_probe(struct device *_dev)
+snd_seq_midisynth_probe(struct snd_seq_device *dev)
 {
-	struct snd_seq_device *dev = to_seq_dev(_dev);
 	struct seq_midisynth_client *client;
 	struct seq_midisynth *msynth, *ms;
-	struct snd_seq_port_info *port __free(kfree) = NULL;
-	struct snd_rawmidi_info *info __free(kfree) = NULL;
 	struct snd_rawmidi *rmidi = dev->private_data;
 	int newclient = 0;
 	unsigned int p, ports;
@@ -309,7 +329,9 @@ snd_seq_midisynth_probe(struct device *_dev)
 
 	if (snd_BUG_ON(!card || device < 0 || device >= SNDRV_RAWMIDI_DEVICES))
 		return -EINVAL;
-	info = kmalloc(sizeof(*info), GFP_KERNEL);
+
+	struct snd_rawmidi_info *info __free(kfree) =
+		kmalloc_obj(*info);
 	if (! info)
 		return -ENOMEM;
 	info->device = device;
@@ -333,7 +355,7 @@ snd_seq_midisynth_probe(struct device *_dev)
 	client = synths[card->number];
 	if (client == NULL) {
 		newclient = 1;
-		client = kzalloc(sizeof(*client), GFP_KERNEL);
+		client = kzalloc_obj(*client);
 		if (client == NULL)
 			return -ENOMEM;
 		client->seq_client =
@@ -346,8 +368,10 @@ snd_seq_midisynth_probe(struct device *_dev)
 		}
 	}
 
-	msynth = kcalloc(ports, sizeof(struct seq_midisynth), GFP_KERNEL);
-	port = kmalloc(sizeof(*port), GFP_KERNEL);
+	msynth = kzalloc_objs(struct seq_midisynth, ports);
+
+	struct snd_seq_port_info *port __free(kfree) =
+		kmalloc_obj(*port);
 	if (msynth == NULL || port == NULL)
 		goto __nomem;
 
@@ -371,7 +395,7 @@ snd_seq_midisynth_probe(struct device *_dev)
 			info->stream = SNDRV_RAWMIDI_STREAM_INPUT;
 		info->subdevice = p;
 		if (snd_rawmidi_info_select(card, info) >= 0)
-			strcpy(port->name, info->subname);
+			strscpy(port->name, info->subname);
 		if (! port->name[0]) {
 			if (info->name[0]) {
 				if (ports > 1)
@@ -438,10 +462,9 @@ snd_seq_midisynth_probe(struct device *_dev)
 }
 
 /* release midi synth port */
-static int
-snd_seq_midisynth_remove(struct device *_dev)
+static void
+snd_seq_midisynth_remove(struct snd_seq_device *dev)
 {
-	struct snd_seq_device *dev = to_seq_dev(_dev);
 	struct seq_midisynth_client *client;
 	struct seq_midisynth *msynth;
 	struct snd_card *card = dev->card;
@@ -450,7 +473,7 @@ snd_seq_midisynth_remove(struct device *_dev)
 	guard(mutex)(&register_mutex);
 	client = synths[card->number];
 	if (client == NULL || client->ports[device] == NULL)
-		return -ENODEV;
+		return;
 	ports = client->ports_per_device[device];
 	client->ports_per_device[device] = 0;
 	msynth = client->ports[device];
@@ -464,14 +487,13 @@ snd_seq_midisynth_remove(struct device *_dev)
 		synths[card->number] = NULL;
 		kfree(client);
 	}
-	return 0;
 }
 
 static struct snd_seq_driver seq_midisynth_driver = {
+	.probe = snd_seq_midisynth_probe,
+	.remove = snd_seq_midisynth_remove,
 	.driver = {
 		.name = KBUILD_MODNAME,
-		.probe = snd_seq_midisynth_probe,
-		.remove = snd_seq_midisynth_remove,
 	},
 	.id = SNDRV_SEQ_DEV_ID_MIDISYNTH,
 	.argsize = 0,

@@ -23,13 +23,15 @@
  */
 
 #include <linux/dma-mapping.h>
+#include <linux/cgroup_dmem.h>
+#include <linux/pm_runtime.h>
 #include <drm/ttm/ttm_range_manager.h>
+#include <drm/drm_drv.h>
 #include <drm/drm_buddy.h>
 
 #include "amdgpu.h"
 #include "amdgpu_vm.h"
 #include "amdgpu_res_cursor.h"
-#include "amdgpu_atomfirmware.h"
 #include "atom.h"
 
 #define AMDGPU_MAX_SG_SEGMENT_SIZE	(2UL << 30)
@@ -341,7 +343,7 @@ int amdgpu_vram_mgr_reserve_range(struct amdgpu_vram_mgr *mgr,
 {
 	struct amdgpu_vram_reservation *rsv;
 
-	rsv = kzalloc(sizeof(*rsv), GFP_KERNEL);
+	rsv = kzalloc_obj(*rsv);
 	if (!rsv)
 		return -ENOMEM;
 
@@ -400,43 +402,33 @@ out:
 	return ret;
 }
 
-static void amdgpu_dummy_vram_mgr_debug(struct ttm_resource_manager *man,
-				  struct drm_printer *printer)
+int amdgpu_vram_mgr_query_address_block_info(struct amdgpu_vram_mgr *mgr,
+			uint64_t address, struct amdgpu_vram_block_info *info)
 {
-	DRM_DEBUG_DRIVER("Dummy vram mgr debug\n");
-}
+	struct amdgpu_vram_mgr_resource *vres;
+	struct gpu_buddy_block *block;
+	u64 start, size;
+	int ret = -ENOENT;
 
-static bool amdgpu_dummy_vram_mgr_compatible(struct ttm_resource_manager *man,
-				       struct ttm_resource *res,
-				       const struct ttm_place *place,
-				       size_t size)
-{
-	DRM_DEBUG_DRIVER("Dummy vram mgr compatible\n");
-	return false;
-}
+	mutex_lock(&mgr->lock);
+	list_for_each_entry(vres, &mgr->allocated_vres_list, vres_node) {
+		list_for_each_entry(block, &vres->blocks, link) {
+			start = amdgpu_vram_mgr_block_start(block);
+			size = amdgpu_vram_mgr_block_size(block);
+			if ((start <= address) && (address < (start + size))) {
+				info->start = start;
+				info->size = size;
+				memcpy(&info->task, &vres->task, sizeof(vres->task));
+				ret = 0;
+				goto out;
+			}
+		}
+	}
 
-static bool amdgpu_dummy_vram_mgr_intersects(struct ttm_resource_manager *man,
-				       struct ttm_resource *res,
-				       const struct ttm_place *place,
-				       size_t size)
-{
-	DRM_DEBUG_DRIVER("Dummy vram mgr intersects\n");
-	return true;
-}
+out:
+	mutex_unlock(&mgr->lock);
 
-static void amdgpu_dummy_vram_mgr_del(struct ttm_resource_manager *man,
-				struct ttm_resource *res)
-{
-	DRM_DEBUG_DRIVER("Dummy vram mgr deleted\n");
-}
-
-static int amdgpu_dummy_vram_mgr_new(struct ttm_resource_manager *man,
-			       struct ttm_buffer_object *tbo,
-			       const struct ttm_place *place,
-			       struct ttm_resource **res)
-{
-	DRM_DEBUG_DRIVER("Dummy vram mgr new\n");
-	return -ENOSPC;
+	return ret;
 }
 
 /**
@@ -489,7 +481,7 @@ static int amdgpu_vram_mgr_new(struct ttm_resource_manager *man,
 					tbo->page_alignment);
 	}
 
-	vres = kzalloc(sizeof(*vres), GFP_KERNEL);
+	vres = kzalloc_obj(*vres);
 	if (!vres)
 		return -ENOMEM;
 
@@ -572,6 +564,10 @@ static int amdgpu_vram_mgr_new(struct ttm_resource_manager *man,
 			remaining_size -= size;
 	}
 
+	vres->task.pid = task_pid_nr(current);
+	get_task_comm(vres->task.comm, current);
+	list_add_tail(&vres->vres_node, &mgr->allocated_vres_list);
+
 	if (bo->flags & AMDGPU_GEM_CREATE_VRAM_CONTIGUOUS && adjust_dcc_size) {
 		struct gpu_buddy_block *dcc_block;
 		unsigned long dcc_start;
@@ -649,6 +645,10 @@ static void amdgpu_vram_mgr_del(struct ttm_resource_manager *man,
 	uint64_t vis_usage = 0;
 
 	mutex_lock(&mgr->lock);
+
+	list_del(&vres->vres_node);
+	memset(&vres->task, 0, sizeof(vres->task));
+
 	list_for_each_entry(block, &vres->blocks, link)
 		vis_usage += amdgpu_vram_mgr_vis_size(adev, block);
 
@@ -687,7 +687,7 @@ int amdgpu_vram_mgr_alloc_sgt(struct amdgpu_device *adev,
 	int num_entries = 0;
 	int i, r;
 
-	*sgt = kmalloc(sizeof(**sgt), GFP_KERNEL);
+	*sgt = kmalloc_obj(**sgt);
 	if (!*sgt)
 		return -ENOMEM;
 
@@ -899,20 +899,44 @@ static void amdgpu_vram_mgr_debug(struct ttm_resource_manager *man,
 	mutex_unlock(&mgr->lock);
 }
 
-static const struct ttm_resource_manager_func amdgpu_dummy_vram_mgr_func = {
-	.alloc	= amdgpu_dummy_vram_mgr_new,
-	.free	= amdgpu_dummy_vram_mgr_del,
-	.intersects = amdgpu_dummy_vram_mgr_intersects,
-	.compatible = amdgpu_dummy_vram_mgr_compatible,
-	.debug	= amdgpu_dummy_vram_mgr_debug
-};
-
 static const struct ttm_resource_manager_func amdgpu_vram_mgr_func = {
 	.alloc	= amdgpu_vram_mgr_new,
 	.free	= amdgpu_vram_mgr_del,
 	.intersects = amdgpu_vram_mgr_intersects,
 	.compatible = amdgpu_vram_mgr_compatible,
 	.debug	= amdgpu_vram_mgr_debug
+};
+
+static const struct dmem_cgroup_ops amdgpu_vram_mgr_dmem_ops;
+
+static int amdgpu_vram_mgr_dmem_reclaim(struct dmem_cgroup_pool_state *pool,
+					u64 target_bytes, void *priv)
+{
+	struct ttm_resource_manager *man = priv;
+	struct amdgpu_device *adev = amdgpu_ttm_adev(man->bdev);
+	int ret, idx;
+
+	if (!drm_dev_enter(adev_to_drm(adev), &idx))
+		return -ENODEV;
+
+	ret = pm_runtime_get_sync(adev_to_drm(adev)->dev);
+	if (ret < 0) {
+		pm_runtime_put_autosuspend(adev_to_drm(adev)->dev);
+		goto out;
+	}
+
+	ret = ttm_resource_manager_dmem_reclaim(pool, target_bytes, priv);
+
+	pm_runtime_mark_last_busy(adev_to_drm(adev)->dev);
+	pm_runtime_put_autosuspend(adev_to_drm(adev)->dev);
+
+out:
+	drm_dev_exit(idx);
+	return ret;
+}
+
+static const struct dmem_cgroup_ops amdgpu_vram_mgr_dmem_ops = {
+	.reclaim = amdgpu_vram_mgr_dmem_reclaim,
 };
 
 /**
@@ -926,6 +950,7 @@ int amdgpu_vram_mgr_init(struct amdgpu_device *adev)
 {
 	struct amdgpu_vram_mgr *mgr = &adev->mman.vram_mgr;
 	struct ttm_resource_manager *man = &mgr->manager;
+	struct dmem_cgroup_region *cg;
 	int err;
 
 	ttm_resource_manager_init(man, &adev->mman.bdev,
@@ -934,18 +959,27 @@ int amdgpu_vram_mgr_init(struct amdgpu_device *adev)
 	mutex_init(&mgr->lock);
 	INIT_LIST_HEAD(&mgr->reservations_pending);
 	INIT_LIST_HEAD(&mgr->reserved_pages);
+	INIT_LIST_HEAD(&mgr->allocated_vres_list);
 	mgr->default_page_size = PAGE_SIZE;
 
-	if (!adev->gmc.is_app_apu) {
-		man->func = &amdgpu_vram_mgr_func;
+	man->func = &amdgpu_vram_mgr_func;
+	err = gpu_buddy_init(&mgr->mm, man->size, PAGE_SIZE);
+	if (err)
+		return err;
 
-		err = gpu_buddy_init(&mgr->mm, man->size, PAGE_SIZE);
-		if (err)
-			return err;
-	} else {
-		man->func = &amdgpu_dummy_vram_mgr_func;
-		DRM_INFO("Setup dummy vram mgr\n");
+	cg = dmem_cgroup_register_region(&(struct dmem_cgroup_init){
+						.size = adev->gmc.real_vram_size,
+						.ops = &amdgpu_vram_mgr_dmem_ops,
+						.reclaim_priv = man,
+					 },
+					 "drm/%s/vram", adev_to_drm(adev)->unique);
+	if (IS_ERR(cg)) {
+		gpu_buddy_fini(&mgr->mm);
+		return PTR_ERR(cg);
 	}
+
+	mgr->cg_region = cg;
+	ttm_resource_manager_set_dmem_region(man, cg);
 
 	ttm_set_driver_manager(&adev->mman.bdev, TTM_PL_VRAM, &mgr->manager);
 	ttm_resource_manager_set_used(man, true);
@@ -970,6 +1004,19 @@ void amdgpu_vram_mgr_fini(struct amdgpu_device *adev)
 	ttm_resource_manager_set_used(man, false);
 
 	ret = ttm_resource_manager_evict_all(&adev->mman.bdev, man);
+
+	/*
+	 * Unregister the dmem cgroup region regardless of the evict_all()
+	 * result and before any further teardown.  This drains in-flight
+	 * reclaim callbacks and blocks new ones, so no reclaim can reference
+	 * the manager once we start freeing it.  It must run after evict_all()
+	 * so that ttm_resource_free() can still uncharge via man->cg during
+	 * eviction.  Clear man->cg afterwards.
+	 */
+	dmem_cgroup_unregister_region(mgr->cg_region);
+	mgr->cg_region = NULL;
+	ttm_resource_manager_set_dmem_region(man, NULL);
+
 	if (ret)
 		return;
 

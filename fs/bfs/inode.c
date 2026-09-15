@@ -17,6 +17,7 @@
 #include <linux/writeback.h>
 #include <linux/uio.h>
 #include <linux/uaccess.h>
+#include <linux/fs_context.h>
 #include "bfs.h"
 
 MODULE_AUTHOR("Tigran Aivazian <aivazian.tigran@gmail.com>");
@@ -41,7 +42,7 @@ struct inode *bfs_iget(struct super_block *sb, unsigned long ino)
 	inode = iget_locked(sb, ino);
 	if (!inode)
 		return ERR_PTR(-ENOMEM);
-	if (!(inode->i_state & I_NEW))
+	if (!(inode_state_read_once(inode) & I_NEW))
 		return inode;
 
 	if ((ino < BFS_ROOT_INO) || (ino > BFS_SB(inode->i_sb)->si_lasti)) {
@@ -135,7 +136,6 @@ static int bfs_write_inode(struct inode *inode, struct writeback_control *wbc)
 	unsigned long i_sblock;
 	struct bfs_inode *di;
 	struct buffer_head *bh;
-	int err = 0;
 
 	dprintf("ino=%08x\n", ino);
 
@@ -164,13 +164,31 @@ static int bfs_write_inode(struct inode *inode, struct writeback_control *wbc)
 	di->i_eoffset = cpu_to_le32(i_sblock * BFS_BSIZE + inode->i_size - 1);
 
 	mark_buffer_dirty(bh);
-	if (wbc->sync_mode == WB_SYNC_ALL) {
-		sync_dirty_buffer(bh);
-		if (buffer_req(bh) && !buffer_uptodate(bh))
-			err = -EIO;
-	}
 	brelse(bh);
 	mutex_unlock(&info->bfs_lock);
+	set_inode_metadata_writeback(inode);
+	return 0;
+}
+
+static int bfs_sync_inode_metadata(struct inode *inode,
+				   struct writeback_control *wbc)
+{
+	int err = 0;
+	struct bfs_inode *di;
+	struct buffer_head *bh;
+
+	di = find_inode(inode->i_sb, (u16)inode->i_ino, &bh);
+	if (IS_ERR(di))
+		return PTR_ERR(di);
+
+	sync_dirty_buffer(bh);
+	if (buffer_write_io_error(bh)) {
+		err = -EIO;
+		goto out;
+	}
+	err = mmb_sync(&BFS_I(inode)->i_metadata_bhs);
+out:
+	brelse(bh);
 	return err;
 }
 
@@ -186,7 +204,9 @@ static void bfs_evict_inode(struct inode *inode)
 	dprintf("ino=%08lx\n", ino);
 
 	truncate_inode_pages_final(&inode->i_data);
-	invalidate_inode_buffers(inode);
+	if (inode->i_nlink)
+		mmb_sync(&BFS_I(inode)->i_metadata_bhs);
+	mmb_invalidate(&BFS_I(inode)->i_metadata_bhs);
 	clear_inode(inode);
 
 	if (inode->i_nlink)
@@ -256,6 +276,8 @@ static struct inode *bfs_alloc_inode(struct super_block *sb)
 	bi = alloc_inode_sb(sb, bfs_inode_cachep, GFP_KERNEL);
 	if (!bi)
 		return NULL;
+	mmb_init(&bi->i_metadata_bhs, &bi->vfs_inode.i_data);
+
 	return &bi->vfs_inode;
 }
 
@@ -297,6 +319,7 @@ static const struct super_operations bfs_sops = {
 	.alloc_inode	= bfs_alloc_inode,
 	.free_inode	= bfs_free_inode,
 	.write_inode	= bfs_write_inode,
+	.sync_inode_metadata = bfs_sync_inode_metadata,
 	.evict_inode	= bfs_evict_inode,
 	.put_super	= bfs_put_super,
 	.statfs		= bfs_statfs,
@@ -306,7 +329,7 @@ void bfs_dump_imap(const char *prefix, struct super_block *s)
 {
 #ifdef DEBUG
 	int i;
-	char *tmpbuf = (char *)get_zeroed_page(GFP_KERNEL);
+	char *tmpbuf = kzalloc(PAGE_SIZE, GFP_KERNEL);
 
 	if (!tmpbuf)
 		return;
@@ -318,11 +341,11 @@ void bfs_dump_imap(const char *prefix, struct super_block *s)
 			strcat(tmpbuf, "0");
 	}
 	printf("%s: lasti=%08lx <%s>\n", prefix, BFS_SB(s)->si_lasti, tmpbuf);
-	free_page((unsigned long)tmpbuf);
+	kfree(tmpbuf);
 #endif
 }
 
-static int bfs_fill_super(struct super_block *s, void *data, int silent)
+static int bfs_fill_super(struct super_block *s, struct fs_context *fc)
 {
 	struct buffer_head *bh, *sbh;
 	struct bfs_super_block *bfs_sb;
@@ -331,8 +354,9 @@ static int bfs_fill_super(struct super_block *s, void *data, int silent)
 	struct bfs_sb_info *info;
 	int ret = -EINVAL;
 	unsigned long i_sblock, i_eblock, i_eoff, s_size;
+	int silent = fc->sb_flags & SB_SILENT;
 
-	info = kzalloc(sizeof(*info), GFP_KERNEL);
+	info = kzalloc_obj(*info);
 	if (!info)
 		return -ENOMEM;
 	mutex_init(&info->bfs_lock);
@@ -340,7 +364,8 @@ static int bfs_fill_super(struct super_block *s, void *data, int silent)
 	s->s_time_min = 0;
 	s->s_time_max = U32_MAX;
 
-	sb_set_blocksize(s, BFS_BSIZE);
+	if (!sb_set_blocksize(s, BFS_BSIZE))
+		goto out;
 
 	sbh = sb_bread(s, 0);
 	if (!sbh)
@@ -463,18 +488,28 @@ out:
 	return ret;
 }
 
-static struct dentry *bfs_mount(struct file_system_type *fs_type,
-	int flags, const char *dev_name, void *data)
+static int bfs_get_tree(struct fs_context *fc)
 {
-	return mount_bdev(fs_type, flags, dev_name, data, bfs_fill_super);
+	return get_tree_bdev(fc, bfs_fill_super);
+}
+
+static const struct fs_context_operations bfs_context_ops = {
+	.get_tree = bfs_get_tree,
+};
+
+static int bfs_init_fs_context(struct fs_context *fc)
+{
+	fc->ops = &bfs_context_ops;
+
+	return 0;
 }
 
 static struct file_system_type bfs_fs_type = {
-	.owner		= THIS_MODULE,
-	.name		= "bfs",
-	.mount		= bfs_mount,
-	.kill_sb	= kill_block_super,
-	.fs_flags	= FS_REQUIRES_DEV,
+	.owner			= THIS_MODULE,
+	.name			= "bfs",
+	.init_fs_context	= bfs_init_fs_context,
+	.kill_sb		= kill_block_super,
+	.fs_flags		= FS_REQUIRES_DEV,
 };
 MODULE_ALIAS_FS("bfs");
 

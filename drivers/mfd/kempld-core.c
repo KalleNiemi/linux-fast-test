@@ -10,7 +10,6 @@
 #include <linux/platform_device.h>
 #include <linux/mfd/core.h>
 #include <linux/mfd/kempld.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/property.h>
 #include <linux/dmi.h>
@@ -141,10 +140,8 @@ static int kempld_create_platform_device(const struct kempld_platform_data *pdat
 	};
 
 	kempld_pdev = platform_device_register_full(&pdevinfo);
-	if (IS_ERR(kempld_pdev))
-		return PTR_ERR(kempld_pdev);
 
-	return 0;
+	return PTR_ERR_OR_ZERO(kempld_pdev);
 }
 
 /**
@@ -486,7 +483,7 @@ static struct platform_driver kempld_driver = {
 		.dev_groups	  = pld_groups,
 	},
 	.probe		= kempld_probe,
-	.remove_new	= kempld_remove,
+	.remove		= kempld_remove,
 };
 
 static const struct dmi_system_id kempld_dmi_table[] __initconst = {

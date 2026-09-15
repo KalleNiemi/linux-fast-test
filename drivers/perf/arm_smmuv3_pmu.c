@@ -537,7 +537,7 @@ static ssize_t smmu_pmu_cpumask_show(struct device *dev,
 {
 	struct smmu_pmu *smmu_pmu = to_smmu_pmu(dev_get_drvdata(dev));
 
-	return cpumap_print_to_pagebuf(true, buf, cpumask_of(smmu_pmu->on_cpu));
+	return sysfs_emit(buf, "%*pbl\n", cpumask_pr_args(cpumask_of(smmu_pmu->on_cpu)));
 }
 
 static struct device_attribute smmu_pmu_cpumask_attr =
@@ -999,7 +999,7 @@ static struct platform_driver smmu_pmu_driver = {
 		.suppress_bind_attrs = true,
 	},
 	.probe = smmu_pmu_probe,
-	.remove_new = smmu_pmu_remove,
+	.remove = smmu_pmu_remove,
 	.shutdown = smmu_pmu_shutdown,
 };
 

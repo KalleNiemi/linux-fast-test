@@ -60,10 +60,10 @@ static void enter_vmid_context(struct kvm_s2_mmu *mmu,
 	 * place before clearing TGE. __load_stage2() already
 	 * has an ISB in order to deal with this.
 	 */
-	__load_stage2(mmu, mmu->arch);
+	__load_stage2(mmu);
 	val = read_sysreg(hcr_el2);
 	val &= ~HCR_TGE;
-	write_sysreg(val, hcr_el2);
+	write_sysreg_hcr(val);
 	isb();
 }
 
@@ -73,12 +73,12 @@ static void exit_vmid_context(struct tlb_inv_context *cxt)
 	 * We're done with the TLB operation, let's restore the host's
 	 * view of HCR_EL2.
 	 */
-	write_sysreg(HCR_HOST_VHE_FLAGS, hcr_el2);
+	write_sysreg_hcr(HCR_HOST_VHE_FLAGS);
 	isb();
 
 	/* ... and the stage-2 MMU context that we switched away from */
 	if (cxt->mmu)
-		__load_stage2(cxt->mmu, cxt->mmu->arch);
+		__load_stage2(cxt->mmu);
 
 	if (cpus_have_final_cap(ARM64_WORKAROUND_SPECULATIVE_AT)) {
 		/* Restore the registers to what they were */
@@ -104,7 +104,6 @@ void __kvm_tlb_flush_vmid_ipa(struct kvm_s2_mmu *mmu,
 	 * Instead, we invalidate Stage-2 for this IPA, and the
 	 * whole of Stage-1. Weep...
 	 */
-	ipa >>= 12;
 	__tlbi_level(ipas2e1is, ipa, level);
 
 	/*
@@ -136,7 +135,6 @@ void __kvm_tlb_flush_vmid_ipa_nsh(struct kvm_s2_mmu *mmu,
 	 * Instead, we invalidate Stage-2 for this IPA, and the
 	 * whole of Stage-1. Weep...
 	 */
-	ipa >>= 12;
 	__tlbi_level(ipas2e1, ipa, level);
 
 	/*

@@ -8,9 +8,19 @@
 #include <net/tcp.h>
 #include <net/route.h>
 #include <net/dst.h>
+#include <net/dst_metadata.h>
 #include <net/netfilter/ipv4/nf_reject.h>
 #include <linux/netfilter_ipv4.h>
 #include <linux/netfilter_bridge.h>
+
+static struct iphdr *nf_reject_iphdr_put(struct sk_buff *nskb,
+					 const struct sk_buff *oldskb,
+					 __u8 protocol, int ttl);
+static void nf_reject_ip_tcphdr_put(struct sk_buff *nskb, const struct sk_buff *oldskb,
+				    const struct tcphdr *oth);
+static const struct tcphdr *
+nf_reject_ip_tcphdr_get(struct sk_buff *oldskb,
+			struct tcphdr *_oth, int hook);
 
 static int nf_reject_iphdr_validate(struct sk_buff *skb)
 {
@@ -161,8 +171,9 @@ struct sk_buff *nf_reject_skb_v4_unreach(struct net *net,
 }
 EXPORT_SYMBOL_GPL(nf_reject_skb_v4_unreach);
 
-const struct tcphdr *nf_reject_ip_tcphdr_get(struct sk_buff *oldskb,
-					     struct tcphdr *_oth, int hook)
+static const struct tcphdr *
+nf_reject_ip_tcphdr_get(struct sk_buff *oldskb,
+			struct tcphdr *_oth, int hook)
 {
 	const struct tcphdr *oth;
 
@@ -188,11 +199,10 @@ const struct tcphdr *nf_reject_ip_tcphdr_get(struct sk_buff *oldskb,
 
 	return oth;
 }
-EXPORT_SYMBOL_GPL(nf_reject_ip_tcphdr_get);
 
-struct iphdr *nf_reject_iphdr_put(struct sk_buff *nskb,
-				  const struct sk_buff *oldskb,
-				  __u8 protocol, int ttl)
+static struct iphdr *nf_reject_iphdr_put(struct sk_buff *nskb,
+					 const struct sk_buff *oldskb,
+					 __u8 protocol, int ttl)
 {
 	struct iphdr *niph, *oiph = ip_hdr(oldskb);
 
@@ -213,10 +223,9 @@ struct iphdr *nf_reject_iphdr_put(struct sk_buff *nskb,
 
 	return niph;
 }
-EXPORT_SYMBOL_GPL(nf_reject_iphdr_put);
 
-void nf_reject_ip_tcphdr_put(struct sk_buff *nskb, const struct sk_buff *oldskb,
-			  const struct tcphdr *oth)
+static void nf_reject_ip_tcphdr_put(struct sk_buff *nskb, const struct sk_buff *oldskb,
+				    const struct tcphdr *oth)
 {
 	struct iphdr *niph = ip_hdr(nskb);
 	struct tcphdr *tcph;
@@ -243,7 +252,6 @@ void nf_reject_ip_tcphdr_put(struct sk_buff *nskb, const struct sk_buff *oldskb,
 	nskb->csum_start = (unsigned char *)tcph - nskb->head;
 	nskb->csum_offset = offsetof(struct tcphdr, check);
 }
-EXPORT_SYMBOL_GPL(nf_reject_ip_tcphdr_put);
 
 static int nf_reject_fill_skb_dst(struct sk_buff *skb_in)
 {
@@ -256,6 +264,7 @@ static int nf_reject_fill_skb_dst(struct sk_buff *skb_in)
 	if (!dst)
 		return -1;
 
+	skb_dst_drop(skb_in);
 	skb_dst_set(skb_in, dst);
 	return 0;
 }
@@ -272,7 +281,7 @@ void nf_send_reset(struct net *net, struct sock *sk, struct sk_buff *oldskb,
 	if (!oth)
 		return;
 
-	if (!skb_dst(oldskb) && nf_reject_fill_skb_dst(oldskb) < 0)
+	if (!skb_valid_dst(oldskb) && nf_reject_fill_skb_dst(oldskb) < 0)
 		return;
 
 	if (skb_rtable(oldskb)->rt_flags & (RTCF_BROADCAST | RTCF_MULTICAST))
@@ -296,7 +305,7 @@ void nf_send_reset(struct net *net, struct sock *sk, struct sk_buff *oldskb,
 		goto free_nskb;
 
 	/* "Never happens" */
-	if (nskb->len > dst_mtu(skb_dst(nskb)))
+	if (nskb->len > dst4_mtu(skb_dst(nskb)))
 		goto free_nskb;
 
 	nf_ct_attach(nskb, oldskb);
@@ -345,7 +354,7 @@ void nf_send_unreach(struct sk_buff *skb_in, int code, int hook)
 	if (iph->frag_off & htons(IP_OFFSET))
 		return;
 
-	if (!skb_dst(skb_in) && nf_reject_fill_skb_dst(skb_in) < 0)
+	if (!skb_valid_dst(skb_in) && nf_reject_fill_skb_dst(skb_in) < 0)
 		return;
 
 	if (skb_csum_unnecessary(skb_in) ||

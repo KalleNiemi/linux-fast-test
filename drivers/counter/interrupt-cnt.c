@@ -8,7 +8,6 @@
 #include <linux/gpio/consumer.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/platform_device.h>
@@ -17,7 +16,7 @@
 #define INTERRUPT_CNT_NAME "interrupt-cnt"
 
 struct interrupt_cnt_priv {
-	atomic_t count;
+	atomic_long_t count;
 	struct gpio_desc *gpio;
 	int irq;
 	bool enabled;
@@ -32,7 +31,7 @@ static irqreturn_t interrupt_cnt_isr(int irq, void *dev_id)
 	struct counter_device *counter = dev_id;
 	struct interrupt_cnt_priv *priv = counter_priv(counter);
 
-	atomic_inc(&priv->count);
+	atomic_long_inc(&priv->count);
 
 	counter_push_event(counter, COUNTER_EVENT_CHANGE_OF_STATE, 0);
 
@@ -96,7 +95,7 @@ static int interrupt_cnt_read(struct counter_device *counter,
 {
 	struct interrupt_cnt_priv *priv = counter_priv(counter);
 
-	*val = atomic_read(&priv->count);
+	*val = atomic_long_read(&priv->count);
 
 	return 0;
 }
@@ -109,7 +108,7 @@ static int interrupt_cnt_write(struct counter_device *counter,
 	if (val != (typeof(priv->count.counter))val)
 		return -ERANGE;
 
-	atomic_set(&priv->count, val);
+	atomic_long_set(&priv->count, val);
 
 	return 0;
 }
@@ -233,7 +232,9 @@ static int interrupt_cnt_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	mutex_init(&priv->lock);
+	ret = devm_mutex_init(dev, &priv->lock);
+	if (ret)
+		return ret;
 
 	ret = devm_counter_add(dev, counter);
 	if (ret < 0)
@@ -261,4 +262,4 @@ MODULE_ALIAS("platform:interrupt-counter");
 MODULE_AUTHOR("Oleksij Rempel <o.rempel@pengutronix.de>");
 MODULE_DESCRIPTION("Interrupt counter driver");
 MODULE_LICENSE("GPL v2");
-MODULE_IMPORT_NS(COUNTER);
+MODULE_IMPORT_NS("COUNTER");

@@ -286,7 +286,6 @@ struct vfsmount *cifs_d_automount(struct path *path)
 		return newmnt;
 	}
 
-	mntget(newmnt); /* prevent immediate expiration */
 	mnt_set_expiry(newmnt, &cifs_automount_list);
 	schedule_delayed_work(&cifs_automount_task,
 			      cifs_mountpoint_expiry_timeout);
@@ -295,4 +294,5 @@ struct vfsmount *cifs_d_automount(struct path *path)
 }
 
 const struct inode_operations cifs_namespace_inode_operations = {
+	.fileattr_get	= cifs_fileattr_get,
 };

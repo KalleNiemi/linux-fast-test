@@ -5,11 +5,11 @@
 
 #include <linux/slab.h>
 
-#include <drm/ttm/ttm_placement.h>
-#include <drm/ttm/ttm_bo.h>
-
 #include <linux/gpu_buddy.h>
 #include <drm/drm_buddy.h>
+#include <drm/drm_print.h>
+#include <drm/ttm/ttm_placement.h>
+#include <drm/ttm/ttm_bo.h>
 
 #include "i915_ttm_buddy_manager.h"
 
@@ -49,7 +49,7 @@ static int i915_ttm_buddy_man_alloc(struct ttm_resource_manager *man,
 	if (!lpfn)
 		lpfn = man->size;
 
-	bman_res = kzalloc(sizeof(*bman_res), GFP_KERNEL);
+	bman_res = kzalloc_obj(*bman_res);
 	if (!bman_res)
 		return -ENOMEM;
 
@@ -290,7 +290,7 @@ int i915_ttm_buddy_man_init(struct ttm_device *bdev,
 	struct i915_ttm_buddy_manager *bman;
 	int err;
 
-	bman = kzalloc(sizeof(*bman), GFP_KERNEL);
+	bman = kzalloc_obj(*bman);
 	if (!bman)
 		return -ENOMEM;
 

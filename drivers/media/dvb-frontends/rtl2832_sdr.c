@@ -906,9 +906,12 @@ static int rtl2832_sdr_start_streaming(struct vb2_queue *vq, unsigned int count)
 		goto err;
 
 	mutex_unlock(&dev->v4l2_lock);
+
 	return 0;
 
 err:
+	rtl2832_sdr_free_urbs(dev);
+	rtl2832_sdr_free_stream_bufs(dev);
 	rtl2832_sdr_cleanup_queued_bufs(dev, VB2_BUF_STATE_QUEUED);
 	mutex_unlock(&dev->v4l2_lock);
 
@@ -956,8 +959,6 @@ static const struct vb2_ops rtl2832_sdr_vb2_ops = {
 	.buf_queue              = rtl2832_sdr_buf_queue,
 	.start_streaming        = rtl2832_sdr_start_streaming,
 	.stop_streaming         = rtl2832_sdr_stop_streaming,
-	.wait_prepare           = vb2_ops_wait_prepare,
-	.wait_finish            = vb2_ops_wait_finish,
 };
 
 static int rtl2832_sdr_g_tuner(struct file *file, void *priv,
@@ -1341,7 +1342,7 @@ static int rtl2832_sdr_probe(struct platform_device *pdev)
 		ret = -EINVAL;
 		goto err;
 	}
-	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
+	dev = kzalloc_obj(*dev);
 	if (dev == NULL) {
 		ret = -ENOMEM;
 		goto err_module_put;
@@ -1374,6 +1375,7 @@ static int rtl2832_sdr_probe(struct platform_device *pdev)
 	dev->vb_queue.ops = &rtl2832_sdr_vb2_ops;
 	dev->vb_queue.mem_ops = &vb2_vmalloc_memops;
 	dev->vb_queue.timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
+	dev->vb_queue.lock = &dev->vb_queue_lock;
 	ret = vb2_queue_init(&dev->vb_queue);
 	if (ret) {
 		dev_err(&pdev->dev, "Could not initialize vb2 queue\n");
@@ -1432,7 +1434,6 @@ static int rtl2832_sdr_probe(struct platform_device *pdev)
 	/* Init video_device structure */
 	dev->vdev = rtl2832_sdr_template;
 	dev->vdev.queue = &dev->vb_queue;
-	dev->vdev.queue->lock = &dev->vb_queue_lock;
 	video_set_drvdata(&dev->vdev, dev);
 
 	/* Register the v4l2_device structure */
@@ -1479,14 +1480,22 @@ static void rtl2832_sdr_remove(struct platform_device *pdev)
 
 	dev_dbg(&pdev->dev, "\n");
 
-	mutex_lock(&dev->vb_queue_lock);
-	mutex_lock(&dev->v4l2_lock);
-	/* No need to keep the urbs around after disconnection */
-	dev->udev = NULL;
+	/*
+	 * vb2_video_unregister_device() releases the vb2 queue, which
+	 * triggers rtl2832_sdr_stop_streaming() if streaming is active.
+	 * stop_streaming() uses dev->udev to free URBs and coherent DMA
+	 * stream buffers via usb_free_coherent(), so it must run before
+	 * dev->udev is cleared. vb2_video_unregister_device() locks
+	 * vb_queue_lock internally and stop_streaming() locks v4l2_lock,
+	 * so neither may be held by the caller.
+	 */
 	v4l2_device_disconnect(&dev->v4l2_dev);
-	video_unregister_device(&dev->vdev);
+	vb2_video_unregister_device(&dev->vdev);
+
+	mutex_lock(&dev->v4l2_lock);
+	dev->udev = NULL;
 	mutex_unlock(&dev->v4l2_lock);
-	mutex_unlock(&dev->vb_queue_lock);
+
 	v4l2_device_put(&dev->v4l2_dev);
 	module_put(pdev->dev.parent->driver->owner);
 }
@@ -1496,7 +1505,7 @@ static struct platform_driver rtl2832_sdr_driver = {
 		.name   = "rtl2832_sdr",
 	},
 	.probe          = rtl2832_sdr_probe,
-	.remove_new     = rtl2832_sdr_remove,
+	.remove         = rtl2832_sdr_remove,
 };
 module_platform_driver(rtl2832_sdr_driver);
 

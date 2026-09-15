@@ -10,9 +10,10 @@
 #include <linux/cleanup.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
+#include <linux/dev_printk.h>
 #include <linux/err.h>
+#include <linux/gpio/consumer.h>
 #include <linux/module.h>
-#include <linux/mod_devicetable.h>
 #include <linux/property.h>
 #include <linux/regulator/consumer.h>
 #include <linux/spi/spi.h>
@@ -125,7 +126,7 @@ struct mcp3911 {
 	const struct mcp3911_chip_info *chip;
 	struct {
 		u32 channels[MCP39XX_MAX_NUM_CHANNELS];
-		s64 ts __aligned(8);
+		aligned_s64 ts;
 	} scan;
 
 	u8 tx_buf __aligned(IIO_DMA_MINALIGN);
@@ -538,8 +539,8 @@ static irqreturn_t mcp3911_trigger_handler(int irq, void *p)
 		adc->scan.channels[i] = get_unaligned_be24(&adc->rx_buf[scan_chan->channel * 3]);
 		i++;
 	}
-	iio_push_to_buffers_with_timestamp(indio_dev, &adc->scan,
-					   iio_get_time_ns(indio_dev));
+	iio_push_to_buffers_with_ts(indio_dev, &adc->scan, sizeof(adc->scan),
+				    iio_get_time_ns(indio_dev));
 out:
 	iio_trigger_notify_done(indio_dev->trig);
 
@@ -706,6 +707,7 @@ static const struct iio_trigger_ops mcp3911_trigger_ops = {
 static int mcp3911_probe(struct spi_device *spi)
 {
 	struct device *dev = &spi->dev;
+	struct gpio_desc *gpio_reset;
 	struct iio_dev *indio_dev;
 	struct mcp3911 *adc;
 	bool external_vref;
@@ -749,6 +751,22 @@ static int mcp3911_probe(struct spi_device *spi)
 				     adc->dev_addr);
 	}
 	dev_dbg(dev, "use device address %i\n", adc->dev_addr);
+
+	gpio_reset = devm_gpiod_get_optional(&spi->dev, "reset", GPIOD_OUT_HIGH);
+	if (IS_ERR(gpio_reset))
+		return dev_err_probe(dev, PTR_ERR(gpio_reset),
+				     "Cannot get reset GPIO\n");
+
+	if (gpio_reset) {
+		gpiod_set_value_cansleep(gpio_reset, 0);
+
+		/*
+		 * Settling time after Hard Reset Mode (determined experimentally):
+		 * 330 micro-seconds are too few; 470 micro-seconds are sufficient.
+		 * Just in case, we add some safety factor...
+		 */
+		fsleep(600);
+	}
 
 	ret = adc->chip->config(adc, external_vref);
 	if (ret)
@@ -796,7 +814,7 @@ static int mcp3911_probe(struct spi_device *spi)
 		 * don't enable the interrupt to avoid extra load on the system.
 		 */
 		ret = devm_request_irq(dev, spi->irq, &iio_trigger_generic_data_rdy_poll,
-				       IRQF_NO_AUTOEN | IRQF_ONESHOT,
+				       IRQF_NO_AUTOEN | IRQF_NO_THREAD,
 				       indio_dev->name, adc->trig);
 		if (ret)
 			return ret;
@@ -909,13 +927,13 @@ static const struct of_device_id mcp3911_dt_ids[] = {
 MODULE_DEVICE_TABLE(of, mcp3911_dt_ids);
 
 static const struct spi_device_id mcp3911_id[] = {
-	{ "mcp3910", (kernel_ulong_t)&mcp3911_chip_info[MCP3910] },
-	{ "mcp3911", (kernel_ulong_t)&mcp3911_chip_info[MCP3911] },
-	{ "mcp3912", (kernel_ulong_t)&mcp3911_chip_info[MCP3912] },
-	{ "mcp3913", (kernel_ulong_t)&mcp3911_chip_info[MCP3913] },
-	{ "mcp3914", (kernel_ulong_t)&mcp3911_chip_info[MCP3914] },
-	{ "mcp3918", (kernel_ulong_t)&mcp3911_chip_info[MCP3918] },
-	{ "mcp3919", (kernel_ulong_t)&mcp3911_chip_info[MCP3919] },
+	{ .name = "mcp3910", .driver_data = (kernel_ulong_t)&mcp3911_chip_info[MCP3910] },
+	{ .name = "mcp3911", .driver_data = (kernel_ulong_t)&mcp3911_chip_info[MCP3911] },
+	{ .name = "mcp3912", .driver_data = (kernel_ulong_t)&mcp3911_chip_info[MCP3912] },
+	{ .name = "mcp3913", .driver_data = (kernel_ulong_t)&mcp3911_chip_info[MCP3913] },
+	{ .name = "mcp3914", .driver_data = (kernel_ulong_t)&mcp3911_chip_info[MCP3914] },
+	{ .name = "mcp3918", .driver_data = (kernel_ulong_t)&mcp3911_chip_info[MCP3918] },
+	{ .name = "mcp3919", .driver_data = (kernel_ulong_t)&mcp3911_chip_info[MCP3919] },
 	{ }
 };
 MODULE_DEVICE_TABLE(spi, mcp3911_id);

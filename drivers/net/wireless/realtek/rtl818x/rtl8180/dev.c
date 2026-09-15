@@ -1365,7 +1365,7 @@ static void rtl8180_remove_interface(struct ieee80211_hw *dev,
 	priv->vif = NULL;
 }
 
-static int rtl8180_config(struct ieee80211_hw *dev, u32 changed)
+static int rtl8180_config(struct ieee80211_hw *dev, int radio_idx, u32 changed)
 {
 	struct rtl8180_priv *priv = dev->priv;
 	struct ieee80211_conf *conf = &dev->conf;
@@ -1652,7 +1652,7 @@ static void rtl8180_eeprom_register_write(struct eeprom_93cx6 *eeprom)
 
 static void rtl8180_eeprom_read(struct rtl8180_priv *priv)
 {
-	struct eeprom_93cx6 eeprom;
+	struct eeprom_93cx6 eeprom = {};
 	int eeprom_cck_table_adr;
 	u16 eeprom_val;
 	int i;

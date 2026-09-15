@@ -90,7 +90,7 @@ static struct pwrseq_unit *pwrseq_unit_new(const struct pwrseq_unit_data *data)
 {
 	struct pwrseq_unit *unit;
 
-	unit = kzalloc(sizeof(*unit), GFP_KERNEL);
+	unit = kzalloc_obj(*unit);
 	if (!unit)
 		return NULL;
 
@@ -138,7 +138,7 @@ static struct pwrseq_unit_dep *pwrseq_unit_dep_new(struct pwrseq_unit *unit)
 {
 	struct pwrseq_unit_dep *dep;
 
-	dep = kzalloc(sizeof(*dep), GFP_KERNEL);
+	dep = kzalloc_obj(*dep);
 	if (!dep)
 		return NULL;
 
@@ -195,7 +195,7 @@ pwrseq_target_new(const struct pwrseq_target_data *data)
 {
 	struct pwrseq_target *target;
 
-	target = kzalloc(sizeof(*target), GFP_KERNEL);
+	target = kzalloc_obj(*target);
 	if (!target)
 		return NULL;
 
@@ -480,7 +480,7 @@ pwrseq_device_register(const struct pwrseq_config *config)
 	    !config->targets[0])
 		return ERR_PTR(-EINVAL);
 
-	pwrseq = kzalloc(sizeof(*pwrseq), GFP_KERNEL);
+	pwrseq = kzalloc_obj(*pwrseq);
 	if (!pwrseq)
 		return ERR_PTR(-ENOMEM);
 
@@ -631,7 +631,7 @@ static int pwrseq_match_device(struct device *pwrseq_dev, void *data)
 		return 0;
 
 	ret = pwrseq->match(pwrseq, match_data->dev);
-	if (ret <= 0)
+	if (ret == PWRSEQ_NO_MATCH || ret < 0)
 		return ret;
 
 	/* We got the matching device, let's find the right target. */
@@ -654,7 +654,7 @@ static int pwrseq_match_device(struct device *pwrseq_dev, void *data)
 
 	match_data->desc->pwrseq = pwrseq_device_get(pwrseq);
 
-	return 1;
+	return PWRSEQ_MATCH_OK;
 }
 
 /**
@@ -672,8 +672,7 @@ struct pwrseq_desc *pwrseq_get(struct device *dev, const char *target)
 	struct pwrseq_match_data match_data;
 	int ret;
 
-	struct pwrseq_desc *desc __free(kfree) = kzalloc(sizeof(*desc),
-							 GFP_KERNEL);
+	struct pwrseq_desc *desc __free(kfree) = kzalloc_obj(*desc);
 	if (!desc)
 		return ERR_PTR(-ENOMEM);
 
@@ -687,7 +686,7 @@ struct pwrseq_desc *pwrseq_get(struct device *dev, const char *target)
 			       pwrseq_match_device);
 	if (ret < 0)
 		return ERR_PTR(ret);
-	if (ret == 0)
+	if (ret == PWRSEQ_NO_MATCH)
 		/* No device matched. */
 		return ERR_PTR(-EPROBE_DEFER);
 
@@ -709,7 +708,7 @@ void pwrseq_put(struct pwrseq_desc *desc)
 	pwrseq = desc->pwrseq;
 
 	if (desc->powered_on)
-		pwrseq_power_off(desc);
+		pwrseq_disable(desc);
 
 	kfree(desc);
 	module_put(pwrseq->owner);
@@ -875,7 +874,7 @@ static int pwrseq_unit_disable(struct pwrseq_device *pwrseq,
 }
 
 /**
- * pwrseq_power_on() - Issue a power-on request on behalf of the consumer
+ * pwrseq_enable() - Issue a power-on request on behalf of the consumer
  *                     device.
  * @desc: Descriptor referencing the power sequencer.
  *
@@ -888,7 +887,7 @@ static int pwrseq_unit_disable(struct pwrseq_device *pwrseq,
  * Returns:
  * 0 on success, negative error number on failure.
  */
-int pwrseq_power_on(struct pwrseq_desc *desc)
+int pwrseq_enable(struct pwrseq_desc *desc)
 {
 	struct pwrseq_device *pwrseq;
 	struct pwrseq_target *target;
@@ -926,14 +925,14 @@ int pwrseq_power_on(struct pwrseq_desc *desc)
 
 	return ret;
 }
-EXPORT_SYMBOL_GPL(pwrseq_power_on);
+EXPORT_SYMBOL_GPL(pwrseq_enable);
 
 /**
- * pwrseq_power_off() - Issue a power-off request on behalf of the consumer
+ * pwrseq_disable() - Issue a power-off request on behalf of the consumer
  *                      device.
  * @desc: Descriptor referencing the power sequencer.
  *
- * This undoes the effects of pwrseq_power_on(). It issues a power-off request
+ * This undoes the effects of pwrseq_enable(). It issues a power-off request
  * on behalf of the consumer and when the last remaining user does so, the
  * power-down sequence will be started. If one is in progress, the function
  * will block until it's complete and then return.
@@ -941,7 +940,7 @@ EXPORT_SYMBOL_GPL(pwrseq_power_on);
  * Returns:
  * 0 on success, negative error number on failure.
  */
-int pwrseq_power_off(struct pwrseq_desc *desc)
+int pwrseq_disable(struct pwrseq_desc *desc)
 {
 	struct pwrseq_device *pwrseq;
 	struct pwrseq_unit *unit;
@@ -967,7 +966,30 @@ int pwrseq_power_off(struct pwrseq_desc *desc)
 
 	return ret;
 }
-EXPORT_SYMBOL_GPL(pwrseq_power_off);
+EXPORT_SYMBOL_GPL(pwrseq_disable);
+
+/**
+ * pwrseq_to_device() - Get the pwrseq device pointer from a descriptor.
+ * @desc: Descriptor referencing the power sequencer.
+ *
+ * Return the 'dev' pointer of the power sequencer device associated with @desc.
+ * Consumer drivers can use this to query the pwrseq provider's device tree
+ * node, for example to check for the existence of specific properties.
+ *
+ * Since pwrseq_get() already takes a reference to the pwrseq device, this
+ * function does not take an additional reference.
+ *
+ * Returns:
+ * Pointer to the pwrseq struct device, or NULL if @desc is NULL.
+ */
+struct device *pwrseq_to_device(struct pwrseq_desc *desc)
+{
+	if (!desc)
+		return NULL;
+
+	return &desc->pwrseq->dev;
+}
+EXPORT_SYMBOL_GPL(pwrseq_to_device);
 
 #if IS_ENABLED(CONFIG_DEBUG_FS)
 
@@ -1049,7 +1071,7 @@ static int pwrseq_debugfs_seq_show(struct seq_file *seq, void *data)
 	struct pwrseq_target *target;
 	struct pwrseq_unit *unit;
 
-	seq_printf(seq, "%s:\n", dev_name(dev));
+	seq_printf(seq, "%s (%s):\n", dev_name(dev), dev_name(dev->parent));
 
 	seq_puts(seq, "  targets:\n");
 	list_for_each_entry(target, &pwrseq->targets, list)

@@ -277,7 +277,12 @@ static void hfi_sys_init_done(struct venus_core *core, struct venus_inst *inst,
 
 done:
 	core->error = error;
-	complete(&core->done);
+	/*
+	 * Since core_init could ask for the firmware version to be validated,
+	 * completion might have to wait until the version is retrieved.
+	 */
+	if (!core->res->min_fw)
+		complete(&core->done);
 }
 
 static void
@@ -328,6 +333,10 @@ done:
 	if (!IS_ERR(smem_tbl_ptr) && smem_blk_sz >= SMEM_IMG_OFFSET_VENUS + VER_STR_SZ)
 		memcpy(smem_tbl_ptr + SMEM_IMG_OFFSET_VENUS,
 		       img_ver, VER_STR_SZ);
+
+	/* core_init could have had to wait for a version check */
+	if (core->res->min_fw)
+		complete(&core->done);
 }
 
 static void hfi_sys_property_info(struct venus_core *core,
@@ -681,7 +690,7 @@ struct hfi_done_handler {
 	u32 pkt;
 	u32 pkt_sz;
 	u32 pkt_sz2;
-	void (*done)(struct venus_core *, struct venus_inst *, void *);
+	void (*done)(struct venus_core *core, struct venus_inst *inst, void *packet);
 	bool is_sys_pkt;
 };
 

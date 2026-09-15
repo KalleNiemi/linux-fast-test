@@ -76,7 +76,7 @@ static struct rxrpc_bundle *rxrpc_alloc_bundle(struct rxrpc_call *call,
 	static atomic_t rxrpc_bundle_id;
 	struct rxrpc_bundle *bundle;
 
-	bundle = kzalloc(sizeof(*bundle), gfp);
+	bundle = kzalloc_obj(*bundle, gfp);
 	if (bundle) {
 		bundle->local		= call->local;
 		bundle->peer		= rxrpc_get_peer(call->peer, rxrpc_peer_get_bundle);
@@ -231,7 +231,7 @@ static bool rxrpc_may_reuse_conn(struct rxrpc_connection *conn)
 	distance = id - id_cursor;
 	if (distance < 0)
 		distance = -distance;
-	limit = max_t(unsigned long, atomic_read(&rxnet->nr_conns) * 4, 1024);
+	limit = umax(atomic_read(&rxnet->nr_conns) * 4, 1024);
 	if (distance > limit)
 		goto mark_dont_reuse;
 
@@ -437,9 +437,9 @@ static void rxrpc_activate_one_channel(struct rxrpc_connection *conn,
 	call->dest_srx.srx_service = conn->service_id;
 	call->cong_ssthresh = call->peer->cong_ssthresh;
 	if (call->cong_cwnd >= call->cong_ssthresh)
-		call->cong_mode = RXRPC_CALL_CONGEST_AVOIDANCE;
+		call->cong_ca_state = RXRPC_CA_CONGEST_AVOIDANCE;
 	else
-		call->cong_mode = RXRPC_CALL_SLOW_START;
+		call->cong_ca_state = RXRPC_CA_SLOW_START;
 
 	chan->call_id		= call_id;
 	chan->call_debug_id	= call->debug_id;
@@ -449,7 +449,7 @@ static void rxrpc_activate_one_channel(struct rxrpc_connection *conn,
 	trace_rxrpc_connect_call(call);
 	call->tx_last_sent = ktime_get_real();
 	rxrpc_start_call_timer(call);
-	rxrpc_set_call_state(call, RXRPC_CALL_CLIENT_SEND_REQUEST);
+	rxrpc_set_call_state(call, RXRPC_CALL_CLIENT_PRE_SEND);
 	wake_up(&call->waitq);
 }
 
@@ -818,7 +818,7 @@ void rxrpc_clean_up_local_conns(struct rxrpc_local *local)
 
 	local->kill_all_client_conns = true;
 
-	del_timer_sync(&local->client_conn_reap_timer);
+	timer_delete_sync(&local->client_conn_reap_timer);
 
 	while ((conn = list_first_entry_or_null(&local->idle_client_conns,
 						struct rxrpc_connection, cache_link))) {

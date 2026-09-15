@@ -257,7 +257,7 @@ static int ebs_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		return -EINVAL;
 	}
 
-	ec = ti->private = kzalloc(sizeof(*ec), GFP_KERNEL);
+	ec = ti->private = kzalloc_obj(*ec);
 	if (!ec) {
 		ti->error = "Cannot allocate ebs context";
 		return -ENOMEM;
@@ -265,8 +265,7 @@ static int ebs_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	r = -EINVAL;
 	if (sscanf(argv[1], "%llu%c", &tmp, &dummy) != 1 ||
-	    tmp != (sector_t)tmp ||
-	    (sector_t)tmp >= ti->len) {
+	    tmp != (sector_t)tmp) {
 		ti->error = "Invalid device offset sector";
 		goto bad;
 	}
@@ -415,7 +414,8 @@ static void ebs_status(struct dm_target *ti, status_type_t type,
 	}
 }
 
-static int ebs_prepare_ioctl(struct dm_target *ti, struct block_device **bdev)
+static int ebs_prepare_ioctl(struct dm_target *ti, struct block_device **bdev,
+			     unsigned int cmd, unsigned long arg, bool *forward)
 {
 	struct ebs_c *ec = ti->private;
 	struct dm_dev *dev = ec->dev;

@@ -42,12 +42,14 @@ static int amdgpu_vm_cpu_map_table(struct amdgpu_bo_vm *table)
  *
  * @p: see amdgpu_vm_update_params definition
  * @sync: sync obj with fences to wait on
+ * @k_job_id: the id for tracing/debug purposes
  *
  * Returns:
  * Negativ errno, 0 for success.
  */
 static int amdgpu_vm_cpu_prepare(struct amdgpu_vm_update_params *p,
-				 struct amdgpu_sync *sync)
+				 struct amdgpu_sync *sync,
+				 u64 k_job_id)
 {
 	if (!sync)
 		return 0;
@@ -86,12 +88,21 @@ static int amdgpu_vm_cpu_update(struct amdgpu_vm_update_params *p,
 
 	trace_amdgpu_vm_set_ptes(pe, addr, count, incr, flags, p->immediate);
 
+	if (!p->pages_addr && p->override_pte)
+		amdgpu_gmc_override_vm_pte_flags(p->adev, p->vm, addr, &flags);
+
 	for (i = 0; i < count; i++) {
+		u64 oflags = flags;
+
 		value = p->pages_addr ?
 			amdgpu_vm_map_gart(p->pages_addr, addr) :
 			addr;
+
+		if (p->pages_addr && p->override_pte)
+			amdgpu_gmc_override_vm_pte_flags(p->adev, p->vm, value, &oflags);
+
 		amdgpu_gmc_set_pte_pde(p->adev, (void *)(uintptr_t)pe,
-				       i, value, flags);
+				       i, value, oflags);
 		addr += incr;
 	}
 	return 0;

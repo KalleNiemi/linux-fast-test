@@ -3,6 +3,9 @@
  * GPIO library for the ACCES IDIO-16 family
  * Copyright (C) 2022 William Breathitt Gray
  */
+
+#define DEFAULT_SYMBOL_NAMESPACE "GPIO_IDIO_16"
+
 #include <linux/bitmap.h>
 #include <linux/bits.h>
 #include <linux/device.h>
@@ -14,8 +17,6 @@
 #include <linux/types.h>
 
 #include "gpio-idio-16.h"
-
-#define DEFAULT_SYMBOL_NAMESPACE "GPIO_IDIO_16"
 
 #define IDIO_16_DAT_BASE 0x0
 #define IDIO_16_OUT_BASE IDIO_16_DAT_BASE
@@ -65,9 +66,9 @@ static int idio_16_handle_mask_sync(const int index, const unsigned int mask_buf
 	return 0;
 }
 
-static int idio_16_reg_mask_xlate(struct gpio_regmap *const gpio, const unsigned int base,
-				  const unsigned int offset, unsigned int *const reg,
-				  unsigned int *const mask)
+static int idio_16_reg_mask_xlate(struct gpio_regmap *const gpio, enum gpio_regmap_operation op,
+				  const unsigned int base, const unsigned int offset,
+				  unsigned int *const reg, unsigned int *const mask)
 {
 	unsigned int stride;
 

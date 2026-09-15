@@ -17,7 +17,6 @@
 #include <linux/limits.h>
 #include <linux/math64.h>
 #include <linux/module.h>
-#include <linux/mod_devicetable.h>
 #include <linux/property.h>
 #include <linux/regmap.h>
 #include <linux/units.h>
@@ -74,7 +73,7 @@ const struct regmap_access_table adxl355_readable_regs_tbl = {
 	.yes_ranges = adxl355_read_reg_range,
 	.n_yes_ranges = ARRAY_SIZE(adxl355_read_reg_range),
 };
-EXPORT_SYMBOL_NS_GPL(adxl355_readable_regs_tbl, IIO_ADXL355);
+EXPORT_SYMBOL_NS_GPL(adxl355_readable_regs_tbl, "IIO_ADXL355");
 
 static const struct regmap_range adxl355_write_reg_range[] = {
 	regmap_reg_range(ADXL355_OFFSET_X_H_REG, ADXL355_RESET_REG),
@@ -84,7 +83,7 @@ const struct regmap_access_table adxl355_writeable_regs_tbl = {
 	.yes_ranges = adxl355_write_reg_range,
 	.n_yes_ranges = ARRAY_SIZE(adxl355_write_reg_range),
 };
-EXPORT_SYMBOL_NS_GPL(adxl355_writeable_regs_tbl, IIO_ADXL355);
+EXPORT_SYMBOL_NS_GPL(adxl355_writeable_regs_tbl, "IIO_ADXL355");
 
 const struct adxl355_chip_info adxl35x_chip_info[] = {
 	[ADXL355] = {
@@ -138,7 +137,7 @@ const struct adxl355_chip_info adxl35x_chip_info[] = {
 		},
 	},
 };
-EXPORT_SYMBOL_NS_GPL(adxl35x_chip_info, IIO_ADXL355);
+EXPORT_SYMBOL_NS_GPL(adxl35x_chip_info, "IIO_ADXL355");
 
 enum adxl355_op_mode {
 	ADXL355_MEASUREMENT,
@@ -336,10 +335,8 @@ static int adxl355_setup(struct adxl355_data *data)
 		return ret;
 
 	do {
-		if (--retries == 0) {
-			dev_err(data->dev, "Shadow registers mismatch\n");
-			return -EIO;
-		}
+		if (--retries == 0)
+			return dev_err_probe(data->dev, -EIO, "Shadow registers mismatch\n");
 
 		/*
 		 * Perform a software reset to make sure the device is in a consistent
@@ -351,7 +348,7 @@ static int adxl355_setup(struct adxl355_data *data)
 			return ret;
 
 		/* Wait at least 5ms after software reset */
-		usleep_range(5000, 10000);
+		fsleep(5 * USEC_PER_MSEC);
 
 		/* Read shadow registers for comparison */
 		ret = regmap_bulk_read(data->regmap,
@@ -677,7 +674,7 @@ static irqreturn_t adxl355_trigger_handler(int irq, void *p)
 	 * The acceleration data is 24 bits and big endian. It has to be saved
 	 * in 32 bits, hence, it is saved in the 2nd byte of the 4 byte buffer.
 	 * The buf array is 14 bytes as it includes 3x4=12 bytes for
-	 * accelaration data of x, y, and z axis. It also includes 2 bytes for
+	 * acceleration data of x, y, and z axis. It also includes 2 bytes for
 	 * temperature data.
 	 */
 	ret = regmap_bulk_read(data->regmap, ADXL355_XDATA3_REG,
@@ -700,8 +697,8 @@ static irqreturn_t adxl355_trigger_handler(int irq, void *p)
 	if (ret)
 		goto out_unlock_notify;
 
-	iio_push_to_buffers_with_timestamp(indio_dev, &data->buffer,
-					   pf->timestamp);
+	iio_push_to_buffers_with_ts(indio_dev, &data->buffer,
+				    sizeof(data->buffer), pf->timestamp);
 
 out_unlock_notify:
 	mutex_unlock(&data->lock);
@@ -768,18 +765,14 @@ static int adxl355_probe_trigger(struct iio_dev *indio_dev, int irq)
 	data->dready_trig->ops = &adxl355_trigger_ops;
 	iio_trigger_set_drvdata(data->dready_trig, indio_dev);
 
-	ret = devm_request_irq(data->dev, irq,
-			       &iio_trigger_generic_data_rdy_poll,
-			       IRQF_ONESHOT, "adxl355_irq", data->dready_trig);
+	ret = devm_request_irq(data->dev, irq, &iio_trigger_generic_data_rdy_poll,
+			       IRQF_NO_THREAD, "adxl355_irq", data->dready_trig);
 	if (ret)
-		return dev_err_probe(data->dev, ret, "request irq %d failed\n",
-				     irq);
+		return ret;
 
 	ret = devm_iio_trigger_register(data->dev, data->dready_trig);
-	if (ret) {
-		dev_err(data->dev, "iio trigger register failed\n");
-		return ret;
-	}
+	if (ret)
+		return dev_err_probe(data->dev, ret, "iio trigger register failed\n");
 
 	indio_dev->trig = iio_trigger_get(data->dready_trig);
 
@@ -803,7 +796,9 @@ int adxl355_core_probe(struct device *dev, struct regmap *regmap,
 	data->dev = dev;
 	data->op_mode = ADXL355_STANDBY;
 	data->chip_info = chip_info;
-	mutex_init(&data->lock);
+	ret = devm_mutex_init(dev, &data->lock);
+	if (ret)
+		return ret;
 
 	indio_dev->name = chip_info->name;
 	indio_dev->info = &adxl355_info;
@@ -813,18 +808,14 @@ int adxl355_core_probe(struct device *dev, struct regmap *regmap,
 	indio_dev->available_scan_masks = adxl355_avail_scan_masks;
 
 	ret = adxl355_setup(data);
-	if (ret) {
-		dev_err(dev, "ADXL355 setup failed\n");
-		return ret;
-	}
+	if (ret)
+		return dev_err_probe(dev, ret, "ADXL355 setup failed\n");
 
 	ret = devm_iio_triggered_buffer_setup(dev, indio_dev,
 					      &iio_pollfunc_store_time,
 					      &adxl355_trigger_handler, NULL);
-	if (ret) {
-		dev_err(dev, "iio triggered buffer setup failed\n");
-		return ret;
-	}
+	if (ret)
+		return dev_err_probe(dev, ret, "iio triggered buffer setup failed\n");
 
 	irq = fwnode_irq_get_byname(dev_fwnode(dev), "DRDY");
 	if (irq > 0) {
@@ -835,7 +826,7 @@ int adxl355_core_probe(struct device *dev, struct regmap *regmap,
 
 	return devm_iio_device_register(dev, indio_dev);
 }
-EXPORT_SYMBOL_NS_GPL(adxl355_core_probe, IIO_ADXL355);
+EXPORT_SYMBOL_NS_GPL(adxl355_core_probe, "IIO_ADXL355");
 
 MODULE_AUTHOR("Puranjay Mohan <puranjay12@gmail.com>");
 MODULE_DESCRIPTION("ADXL355 3-Axis Digital Accelerometer core driver");

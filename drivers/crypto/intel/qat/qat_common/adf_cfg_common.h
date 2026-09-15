@@ -22,12 +22,12 @@ enum adf_cfg_service_type {
 	COMP,
 	SYM,
 	ASYM,
+	DECOMP,
 	USED
 };
 
 enum adf_cfg_val_type {
 	ADF_DEC,
-	ADF_HEX,
 	ADF_STR
 };
 
@@ -41,5 +41,6 @@ enum adf_device_type {
 	DEV_C3XXXVF,
 	DEV_4XXX,
 	DEV_420XX,
+	DEV_6XXX,
 };
 #endif

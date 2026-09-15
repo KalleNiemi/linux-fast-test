@@ -17,6 +17,7 @@
 #include <asm/early_ioremap.h>
 #include <asm/alternative.h>
 #include <asm/cpufeature.h>
+#include <asm/rsi.h>
 
 /*
  * Generic IO read/write.  These perform native-endian accesses.
@@ -53,7 +54,9 @@ static __always_inline void __raw_writeq(u64 val, volatile void __iomem *addr)
 static __always_inline u8 __raw_readb(const volatile void __iomem *addr)
 {
 	u8 val;
-	asm volatile(ALTERNATIVE("ldrb %w0, [%1]",
+	asm volatile(ALTERNATIVE("nop", "dmb osh",
+				 ARM64_WORKAROUND_NVIDIA_OLYMPUS_1027)
+		     ALTERNATIVE("ldrb %w0, [%1]",
 				 "ldarb %w0, [%1]",
 				 ARM64_WORKAROUND_DEVICE_LOAD_ACQUIRE)
 		     : "=r" (val) : "r" (addr));
@@ -65,7 +68,9 @@ static __always_inline u16 __raw_readw(const volatile void __iomem *addr)
 {
 	u16 val;
 
-	asm volatile(ALTERNATIVE("ldrh %w0, [%1]",
+	asm volatile(ALTERNATIVE("nop", "dmb osh",
+				 ARM64_WORKAROUND_NVIDIA_OLYMPUS_1027)
+		     ALTERNATIVE("ldrh %w0, [%1]",
 				 "ldarh %w0, [%1]",
 				 ARM64_WORKAROUND_DEVICE_LOAD_ACQUIRE)
 		     : "=r" (val) : "r" (addr));
@@ -76,7 +81,9 @@ static __always_inline u16 __raw_readw(const volatile void __iomem *addr)
 static __always_inline u32 __raw_readl(const volatile void __iomem *addr)
 {
 	u32 val;
-	asm volatile(ALTERNATIVE("ldr %w0, [%1]",
+	asm volatile(ALTERNATIVE("nop", "dmb osh",
+				 ARM64_WORKAROUND_NVIDIA_OLYMPUS_1027)
+		     ALTERNATIVE("ldr %w0, [%1]",
 				 "ldar %w0, [%1]",
 				 ARM64_WORKAROUND_DEVICE_LOAD_ACQUIRE)
 		     : "=r" (val) : "r" (addr));
@@ -87,7 +94,9 @@ static __always_inline u32 __raw_readl(const volatile void __iomem *addr)
 static __always_inline u64 __raw_readq(const volatile void __iomem *addr)
 {
 	u64 val;
-	asm volatile(ALTERNATIVE("ldr %0, [%1]",
+	asm volatile(ALTERNATIVE("nop", "dmb osh",
+				 ARM64_WORKAROUND_NVIDIA_OLYMPUS_1027)
+		     ALTERNATIVE("ldr %0, [%1]",
 				 "ldar %0, [%1]",
 				 ARM64_WORKAROUND_DEVICE_LOAD_ACQUIRE)
 		     : "=r" (val) : "r" (addr));
@@ -127,17 +136,6 @@ static __always_inline u64 __raw_readq(const volatile void __iomem *addr)
 #define arch_has_dev_port()	(1)
 #define IO_SPACE_LIMIT		(PCI_IO_SIZE - 1)
 #define PCI_IOBASE		((void __iomem *)PCI_IO_START)
-
-/*
- * String version of I/O memory access operations.
- */
-extern void __memcpy_fromio(void *, const volatile void __iomem *, size_t);
-extern void __memcpy_toio(volatile void __iomem *, const void *, size_t);
-extern void __memset_io(volatile void __iomem *, int, size_t);
-
-#define memset_io(c,v,l)	__memset_io((c),(v),(l))
-#define memcpy_fromio(a,c,l)	__memcpy_fromio((a),(c),(l))
-#define memcpy_toio(c,a,l)	__memcpy_toio((c),(a),(l))
 
 /*
  * The ARM64 iowrite implementation is intended to support drivers that want to
@@ -277,10 +275,10 @@ int arm64_ioremap_prot_hook_register(const ioremap_prot_hook_t hook);
 void __iomem *__ioremap_prot(phys_addr_t phys, size_t size, pgprot_t prot);
 
 static inline void __iomem *ioremap_prot(phys_addr_t phys, size_t size,
-					 unsigned long user_prot)
+					 pgprot_t user_prot)
 {
 	pgprot_t prot;
-	pteval_t user_prot_val = pgprot_val(__pgprot(user_prot));
+	ptval_t user_prot_val = pgprot_val(user_prot);
 
 	if (WARN_ON_ONCE(!(user_prot_val & PTE_USER)))
 		return NULL;
@@ -297,6 +295,10 @@ static inline void __iomem *ioremap_prot(phys_addr_t phys, size_t size,
 	__ioremap_prot((addr), (size), __pgprot(PROT_NORMAL_NC))
 #define ioremap_np(addr, size)	\
 	__ioremap_prot((addr), (size), __pgprot(PROT_DEVICE_nGnRnE))
+
+
+#define ioremap_encrypted(addr, size)	\
+	__ioremap_prot((addr), (size), PAGE_KERNEL)
 
 /*
  * io{read,write}{16,32,64}be() macros
@@ -331,5 +333,12 @@ extern int valid_mmap_phys_addr_range(unsigned long pfn, size_t size);
 extern bool arch_memremap_can_ram_remap(resource_size_t offset, size_t size,
 					unsigned long flags);
 #define arch_memremap_can_ram_remap arch_memremap_can_ram_remap
+
+static inline bool arm64_is_protected_mmio(phys_addr_t phys_addr, size_t size)
+{
+	if (unlikely(is_realm_world()))
+		return arm64_rsi_is_protected(phys_addr, size);
+	return false;
+}
 
 #endif	/* __ASM_IO_H */

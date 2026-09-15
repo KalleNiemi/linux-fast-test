@@ -25,6 +25,7 @@
 
 #include <linux/debugfs.h>
 #include <linux/dynamic_debug.h>
+#include <linux/export.h>
 #include <linux/io.h>
 #include <linux/moduleparam.h>
 #include <linux/seq_file.h>
@@ -49,8 +50,10 @@ MODULE_PARM_DESC(debug, "Enable debug output, where each bit enables a debug cat
 "\t\tBit 3 (0x08)  will enable PRIME messages (prime code)\n"
 "\t\tBit 4 (0x10)  will enable ATOMIC messages (atomic code)\n"
 "\t\tBit 5 (0x20)  will enable VBL messages (vblank code)\n"
+"\t\tBit 6 (0x40)  will enable STATE messages (atomic state code)\n"
 "\t\tBit 7 (0x80)  will enable LEASE messages (leasing code)\n"
-"\t\tBit 8 (0x100) will enable DP messages (displayport code)");
+"\t\tBit 8 (0x100) will enable DP messages (displayport code)\n"
+"\t\tBit 9 (0x200) will enable DRMRES messages (managed resources code)");
 
 #if !defined(CONFIG_DRM_USE_DYNAMIC_DEBUG)
 module_param_named(debug, __drm_debug, ulong, 0600);
@@ -235,6 +238,20 @@ void __drm_printfn_err(struct drm_printer *p, struct va_format *vaf)
 }
 EXPORT_SYMBOL(__drm_printfn_err);
 
+void __drm_printfn_line(struct drm_printer *p, struct va_format *vaf)
+{
+	unsigned int counter = ++p->line.counter;
+	const char *prefix = p->prefix ?: "";
+	const char *pad = p->prefix ? " " : "";
+
+	if (p->line.series)
+		drm_printf(p->arg, "%s%s%u.%u: %pV",
+			   prefix, pad, p->line.series, counter, vaf);
+	else
+		drm_printf(p->arg, "%s%s%u: %pV", prefix, pad, counter, vaf);
+}
+EXPORT_SYMBOL(__drm_printfn_line);
+
 /**
  * drm_puts - print a const string to a &drm_printer stream
  * @p: the &drm printer
@@ -376,3 +393,26 @@ void drm_print_regset32(struct drm_printer *p, struct debugfs_regset32 *regset)
 	}
 }
 EXPORT_SYMBOL(drm_print_regset32);
+
+/**
+ * drm_print_hex_dump - print a hex dump to a &drm_printer stream
+ * @p: The &drm_printer
+ * @prefix: Prefix for each line, may be NULL for no prefix
+ * @buf: Buffer to dump
+ * @len: Length of buffer
+ *
+ * Print hex dump to &drm_printer, with 16 space-separated hex bytes per line,
+ * optionally with a prefix on each line. No separator is added after prefix.
+ */
+void drm_print_hex_dump(struct drm_printer *p, const char *prefix,
+			const u8 *buf, size_t len)
+{
+	int i;
+
+	for (i = 0; i < len; i += 16) {
+		int bytes_per_line = min(16, len - i);
+
+		drm_printf(p, "%s%*ph\n", prefix ?: "", bytes_per_line, buf + i);
+	}
+}
+EXPORT_SYMBOL(drm_print_hex_dump);

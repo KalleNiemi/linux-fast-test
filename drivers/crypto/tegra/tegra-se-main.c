@@ -8,7 +8,6 @@
 #include <linux/dma-mapping.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
-#include <linux/mod_devicetable.h>
 
 #include <crypto/engine.h>
 
@@ -47,7 +46,7 @@ tegra_se_cmdbuf_pin(struct device *dev, struct host1x_bo *bo, enum dma_data_dire
 	struct host1x_bo_mapping *map;
 	int err;
 
-	map = kzalloc(sizeof(*map), GFP_KERNEL);
+	map = kzalloc_obj(*map);
 	if (!map)
 		return ERR_PTR(-ENOMEM);
 
@@ -56,7 +55,7 @@ tegra_se_cmdbuf_pin(struct device *dev, struct host1x_bo *bo, enum dma_data_dire
 	map->direction = direction;
 	map->dev = dev;
 
-	map->sgt = kzalloc(sizeof(*map->sgt), GFP_KERNEL);
+	map->sgt = kzalloc_obj(*map->sgt);
 	if (!map->sgt) {
 		err = -ENOMEM;
 		goto free;
@@ -122,7 +121,7 @@ static struct tegra_se_cmdbuf *tegra_se_host1x_bo_alloc(struct tegra_se *se, ssi
 	struct tegra_se_cmdbuf *cmdbuf;
 	struct device *dev = se->dev->parent;
 
-	cmdbuf = kzalloc(sizeof(*cmdbuf), GFP_KERNEL);
+	cmdbuf = kzalloc_obj(*cmdbuf);
 	if (!cmdbuf)
 		return NULL;
 
@@ -309,7 +308,7 @@ static int tegra_se_probe(struct platform_device *pdev)
 
 	se->engine = crypto_engine_alloc_init(dev, 0);
 	if (!se->engine)
-		return dev_err_probe(dev, -ENOMEM, "failed to init crypto engine\n");
+		return -ENOMEM;
 
 	ret = crypto_engine_start(se->engine);
 	if (ret) {
@@ -319,7 +318,6 @@ static int tegra_se_probe(struct platform_device *pdev)
 
 	ret = tegra_se_host1x_register(se);
 	if (ret) {
-		crypto_engine_stop(se->engine);
 		crypto_engine_exit(se->engine);
 		return dev_err_probe(dev, ret, "failed to init host1x params\n");
 	}
@@ -331,7 +329,6 @@ static void tegra_se_remove(struct platform_device *pdev)
 {
 	struct tegra_se *se = platform_get_drvdata(pdev);
 
-	crypto_engine_stop(se->engine);
 	crypto_engine_exit(se->engine);
 	host1x_client_unregister(&se->client);
 }
@@ -394,7 +391,7 @@ static struct platform_driver tegra_se_driver = {
 		.of_match_table = tegra_se_of_match,
 	},
 	.probe		= tegra_se_probe,
-	.remove_new	= tegra_se_remove,
+	.remove		= tegra_se_remove,
 };
 
 static int tegra_se_host1x_probe(struct host1x_device *dev)
@@ -402,11 +399,9 @@ static int tegra_se_host1x_probe(struct host1x_device *dev)
 	return host1x_device_init(dev);
 }
 
-static int tegra_se_host1x_remove(struct host1x_device *dev)
+static void tegra_se_host1x_remove(struct host1x_device *dev)
 {
 	host1x_device_exit(dev);
-
-	return 0;
 }
 
 static struct host1x_driver tegra_se_host1x_driver = {

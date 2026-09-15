@@ -12,7 +12,6 @@
 #include <linux/module.h>
 #include <linux/i2c.h>
 #include <linux/err.h>
-#include <linux/mod_devicetable.h>
 #include <linux/iio/iio.h>
 #include <linux/iio/sysfs.h>
 
@@ -481,7 +480,7 @@ static const struct iio_chan_spec_ext_info isl29501_ext_info[] = {
 	_ISL29501_EXT_INFO("calib_phase_temp_b", REG_CALIB_PHASE_TEMP_B),
 	_ISL29501_EXT_INFO("calib_phase_light_a", REG_CALIB_PHASE_LIGHT_A),
 	_ISL29501_EXT_INFO("calib_phase_light_b", REG_CALIB_PHASE_LIGHT_B),
-	{ },
+	{ }
 };
 
 #define ISL29501_DISTANCE_SCAN_INDEX 0
@@ -995,8 +994,8 @@ static int isl29501_probe(struct i2c_client *client)
 }
 
 static const struct i2c_device_id isl29501_id[] = {
-	{ "isl29501" },
-	{}
+	{ .name = "isl29501" },
+	{ }
 };
 
 MODULE_DEVICE_TABLE(i2c, isl29501_id);

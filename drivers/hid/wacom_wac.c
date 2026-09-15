@@ -63,7 +63,7 @@ static void wacom_force_proxout(struct wacom_wac *wacom_wac)
 
 void wacom_idleprox_timeout(struct timer_list *list)
 {
-	struct wacom *wacom = from_timer(wacom, list, idleprox_timer);
+	struct wacom *wacom = timer_container_of(wacom, list, idleprox_timer);
 	struct wacom_wac *wacom_wac = &wacom->wacom_wac;
 
 	if (!wacom_wac->hid_data.sense_state) {
@@ -1192,8 +1192,11 @@ static int int_dist(int x1, int y1, int x2, int y2)
 static void wacom_intuos_bt_process_data(struct wacom_wac *wacom,
 		unsigned char *data)
 {
-	memcpy(wacom->data, data, 10);
+	u8 *saved_data = wacom->data;
+
+	wacom->data = data;
 	wacom_intuos_irq(wacom);
+	wacom->data = saved_data;
 
 	input_sync(wacom->pen_input);
 	if (wacom->pad_input)
@@ -1202,11 +1205,9 @@ static void wacom_intuos_bt_process_data(struct wacom_wac *wacom,
 
 static int wacom_intuos_bt_irq(struct wacom_wac *wacom, size_t len)
 {
-	unsigned char data[WACOM_PKGLEN_MAX];
+	u8 *data = wacom->data;
 	int i = 1;
 	unsigned power_raw, battery_capacity, bat_charging, ps_connected;
-
-	memcpy(data, wacom->data, len);
 
 	switch (data[0]) {
 	case 0x04:
@@ -1241,8 +1242,9 @@ static int wacom_intuos_bt_irq(struct wacom_wac *wacom, size_t len)
 		dev_dbg(wacom->pen_input->dev.parent,
 				"Unknown report: %d,%d size:%zu\n",
 				data[0], data[1], len);
-		return 0;
+		break;
 	}
+
 	return 0;
 }
 
@@ -1545,6 +1547,19 @@ static int wacom_intuos_pro2_bt_irq(struct wacom_wac *wacom, size_t len)
 	if (data[0] != 0x80 && data[0] != 0x81) {
 		dev_dbg(wacom->pen_input->dev.parent,
 			"%s: received unknown report #%d\n", __func__, data[0]);
+		return 0;
+	}
+
+	if (wacom->features.type == INTUOSP2_BT ||
+	    wacom->features.type == INTUOSP2S_BT) {
+		if (len < 286) {
+			dev_warn(wacom->pen_input->dev.parent,
+				 "Pro2 BT report too short: %zu bytes\n", len);
+			return 0;
+		}
+	} else if (len < 46) {
+		dev_warn(wacom->pen_input->dev.parent,
+			 "Pro2 BT report too short: %zu bytes\n", len);
 		return 0;
 	}
 
@@ -2433,9 +2448,11 @@ static void wacom_wac_pen_event(struct hid_device *hdev, struct hid_field *field
 			wacom_wac->hid_data.sense_state = value;
 		return;
 	case HID_DG_INVERT:
-		wacom_wac->hid_data.invert_state = value;
+		wacom_wac->hid_data.eraser |= value;
 		return;
 	case HID_DG_ERASER:
+		wacom_wac->hid_data.eraser |= value;
+		fallthrough;
 	case HID_DG_TIPSWITCH:
 		wacom_wac->hid_data.tipswitch |= value;
 		return;
@@ -2576,7 +2593,7 @@ static void wacom_wac_pen_report(struct hid_device *hdev,
 
 	if (entering_range) { /* first in range */
 		/* Going into range select tool */
-		if (wacom_wac->hid_data.invert_state)
+		if (wacom_wac->hid_data.eraser)
 			wacom_wac->tool[0] = BTN_TOOL_RUBBER;
 		else if (wacom_wac->features.quirks & WACOM_QUIRK_AESPEN)
 			wacom_wac->tool[0] = BTN_TOOL_PEN;
@@ -2630,6 +2647,7 @@ static void wacom_wac_pen_report(struct hid_device *hdev,
 		}
 
 		wacom_wac->hid_data.tipswitch = false;
+		wacom_wac->hid_data.eraser = false;
 
 		input_sync(input);
 	}

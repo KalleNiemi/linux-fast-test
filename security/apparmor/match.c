@@ -27,13 +27,13 @@
  * @blob: data to unpack (NOT NULL)
  * @bsize: size of blob
  *
- * Returns: pointer to table else NULL on failure
+ * Returns: pointer to table else ERR_PTR on failure
  *
  * NOTE: must be freed by kvfree (not kfree)
  */
-static struct table_header *unpack_table(char *blob, size_t bsize)
+static struct table_header *unpack_table(const char *blob, size_t bsize)
 {
-	struct table_header *table = NULL;
+	struct table_header *table = ERR_PTR(-EPROTO);
 	struct table_header th;
 	size_t tsize;
 
@@ -74,20 +74,21 @@ static struct table_header *unpack_table(char *blob, size_t bsize)
 		else if (th.td_flags == YYTD_DATA32)
 			UNPACK_ARRAY(table->td_data, blob, th.td_lolen,
 				     u32, __be32, get_unaligned_be32);
-		else
-			goto fail;
+		else {
+			kvfree(table);
+			table = ERR_PTR(-EPROTO);
+			goto out;
+		}
 		/* if table was vmalloced make sure the page tables are synced
 		 * before it is used, as it goes live to all cpus.
 		 */
 		if (is_vmalloc_addr(table))
 			vm_unmap_aliases();
-	}
+	} else
+		table = ERR_PTR(-ENOMEM);
 
 out:
 	return table;
-fail:
-	kvfree(table);
-	return NULL;
 }
 
 /**
@@ -150,14 +151,14 @@ out:
  *
  * Returns: %0 else error code on failure to verify
  */
-static int verify_dfa(struct aa_dfa *dfa)
+static int verify_dfa(const struct aa_dfa *dfa)
 {
 	size_t i, state_count, trans_count;
 	int error = -EPROTO;
 
 	state_count = dfa->tables[YYTD_ID_BASE]->td_lolen;
 	trans_count = dfa->tables[YYTD_ID_NXT]->td_lolen;
-	if (state_count == 0)
+	if (state_count < 2)
 		goto out;
 	for (i = 0; i < state_count; i++) {
 		if (DEFAULT_TABLE(dfa)[i] >= state_count) {
@@ -263,6 +264,42 @@ void aa_dfa_free_kref(struct kref *kref)
 	dfa_free(dfa);
 }
 
+
+
+/**
+ * remap_data16_to_data32 - remap u16 @old table to a u32 based table
+ * @old: table to remap
+ *
+ * Returns: new table with u32 entries instead of u16.
+ *
+ * Note: will free @old so caller does not have to
+ */
+static struct table_header *remap_data16_to_data32(struct table_header *old)
+{
+	struct table_header *new;
+	size_t tsize;
+	u32 i;
+
+	tsize = table_size(old->td_lolen, YYTD_DATA32);
+	new = kvzalloc(tsize, GFP_KERNEL);
+	if (!new) {
+		kvfree(old);
+		return NULL;
+	}
+	new->td_id = old->td_id;
+	new->td_flags = YYTD_DATA32;
+	new->td_lolen = old->td_lolen;
+
+	for (i = 0; i < old->td_lolen; i++)
+		TABLE_DATAU32(new)[i] = (u32) TABLE_DATAU16(old)[i];
+
+	kvfree(old);
+	if (is_vmalloc_addr(new))
+		vm_unmap_aliases();
+
+	return new;
+}
+
 /**
  * aa_dfa_unpack - unpack the binary tables of a serialized dfa
  * @blob: aligned serialized stream of data to unpack  (NOT NULL)
@@ -275,13 +312,13 @@ void aa_dfa_free_kref(struct kref *kref)
  *
  * Returns: an unpacked dfa ready for matching or ERR_PTR on failure
  */
-struct aa_dfa *aa_dfa_unpack(void *blob, size_t size, int flags)
+struct aa_dfa *aa_dfa_unpack(const void *blob, size_t size, int flags)
 {
 	int hsize;
 	int error = -ENOMEM;
-	char *data = blob;
+	const char *data = blob;
 	struct table_header *table = NULL;
-	struct aa_dfa *dfa = kzalloc(sizeof(struct aa_dfa), GFP_KERNEL);
+	struct aa_dfa *dfa = kzalloc_obj(struct aa_dfa);
 	if (!dfa)
 		goto fail;
 
@@ -323,8 +360,11 @@ struct aa_dfa *aa_dfa_unpack(void *blob, size_t size, int flags)
 
 	while (size > 0) {
 		table = unpack_table(data, size);
-		if (!table)
+		if (IS_ERR(table)) {
+			error = PTR_ERR(table);
+			table = NULL;
 			goto fail;
+		}
 
 		switch (table->td_id) {
 		case YYTD_ID_ACCEPT:
@@ -342,8 +382,10 @@ struct aa_dfa *aa_dfa_unpack(void *blob, size_t size, int flags)
 		case YYTD_ID_DEF:
 		case YYTD_ID_NXT:
 		case YYTD_ID_CHK:
-			if (table->td_flags != YYTD_DATA16)
+			if (!(table->td_flags == YYTD_DATA16 ||
+			      table->td_flags == YYTD_DATA32)) {
 				goto fail;
+			}
 			break;
 		case YYTD_ID_EC:
 			if (table->td_flags != YYTD_DATA8)
@@ -358,6 +400,23 @@ struct aa_dfa *aa_dfa_unpack(void *blob, size_t size, int flags)
 		dfa->tables[table->td_id] = table;
 		data += table_size(table->td_lolen, table->td_flags);
 		size -= table_size(table->td_lolen, table->td_flags);
+
+		/*
+		 * this remapping has to be done after incrementing data above
+		 * for now straight remap, later have dfa support both
+		 */
+		switch (table->td_id) {
+		case YYTD_ID_DEF:
+		case YYTD_ID_NXT:
+		case YYTD_ID_CHK:
+			if (table->td_flags == YYTD_DATA16) {
+				table = remap_data16_to_data32(table);
+				if (!table)
+					goto fail;
+			}
+			dfa->tables[table->td_id] = table;
+			break;
+		}
 		table = NULL;
 	}
 	error = verify_table_headers(dfa->tables, flags);
@@ -408,13 +467,13 @@ do {							\
  *
  * Returns: final state reached after input is consumed
  */
-aa_state_t aa_dfa_match_len(struct aa_dfa *dfa, aa_state_t start,
+aa_state_t aa_dfa_match_len(const struct aa_dfa *dfa, aa_state_t start,
 			    const char *str, int len)
 {
-	u16 *def = DEFAULT_TABLE(dfa);
+	u32 *def = DEFAULT_TABLE(dfa);
 	u32 *base = BASE_TABLE(dfa);
-	u16 *next = NEXT_TABLE(dfa);
-	u16 *check = CHECK_TABLE(dfa);
+	u32 *next = NEXT_TABLE(dfa);
+	u32 *check = CHECK_TABLE(dfa);
 	aa_state_t state = start;
 
 	if (state == DFA_NOMATCH)
@@ -453,12 +512,13 @@ aa_state_t aa_dfa_match_len(struct aa_dfa *dfa, aa_state_t start,
  *
  * Returns: final state reached after input is consumed
  */
-aa_state_t aa_dfa_match(struct aa_dfa *dfa, aa_state_t start, const char *str)
+aa_state_t aa_dfa_match(const struct aa_dfa *dfa, aa_state_t start,
+			const char *str)
 {
-	u16 *def = DEFAULT_TABLE(dfa);
+	u32 *def = DEFAULT_TABLE(dfa);
 	u32 *base = BASE_TABLE(dfa);
-	u16 *next = NEXT_TABLE(dfa);
-	u16 *check = CHECK_TABLE(dfa);
+	u32 *next = NEXT_TABLE(dfa);
+	u32 *check = CHECK_TABLE(dfa);
 	aa_state_t state = start;
 
 	if (state == DFA_NOMATCH)
@@ -496,12 +556,13 @@ aa_state_t aa_dfa_match(struct aa_dfa *dfa, aa_state_t start, const char *str)
  *
  * Returns: state reach after input @c
  */
-aa_state_t aa_dfa_next(struct aa_dfa *dfa, aa_state_t state, const char c)
+aa_state_t aa_dfa_next(const struct aa_dfa *dfa, aa_state_t state,
+		       const char c)
 {
-	u16 *def = DEFAULT_TABLE(dfa);
+	u32 *def = DEFAULT_TABLE(dfa);
 	u32 *base = BASE_TABLE(dfa);
-	u16 *next = NEXT_TABLE(dfa);
-	u16 *check = CHECK_TABLE(dfa);
+	u32 *next = NEXT_TABLE(dfa);
+	u32 *check = CHECK_TABLE(dfa);
 
 	/* current state is <state>, matching character *str */
 	if (dfa->tables[YYTD_ID_EC]) {
@@ -514,12 +575,13 @@ aa_state_t aa_dfa_next(struct aa_dfa *dfa, aa_state_t state, const char c)
 	return state;
 }
 
-aa_state_t aa_dfa_outofband_transition(struct aa_dfa *dfa, aa_state_t state)
+aa_state_t aa_dfa_outofband_transition(const struct aa_dfa *dfa,
+				       aa_state_t state)
 {
-	u16 *def = DEFAULT_TABLE(dfa);
+	u32 *def = DEFAULT_TABLE(dfa);
 	u32 *base = BASE_TABLE(dfa);
-	u16 *next = NEXT_TABLE(dfa);
-	u16 *check = CHECK_TABLE(dfa);
+	u32 *next = NEXT_TABLE(dfa);
+	u32 *check = CHECK_TABLE(dfa);
 	u32 b = (base)[(state)];
 
 	if (!(b & MATCH_FLAG_OOB_TRANSITION))
@@ -544,13 +606,13 @@ aa_state_t aa_dfa_outofband_transition(struct aa_dfa *dfa, aa_state_t state)
  *
  * Returns: final state reached after input is consumed
  */
-aa_state_t aa_dfa_match_until(struct aa_dfa *dfa, aa_state_t start,
-				const char *str, const char **retpos)
+aa_state_t aa_dfa_match_until(const struct aa_dfa *dfa, aa_state_t start,
+			      const char *str, const char **retpos)
 {
-	u16 *def = DEFAULT_TABLE(dfa);
+	u32 *def = DEFAULT_TABLE(dfa);
 	u32 *base = BASE_TABLE(dfa);
-	u16 *next = NEXT_TABLE(dfa);
-	u16 *check = CHECK_TABLE(dfa);
+	u32 *next = NEXT_TABLE(dfa);
+	u32 *check = CHECK_TABLE(dfa);
 	u32 *accept = ACCEPT_TABLE(dfa);
 	aa_state_t state = start, pos;
 
@@ -605,13 +667,13 @@ aa_state_t aa_dfa_match_until(struct aa_dfa *dfa, aa_state_t start,
  *
  * Returns: final state reached after input is consumed
  */
-aa_state_t aa_dfa_matchn_until(struct aa_dfa *dfa, aa_state_t start,
-				 const char *str, int n, const char **retpos)
+aa_state_t aa_dfa_matchn_until(const struct aa_dfa *dfa, aa_state_t start,
+			       const char *str, int n, const char **retpos)
 {
-	u16 *def = DEFAULT_TABLE(dfa);
+	u32 *def = DEFAULT_TABLE(dfa);
 	u32 *base = BASE_TABLE(dfa);
-	u16 *next = NEXT_TABLE(dfa);
-	u16 *check = CHECK_TABLE(dfa);
+	u32 *next = NEXT_TABLE(dfa);
+	u32 *check = CHECK_TABLE(dfa);
 	u32 *accept = ACCEPT_TABLE(dfa);
 	aa_state_t state = start, pos;
 
@@ -681,14 +743,14 @@ static bool is_loop(struct match_workbuf *wb, aa_state_t state,
 	return false;
 }
 
-static aa_state_t leftmatch_fb(struct aa_dfa *dfa, aa_state_t start,
-				 const char *str, struct match_workbuf *wb,
-				 unsigned int *count)
+static aa_state_t leftmatch_fb(const struct aa_dfa *dfa, aa_state_t start,
+			       const char *str, struct match_workbuf *wb,
+			       unsigned int *count)
 {
-	u16 *def = DEFAULT_TABLE(dfa);
+	u32 *def = DEFAULT_TABLE(dfa);
 	u32 *base = BASE_TABLE(dfa);
-	u16 *next = NEXT_TABLE(dfa);
-	u16 *check = CHECK_TABLE(dfa);
+	u32 *next = NEXT_TABLE(dfa);
+	u32 *check = CHECK_TABLE(dfa);
 	aa_state_t state = start, pos;
 
 	AA_BUG(!dfa);
@@ -762,7 +824,7 @@ out:
  *
  * Returns: final state reached after input is consumed
  */
-aa_state_t aa_dfa_leftmatch(struct aa_dfa *dfa, aa_state_t start,
+aa_state_t aa_dfa_leftmatch(const struct aa_dfa *dfa, aa_state_t start,
 			    const char *str, unsigned int *count)
 {
 	DEFINE_MATCH_WB(wb);

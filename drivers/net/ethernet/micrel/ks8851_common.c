@@ -143,9 +143,6 @@ static int ks8851_write_mac_addr(struct net_device *dev)
 		ks8851_wrreg16(ks, KS_MAR(i), val);
 	}
 
-	if (!netif_running(dev))
-		ks8851_set_powermode(ks, PMECR_PM_SOFTDOWN);
-
 	ks8851_unlock(ks);
 
 	return 0;
@@ -209,22 +206,6 @@ static void ks8851_init_mac(struct ks8851_net *ks, struct device_node *np)
 
 	eth_hw_addr_random(dev);
 	ks8851_write_mac_addr(dev);
-}
-
-/**
- * ks8851_dbg_dumpkkt - dump initial packet contents to debug
- * @ks: The device state
- * @rxpkt: The data for the received packet
- *
- * Dump the initial data from the packet to dev_dbg().
- */
-static void ks8851_dbg_dumpkkt(struct ks8851_net *ks, u8 *rxpkt)
-{
-	netdev_dbg(ks->netdev,
-		   "pkt %02x%02x%02x%02x %02x%02x%02x%02x %02x%02x%02x%02x\n",
-		   rxpkt[4], rxpkt[5], rxpkt[6], rxpkt[7],
-		   rxpkt[8], rxpkt[9], rxpkt[10], rxpkt[11],
-		   rxpkt[12], rxpkt[13], rxpkt[14], rxpkt[15]);
 }
 
 /**
@@ -292,8 +273,8 @@ static void ks8851_rx_pkts(struct ks8851_net *ks, struct sk_buff_head *rxq)
 
 				ks->rdfifo(ks, rxpkt, rxalign + 8);
 
-				if (netif_msg_pktdata(ks))
-					ks8851_dbg_dumpkkt(ks, rxpkt);
+				netif_dbg(ks, pktdata, ks->netdev,
+					  "pkt %12ph\n", &rxpkt[4]);
 
 				skb->protocol = eth_type_trans(skb, ks->netdev);
 				__skb_queue_tail(rxq, skb);
@@ -493,9 +474,8 @@ static int ks8851_net_open(struct net_device *dev)
  * ks8851_net_stop - close network device
  * @dev: The device being closed.
  *
- * Called to close down a network device which has been active. Cancell any
- * work, shutdown the RX and TX process and then place the chip into a low
- * power state whilst it is not being used.
+ * Called to close down a network device which has been active. Cancel any
+ * work and shutdown the RX and TX process.
  */
 static int ks8851_net_stop(struct net_device *dev)
 {
@@ -522,8 +502,6 @@ static int ks8851_net_stop(struct net_device *dev)
 	/* shutdown TX process */
 	ks8851_wrreg16(ks, KS_TXCR, 0x0000);
 
-	/* set powermode to soft power down to save power */
-	ks8851_set_powermode(ks, PMECR_PM_SOFTDOWN);
 	ks8851_unlock(ks);
 
 	/* ensure any queued tx buffers are dumped */

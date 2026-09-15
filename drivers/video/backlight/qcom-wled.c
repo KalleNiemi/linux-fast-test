@@ -1639,8 +1639,6 @@ static int wled_configure_ovp_irq(struct wled *wled,
 				       wled_ovp_irq_handler, IRQF_ONESHOT,
 				       "wled_ovp_irq", wled);
 	if (rc < 0) {
-		dev_err(wled->dev, "Unable to request ovp_irq (err:%d)\n",
-			rc);
 		wled->ovp_irq = 0;
 		return 0;
 	}
@@ -1781,7 +1779,7 @@ MODULE_DEVICE_TABLE(of, wled_match_table);
 
 static struct platform_driver wled_driver = {
 	.probe = wled_probe,
-	.remove_new = wled_remove,
+	.remove = wled_remove,
 	.driver	= {
 		.name = "qcom,wled",
 		.of_match_table	= wled_match_table,

@@ -220,6 +220,8 @@ struct net_device_context;
 
 extern u32 netvsc_ring_bytes;
 
+int netvsc_workqueue_init(void);
+void netvsc_workqueue_destroy(void);
 struct netvsc_device *netvsc_device_add(struct hv_device *device,
 					const struct netvsc_device_info *info);
 int netvsc_alloc_recv_comp_ring(struct netvsc_device *net_device, u32 q_idx);
@@ -463,7 +465,7 @@ struct nvsp_1_message_send_receive_buffer_complete {
 	 *  LargeOffset                            SmallOffset
 	 */
 
-	struct nvsp_1_receive_buffer_section sections[1];
+	struct nvsp_1_receive_buffer_section sections[];
 } __packed;
 
 /*
@@ -1158,6 +1160,8 @@ struct netvsc_device {
 	/* Receive buffer allocated by us but manages by NetVSP */
 	void *recv_buf;
 	u32 recv_buf_size; /* allocated bytes */
+	struct page **recv_buf_chunks;
+	u32 recv_buf_chunk_cnt;
 	struct vmbus_gpadl recv_buf_gpadl_handle;
 	u32 recv_section_cnt;
 	u32 recv_section_size;
@@ -1166,6 +1170,8 @@ struct netvsc_device {
 	/* Send buffer allocated by us */
 	void *send_buf;
 	u32 send_buf_size;
+	struct page **send_buf_chunks;
+	u32 send_buf_chunk_cnt;
 	struct vmbus_gpadl send_buf_gpadl_handle;
 	u32 send_section_cnt;
 	u32 send_section_size;
@@ -1180,6 +1186,8 @@ struct netvsc_device {
 	u32 max_chn;
 	u32 num_chn;
 
+	u32 netvsc_gso_max_size;
+
 	atomic_t open_chn;
 	struct work_struct subchan_work;
 	wait_queue_head_t subchan_open;
@@ -1191,7 +1199,7 @@ struct netvsc_device {
 
 	struct netvsc_channel chan_table[VRSS_CHANNEL_MAX];
 
-	struct rcu_head rcu;
+	struct rcu_work rwork;
 };
 
 /* NdisInitialize message */

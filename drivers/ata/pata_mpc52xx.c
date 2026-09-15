@@ -769,10 +769,8 @@ static int mpc52xx_ata_probe(struct platform_device *op)
 	task_irq = bcom_get_task_irq(dmatsk);
 	rv = devm_request_irq(&op->dev, task_irq, &mpc52xx_ata_task_irq, 0,
 				"ATA task", priv);
-	if (rv) {
-		dev_err(&op->dev, "error requesting DMA IRQ\n");
+	if (rv)
 		goto err2;
-	}
 	priv->dmatsk = dmatsk;
 
 	/* Init the hw */
@@ -854,7 +852,7 @@ static const struct of_device_id mpc52xx_ata_of_match[] = {
 
 static struct platform_driver mpc52xx_ata_of_platform_driver = {
 	.probe		= mpc52xx_ata_probe,
-	.remove_new	= mpc52xx_ata_remove,
+	.remove		= mpc52xx_ata_remove,
 #ifdef CONFIG_PM_SLEEP
 	.suspend	= mpc52xx_ata_suspend,
 	.resume		= mpc52xx_ata_resume,

@@ -42,7 +42,7 @@
 
 /*
  * This is the repository for labels seen so that it is
- * not necessary to keep allocating tiny chuncks of memory
+ * not necessary to keep allocating tiny chunks of memory
  * and so that they can be shared.
  *
  * Labels are never modified in place. Anytime a label
@@ -261,6 +261,7 @@ struct smack_audit_data {
 	char *subject;
 	char *object;
 	char *request;
+	struct task_struct *subj_tsk;
 	int result;
 };
 
@@ -276,6 +277,20 @@ struct smk_audit_info {
 };
 
 /*
+ * Initialization
+ */
+#if defined(CONFIG_SECURITY_SMACK_NETFILTER)
+int smack_nf_ip_init(void);
+#else
+static inline int smack_nf_ip_init(void)
+{
+	return 0;
+}
+#endif
+int init_smk_fs(void);
+int smack_initcall(void);
+
+/*
  * These functions are in smack_access.c
  */
 int smk_access_entry(char *, char *, struct list_head *);
@@ -284,6 +299,7 @@ int smk_access(struct smack_known *, struct smack_known *,
 int smk_tskacc(struct task_smack *, struct smack_known *,
 	       u32, struct smk_audit_info *);
 int smk_curacc(struct smack_known *, u32, struct smk_audit_info *);
+int smack_str_from_perm(char *string, int access);
 struct smack_known *smack_from_secid(const u32);
 int smk_parse_label_len(const char *string, int len);
 char *smk_parse_smack(const char *string, int len);
@@ -302,8 +318,9 @@ int smack_populate_secattr(struct smack_known *skp);
  * Shared data.
  */
 extern int smack_enabled __initdata;
-extern int smack_cipso_direct;
-extern int smack_cipso_mapped;
+extern u8  smack_cipso_auto_level[2];
+#define smack_cipso_direct (+smack_cipso_auto_level[0])
+#define smack_cipso_mapped (+smack_cipso_auto_level[1])
 extern struct smack_known *smack_net_ambient;
 extern struct smack_known *smack_syslog_label;
 #ifdef CONFIG_SECURITY_SMACK_BRINGUP
@@ -434,18 +451,18 @@ static inline struct smack_known *smk_of_current(void)
 	return smk_of_task(smack_cred(current_cred()));
 }
 
+void smack_log(char *subject_label, char *object_label,
+		int request,
+		int result, struct smk_audit_info *auditdata);
+
+#ifdef CONFIG_AUDIT
+
 /*
  * logging functions
  */
 #define SMACK_AUDIT_DENIED 0x1
 #define SMACK_AUDIT_ACCEPT 0x2
 extern int log_policy;
-
-void smack_log(char *subject_label, char *object_label,
-		int request,
-		int result, struct smk_audit_info *auditdata);
-
-#ifdef CONFIG_AUDIT
 
 /*
  * some inline functions to set up audit data

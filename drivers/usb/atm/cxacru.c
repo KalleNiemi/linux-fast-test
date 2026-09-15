@@ -582,7 +582,7 @@ struct cxacru_timer {
 
 static void cxacru_timeout_kill(struct timer_list *t)
 {
-	struct cxacru_timer *timer = from_timer(timer, t, timer);
+	struct cxacru_timer *timer = timer_container_of(timer, t, timer);
 
 	usb_unlink_urb(timer->urb);
 }
@@ -597,8 +597,8 @@ static int cxacru_start_wait_urb(struct urb *urb, struct completion *done,
 	timer_setup_on_stack(&timer.timer, cxacru_timeout_kill, 0);
 	mod_timer(&timer.timer, jiffies + msecs_to_jiffies(CMD_TIMEOUT));
 	wait_for_completion(done);
-	del_timer_sync(&timer.timer);
-	destroy_timer_on_stack(&timer.timer);
+	timer_delete_sync(&timer.timer);
+	timer_destroy_on_stack(&timer.timer);
 
 	if (actual_length)
 		*actual_length = urb->actual_length;
@@ -700,6 +700,8 @@ static int cxacru_cm(struct cxacru_data *instance, enum cxacru_cm_request cm,
 	ret = offd;
 	usb_dbg(instance->usbatm, "cm %#x\n", cm);
 fail:
+	if (ret < 0)
+		usb_kill_urb(instance->rcv_urb);
 	mutex_unlock(&instance->cm_serialize);
 err:
 	return ret;
@@ -1130,7 +1132,7 @@ static int cxacru_bind(struct usbatm_data *usbatm_instance,
 	int ret;
 
 	/* instance init */
-	instance = kzalloc(sizeof(*instance), GFP_KERNEL);
+	instance = kzalloc_obj(*instance);
 	if (!instance)
 		return -ENOMEM;
 
@@ -1231,8 +1233,6 @@ static void cxacru_unbind(struct usbatm_data *usbatm_instance,
 		struct usb_interface *intf)
 {
 	struct cxacru_data *instance = usbatm_instance->driver_data;
-	int is_polling = 1;
-
 	usb_dbg(usbatm_instance, "cxacru_unbind entered\n");
 
 	if (!instance) {
@@ -1243,17 +1243,11 @@ static void cxacru_unbind(struct usbatm_data *usbatm_instance,
 	mutex_lock(&instance->poll_state_serialize);
 	BUG_ON(instance->poll_state == CXPOLL_SHUTDOWN);
 
-	/* ensure that status polling continues unless
-	 * it has already stopped */
-	if (instance->poll_state == CXPOLL_STOPPED)
-		is_polling = 0;
-
 	/* stop polling from being stopped or started */
 	instance->poll_state = CXPOLL_SHUTDOWN;
 	mutex_unlock(&instance->poll_state_serialize);
 
-	if (is_polling)
-		cancel_delayed_work_sync(&instance->poll_work);
+	cancel_delayed_work_sync(&instance->poll_work);
 
 	usb_kill_urb(instance->snd_urb);
 	usb_kill_urb(instance->rcv_urb);

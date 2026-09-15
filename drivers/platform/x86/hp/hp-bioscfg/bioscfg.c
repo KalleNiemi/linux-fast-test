@@ -85,7 +85,7 @@ int hp_get_string_from_buffer(u8 **buffer, u32 *buffer_size, char *dst, u32 dst_
 	 * bytes.
 	 */
 	conv_dst_size = size;
-	if (size > dst_size)
+	if (size >= dst_size)
 		conv_dst_size = dst_size - 1;
 
 	/*
@@ -390,16 +390,13 @@ union acpi_object *hp_get_wmiobj_pointer(int instance_id, const char *guid_strin
  */
 int hp_get_instance_count(const char *guid_string)
 {
-	union acpi_object *wmi_obj = NULL;
-	int i = 0;
+	int ret;
 
-	do {
-		kfree(wmi_obj);
-		wmi_obj = hp_get_wmiobj_pointer(i, guid_string);
-		i++;
-	} while (wmi_obj);
+	ret = wmi_instance_count(guid_string);
+	if (ret < 0)
+		return 0;
 
-	return i - 1;
+	return ret;
 }
 
 /**
@@ -450,7 +447,7 @@ int hp_convert_hexstr_to_str(const char *input, u32 input_len, char **str, int *
 		return -ENOMEM;
 
 	for (i = 0; i < input_len; i += 5) {
-		strncpy(tmp, input + i, strlen(tmp));
+		strscpy(tmp, input + i);
 		if (kstrtol(tmp, 16, &ch) == 0) {
 			// escape char
 			if (ch == '\\' ||
@@ -591,7 +588,7 @@ static int hp_add_other_attributes(int attr_type)
 	int ret;
 	char *attr_name;
 
-	attr_name_kobj = kzalloc(sizeof(*attr_name_kobj), GFP_KERNEL);
+	attr_name_kobj = kzalloc_obj(*attr_name_kobj);
 	if (!attr_name_kobj)
 		return -ENOMEM;
 
@@ -664,10 +661,15 @@ static int hp_init_bios_package_attribute(enum hp_wmi_data_type attr_type,
 	int ret = 0;
 
 	/* Take action appropriate to each ACPI TYPE */
-	if (obj->package.count < min_elements) {
-		pr_err("ACPI-package does not have enough elements: %d < %d\n",
-		       obj->package.count, min_elements);
+	if (obj->package.count < COMMON_ELEM_CNT) {
+		pr_err("ACPI-package is missing common elements: %d < %d\n",
+		       obj->package.count, COMMON_ELEM_CNT);
 		goto pack_attr_exit;
+	}
+
+	if (obj->package.count < min_elements) {
+		pr_warn("ACPI-package has fewer elements than expected: %d < %d, parsing available elements\n",
+			obj->package.count, min_elements);
 	}
 
 	elements = obj->package.elements;
@@ -714,7 +716,7 @@ static int hp_init_bios_package_attribute(enum hp_wmi_data_type attr_type,
 	}
 
 	/* build attribute */
-	attr_name_kobj = kzalloc(sizeof(*attr_name_kobj), GFP_KERNEL);
+	attr_name_kobj = kzalloc_obj(*attr_name_kobj);
 	if (!attr_name_kobj) {
 		ret = -ENOMEM;
 		goto pack_attr_exit;
@@ -734,26 +736,31 @@ static int hp_init_bios_package_attribute(enum hp_wmi_data_type attr_type,
 	switch (attr_type) {
 	case HPWMI_STRING_TYPE:
 		ret = hp_populate_string_package_data(elements,
+						      obj->package.count,
 						      instance_id,
 						      attr_name_kobj);
 		break;
 	case HPWMI_INTEGER_TYPE:
 		ret = hp_populate_integer_package_data(elements,
+						       obj->package.count,
 						       instance_id,
 						       attr_name_kobj);
 		break;
 	case HPWMI_ENUMERATION_TYPE:
 		ret = hp_populate_enumeration_package_data(elements,
+							   obj->package.count,
 							   instance_id,
 							   attr_name_kobj);
 		break;
 	case HPWMI_ORDERED_LIST_TYPE:
 		ret = hp_populate_ordered_list_package_data(elements,
+							    obj->package.count,
 							    instance_id,
 							    attr_name_kobj);
 		break;
 	case HPWMI_PASSWORD_TYPE:
 		ret = hp_populate_password_package_data(elements,
+							obj->package.count,
 							instance_id,
 							attr_name_kobj);
 		break;
@@ -813,7 +820,7 @@ static int hp_init_bios_buffer_attribute(enum hp_wmi_data_type attr_type,
 	}
 
 	/* build attribute */
-	attr_name_kobj = kzalloc(sizeof(*attr_name_kobj), GFP_KERNEL);
+	attr_name_kobj = kzalloc_obj(*attr_name_kobj);
 	if (!attr_name_kobj) {
 		ret = -ENOMEM;
 		goto buff_attr_exit;

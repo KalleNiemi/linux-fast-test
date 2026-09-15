@@ -8,9 +8,23 @@
 #include <net/ip6_route.h>
 #include <net/ip6_fib.h>
 #include <net/ip6_checksum.h>
+#include <net/dst_metadata.h>
 #include <net/netfilter/ipv6/nf_reject.h>
 #include <linux/netfilter_ipv6.h>
 #include <linux/netfilter_bridge.h>
+
+static struct ipv6hdr *
+nf_reject_ip6hdr_put(struct sk_buff *nskb,
+		     const struct sk_buff *oldskb,
+		     __u8 protocol, int hoplimit);
+static void
+nf_reject_ip6_tcphdr_put(struct sk_buff *nskb,
+			 const struct sk_buff *oldskb,
+			 const struct tcphdr *oth, unsigned int otcplen);
+static const struct tcphdr *
+nf_reject_ip6_tcphdr_get(struct sk_buff *oldskb,
+			 struct tcphdr *otcph,
+			 unsigned int *otcplen, int hook);
 
 static bool nf_reject_v6_csum_ok(struct sk_buff *skb, int hook)
 {
@@ -176,9 +190,10 @@ struct sk_buff *nf_reject_skb_v6_unreach(struct net *net,
 }
 EXPORT_SYMBOL_GPL(nf_reject_skb_v6_unreach);
 
-const struct tcphdr *nf_reject_ip6_tcphdr_get(struct sk_buff *oldskb,
-					      struct tcphdr *otcph,
-					      unsigned int *otcplen, int hook)
+static const struct tcphdr *
+nf_reject_ip6_tcphdr_get(struct sk_buff *oldskb,
+			 struct tcphdr *otcph,
+			 unsigned int *otcplen, int hook)
 {
 	const struct ipv6hdr *oip6h = ipv6_hdr(oldskb);
 	u8 proto;
@@ -222,11 +237,11 @@ const struct tcphdr *nf_reject_ip6_tcphdr_get(struct sk_buff *oldskb,
 
 	return otcph;
 }
-EXPORT_SYMBOL_GPL(nf_reject_ip6_tcphdr_get);
 
-struct ipv6hdr *nf_reject_ip6hdr_put(struct sk_buff *nskb,
-				     const struct sk_buff *oldskb,
-				     __u8 protocol, int hoplimit)
+static struct ipv6hdr *
+nf_reject_ip6hdr_put(struct sk_buff *nskb,
+		     const struct sk_buff *oldskb,
+		     __u8 protocol, int hoplimit)
 {
 	struct ipv6hdr *ip6h;
 	const struct ipv6hdr *oip6h = ipv6_hdr(oldskb);
@@ -246,11 +261,11 @@ struct ipv6hdr *nf_reject_ip6hdr_put(struct sk_buff *nskb,
 
 	return ip6h;
 }
-EXPORT_SYMBOL_GPL(nf_reject_ip6hdr_put);
 
-void nf_reject_ip6_tcphdr_put(struct sk_buff *nskb,
-			      const struct sk_buff *oldskb,
-			      const struct tcphdr *oth, unsigned int otcplen)
+static void
+nf_reject_ip6_tcphdr_put(struct sk_buff *nskb,
+			 const struct sk_buff *oldskb,
+			 const struct tcphdr *oth, unsigned int otcplen)
 {
 	struct tcphdr *tcph;
 
@@ -278,7 +293,6 @@ void nf_reject_ip6_tcphdr_put(struct sk_buff *nskb,
 				      csum_partial(tcph,
 						   sizeof(struct tcphdr), 0));
 }
-EXPORT_SYMBOL_GPL(nf_reject_ip6_tcphdr_put);
 
 static int nf_reject6_fill_skb_dst(struct sk_buff *skb_in)
 {
@@ -291,6 +305,7 @@ static int nf_reject6_fill_skb_dst(struct sk_buff *skb_in)
 	if (!dst)
 		return -1;
 
+	skb_dst_drop(skb_in);
 	skb_dst_set(skb_in, dst);
 	return 0;
 }
@@ -323,14 +338,16 @@ void nf_send_reset6(struct net *net, struct sock *sk, struct sk_buff *oldskb,
 	fl6.fl6_sport = otcph->dest;
 	fl6.fl6_dport = otcph->source;
 
-	if (!skb_dst(oldskb)) {
+	if (!skb_valid_dst(oldskb)) {
 		nf_ip6_route(net, &dst, flowi6_to_flowi(&fl6), false);
 		if (!dst)
 			return;
+
+		skb_dst_drop(oldskb);
 		skb_dst_set(oldskb, dst);
 	}
 
-	fl6.flowi6_oif = l3mdev_master_ifindex(skb_dst(oldskb)->dev);
+	fl6.flowi6_oif = l3mdev_master_ifindex(skb_dst_dev(oldskb));
 	fl6.flowi6_mark = IP6_REPLY_MARK(net, oldskb->mark);
 	security_skb_classify_flow(oldskb, flowi6_to_flowi_common(&fl6));
 	dst = ip6_route_output(net, NULL, &fl6);
@@ -427,7 +444,7 @@ void nf_send_unreach6(struct net *net, struct sk_buff *skb_in,
 	if (hooknum == NF_INET_LOCAL_OUT && skb_in->dev == NULL)
 		skb_in->dev = net->loopback_dev;
 
-	if (!skb_dst(skb_in) && nf_reject6_fill_skb_dst(skb_in) < 0)
+	if (!skb_valid_dst(skb_in) && nf_reject6_fill_skb_dst(skb_in) < 0)
 		return;
 
 	icmpv6_send(skb_in, ICMPV6_DEST_UNREACH, code, 0);

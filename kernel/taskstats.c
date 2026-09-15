@@ -361,17 +361,14 @@ static int parse(struct nlattr *na, struct cpumask *mask)
 	int len;
 	int ret;
 
-	if (na == NULL)
-		return 1;
 	len = nla_len(na);
 	if (len > TASKSTATS_CPUMASK_MAXLEN)
 		return -E2BIG;
 	if (len < 1)
 		return -EINVAL;
-	data = kmalloc(len, GFP_KERNEL);
+	data = nla_strdup(na, GFP_KERNEL);
 	if (!data)
 		return -ENOMEM;
-	nla_strscpy(data, na, len);
 	ret = cpulist_parse(data, mask);
 	kfree(data);
 	return ret;
@@ -415,30 +412,28 @@ static int cgroupstats_user_cmd(struct sk_buff *skb, struct genl_info *info)
 	struct nlattr *na;
 	size_t size;
 	u32 fd;
-	struct fd f;
 
 	na = info->attrs[CGROUPSTATS_CMD_ATTR_FD];
 	if (!na)
 		return -EINVAL;
 
 	fd = nla_get_u32(info->attrs[CGROUPSTATS_CMD_ATTR_FD]);
-	f = fdget(fd);
-	if (!fd_file(f))
-		return 0;
+	CLASS(fd, f)(fd);
+	if (fd_empty(f))
+		return -EBADF;
 
 	size = nla_total_size(sizeof(struct cgroupstats));
 
 	rc = prepare_reply(info, CGROUPSTATS_CMD_NEW, &rep_skb,
 				size);
 	if (rc < 0)
-		goto err;
+		return rc;
 
 	na = nla_reserve(rep_skb, CGROUPSTATS_TYPE_CGROUP_STATS,
 				sizeof(struct cgroupstats));
 	if (na == NULL) {
 		nlmsg_free(rep_skb);
-		rc = -EMSGSIZE;
-		goto err;
+		return -EMSGSIZE;
 	}
 
 	stats = nla_data(na);
@@ -447,46 +442,24 @@ static int cgroupstats_user_cmd(struct sk_buff *skb, struct genl_info *info)
 	rc = cgroupstats_build(stats, fd_file(f)->f_path.dentry);
 	if (rc < 0) {
 		nlmsg_free(rep_skb);
-		goto err;
+		return rc;
 	}
 
-	rc = send_reply(rep_skb, info);
-
-err:
-	fdput(f);
-	return rc;
+	return send_reply(rep_skb, info);
 }
 
-static int cmd_attr_register_cpumask(struct genl_info *info)
+static int cmd_attr_cpumask(struct genl_info *info, int attr,
+			    enum actions action)
 {
-	cpumask_var_t mask;
+	cpumask_var_t mask __free(free_cpumask_var) = CPUMASK_VAR_NULL;
 	int rc;
 
 	if (!alloc_cpumask_var(&mask, GFP_KERNEL))
 		return -ENOMEM;
-	rc = parse(info->attrs[TASKSTATS_CMD_ATTR_REGISTER_CPUMASK], mask);
+	rc = parse(info->attrs[attr], mask);
 	if (rc < 0)
-		goto out;
-	rc = add_del_listener(info->snd_portid, mask, REGISTER);
-out:
-	free_cpumask_var(mask);
-	return rc;
-}
-
-static int cmd_attr_deregister_cpumask(struct genl_info *info)
-{
-	cpumask_var_t mask;
-	int rc;
-
-	if (!alloc_cpumask_var(&mask, GFP_KERNEL))
-		return -ENOMEM;
-	rc = parse(info->attrs[TASKSTATS_CMD_ATTR_DEREGISTER_CPUMASK], mask);
-	if (rc < 0)
-		goto out;
-	rc = add_del_listener(info->snd_portid, mask, DEREGISTER);
-out:
-	free_cpumask_var(mask);
-	return rc;
+		return rc;
+	return add_del_listener(info->snd_portid, mask, action);
 }
 
 static size_t taskstats_packet_size(void)
@@ -561,9 +534,13 @@ err:
 static int taskstats_user_cmd(struct sk_buff *skb, struct genl_info *info)
 {
 	if (info->attrs[TASKSTATS_CMD_ATTR_REGISTER_CPUMASK])
-		return cmd_attr_register_cpumask(info);
+		return cmd_attr_cpumask(info,
+					TASKSTATS_CMD_ATTR_REGISTER_CPUMASK,
+					REGISTER);
 	else if (info->attrs[TASKSTATS_CMD_ATTR_DEREGISTER_CPUMASK])
-		return cmd_attr_deregister_cpumask(info);
+		return cmd_attr_cpumask(info,
+					TASKSTATS_CMD_ATTR_DEREGISTER_CPUMASK,
+					DEREGISTER);
 	else if (info->attrs[TASKSTATS_CMD_ATTR_PID])
 		return cmd_attr_pid(info);
 	else if (info->attrs[TASKSTATS_CMD_ATTR_TGID])

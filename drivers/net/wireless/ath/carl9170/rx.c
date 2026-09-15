@@ -456,7 +456,9 @@ static void carl9170_rx_phy_status(struct ar9170 *ar,
 		if (phy->rssi[i] & 0x80)
 			phy->rssi[i] = ((~phy->rssi[i] & 0x7f) + 1) & 0x7f;
 
-	/* TODO: we could do something with phy_errors */
+	if (phy->phy_err)
+		ar->rx_phy_errors++;
+
 	status->signal = ar->noise[0] + phy->rssi_combined;
 }
 
@@ -556,7 +558,7 @@ static void carl9170_ps_beacon(struct ar9170 *ar, void *data, unsigned int len)
 	/* Check whenever the PHY can be turned off again. */
 
 	/* 1. What about buffered unicast traffic for our AID? */
-	cam = ieee80211_check_tim(tim_ie, tim_len, ar->common.curaid);
+	cam = ieee80211_check_tim(tim_ie, tim_len, ar->common.curaid, false);
 
 	/* 2. Maybe the AP wants to send multicast/broadcast data? */
 	cam |= !!(tim_ie->bitmap_ctrl & 0x01);

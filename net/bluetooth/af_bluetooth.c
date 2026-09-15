@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
    BlueZ - Bluetooth protocol stack for Linux
    Copyright (C) 2000-2001 Qualcomm Incorporated
 
    Written 2000,2001 by Maxim Krasnyansky <maxk@qualcomm.com>
-
-   This program is free software; you can redistribute it and/or modify
-   it under the terms of the GNU General Public License version 2 as
-   published by the Free Software Foundation;
 
    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
    OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -33,6 +30,9 @@
 
 #include <net/bluetooth/bluetooth.h>
 #include <linux/proc_fs.h>
+
+#include <linux/ethtool.h>
+#include <linux/sockios.h>
 
 #include "leds.h"
 #include "selftest.h"
@@ -209,6 +209,7 @@ bool bt_sock_linked(struct bt_sock_list *l, struct sock *s)
 EXPORT_SYMBOL(bt_sock_linked);
 
 void bt_accept_enqueue(struct sock *parent, struct sock *sk, bool bh)
+	__context_unsafe(/* conditional locking */)
 {
 	const struct cred *old_cred;
 	struct pid *old_pid;
@@ -392,6 +393,13 @@ int bt_sock_recvmsg(struct socket *sock, struct msghdr *msg, size_t len,
 
 			put_cmsg(msg, SOL_BLUETOOTH, BT_SCM_PKT_STATUS,
 				 sizeof(pkt_status), &pkt_status);
+		}
+
+		if (test_bit(BT_SK_PKT_SEQNUM, &bt_sk(sk)->flags)) {
+			u16 pkt_seqnum = hci_skb_pkt_seqnum(skb);
+
+			put_cmsg(msg, SOL_BLUETOOTH, BT_SCM_PKT_SEQNUM,
+				 sizeof(pkt_seqnum), &pkt_seqnum);
 		}
 	}
 
@@ -605,6 +613,86 @@ __poll_t bt_sock_poll(struct file *file, struct socket *sock,
 }
 EXPORT_SYMBOL(bt_sock_poll);
 
+static int bt_ethtool_get_ts_info(struct sock *sk, unsigned int index,
+				  void __user *useraddr)
+{
+	struct ethtool_ts_info info;
+	struct kernel_ethtool_ts_info ts_info = {};
+	int ret;
+
+	ret = hci_ethtool_ts_info(index, sk->sk_protocol, &ts_info);
+	if (ret == -ENODEV)
+		return ret;
+	else if (ret < 0)
+		return -EIO;
+
+	memset(&info, 0, sizeof(info));
+
+	info.cmd = ETHTOOL_GET_TS_INFO;
+	info.so_timestamping = ts_info.so_timestamping;
+	info.phc_index = ts_info.phc_index;
+	info.tx_types = ts_info.tx_types;
+	info.rx_filters = ts_info.rx_filters;
+
+	if (copy_to_user(useraddr, &info, sizeof(info)))
+		return -EFAULT;
+
+	return 0;
+}
+
+static int bt_ethtool(struct sock *sk, const struct ifreq *ifr,
+		      void __user *useraddr)
+{
+	unsigned int index;
+	u32 ethcmd;
+	int n;
+
+	if (copy_from_user(&ethcmd, useraddr, sizeof(ethcmd)))
+		return -EFAULT;
+
+	if (sscanf(ifr->ifr_name, "hci%u%n", &index, &n) != 1 ||
+	    n != strlen(ifr->ifr_name))
+		return -ENODEV;
+
+	switch (ethcmd) {
+	case ETHTOOL_GET_TS_INFO:
+		return bt_ethtool_get_ts_info(sk, index, useraddr);
+	}
+
+	return -EOPNOTSUPP;
+}
+
+static int bt_dev_ioctl(struct socket *sock, unsigned int cmd, void __user *arg)
+{
+	struct sock *sk = sock->sk;
+	struct ifreq ifr = {};
+	void __user *data;
+	char *colon;
+	int ret = -ENOIOCTLCMD;
+
+	if (get_user_ifreq(&ifr, &data, arg))
+		return -EFAULT;
+
+	ifr.ifr_name[IFNAMSIZ - 1] = 0;
+	colon = strchr(ifr.ifr_name, ':');
+	if (colon)
+		*colon = 0;
+
+	switch (cmd) {
+	case SIOCETHTOOL:
+		ret = bt_ethtool(sk, &ifr, data);
+		break;
+	}
+
+	if (colon)
+		*colon = ':';
+
+	if (put_user_ifreq(&ifr, arg))
+		return -EFAULT;
+
+	return ret;
+}
+
 int bt_sock_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 {
 	struct sock *sk = sock->sk;
@@ -635,6 +723,10 @@ int bt_sock_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 		spin_unlock(&sk->sk_receive_queue.lock);
 
 		err = put_user(amount, (int __user *)arg);
+		break;
+
+	case SIOCETHTOOL:
+		err = bt_dev_ioctl(sock, cmd, (void __user *)arg);
 		break;
 
 	default:
@@ -724,7 +816,8 @@ EXPORT_SYMBOL(bt_sock_wait_ready);
 
 #ifdef CONFIG_PROC_FS
 static void *bt_seq_start(struct seq_file *seq, loff_t *pos)
-	__acquires(seq->private->l->lock)
+	__acquires_shared(&((struct bt_sock_list *)
+			    pde_data(file_inode(seq->file)))->lock)
 {
 	struct bt_sock_list *l = pde_data(file_inode(seq->file));
 
@@ -740,7 +833,8 @@ static void *bt_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 }
 
 static void bt_seq_stop(struct seq_file *seq, void *v)
-	__releases(seq->private->l->lock)
+	__releases_shared(&((struct bt_sock_list *)
+			    pde_data(file_inode(seq->file)))->lock)
 {
 	struct bt_sock_list *l = pde_data(file_inode(seq->file));
 
@@ -765,14 +859,14 @@ static int bt_seq_show(struct seq_file *seq, void *v)
 		struct bt_sock *bt = bt_sk(sk);
 
 		seq_printf(seq,
-			   "%pK %-6d %-6u %-6u %-6u %-6lu %-6lu",
+			   "%pK %-6d %-6u %-6u %-6u %-6llu %-6llu",
 			   sk,
 			   refcount_read(&sk->sk_refcnt),
 			   sk_rmem_alloc_get(sk),
 			   sk_wmem_alloc_get(sk),
-			   from_kuid(seq_user_ns(seq), sock_i_uid(sk)),
+			   from_kuid(seq_user_ns(seq), sk_uid(sk)),
 			   sock_i_ino(sk),
-			   bt->parent ? sock_i_ino(bt->parent) : 0LU);
+			   bt->parent ? sock_i_ino(bt->parent) : 0ULL);
 
 		if (l->custom_seq_show) {
 			seq_putc(seq, ' ');

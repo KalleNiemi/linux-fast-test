@@ -279,7 +279,7 @@ static int spi_st_probe(struct platform_device *pdev)
 	int irq, ret = 0;
 	u32 var;
 
-	host = spi_alloc_host(&pdev->dev, sizeof(*spi_st));
+	host = devm_spi_alloc_host(&pdev->dev, sizeof(*spi_st));
 	if (!host)
 		return -ENOMEM;
 
@@ -296,13 +296,12 @@ static int spi_st_probe(struct platform_device *pdev)
 	spi_st->clk = devm_clk_get(&pdev->dev, "ssc");
 	if (IS_ERR(spi_st->clk)) {
 		dev_err(&pdev->dev, "Unable to request clock\n");
-		ret = PTR_ERR(spi_st->clk);
-		goto put_host;
+		return PTR_ERR(spi_st->clk);
 	}
 
 	ret = clk_prepare_enable(spi_st->clk);
 	if (ret)
-		goto put_host;
+		return ret;
 
 	init_completion(&spi_st->done);
 
@@ -361,8 +360,7 @@ rpm_disable:
 	pm_runtime_disable(&pdev->dev);
 clk_disable:
 	clk_disable_unprepare(spi_st->clk);
-put_host:
-	spi_controller_put(host);
+
 	return ret;
 }
 
@@ -371,20 +369,15 @@ static void spi_st_remove(struct platform_device *pdev)
 	struct spi_controller *host = platform_get_drvdata(pdev);
 	struct spi_st *spi_st = spi_controller_get_devdata(host);
 
-	spi_controller_get(host);
-
 	spi_unregister_controller(host);
 
 	pm_runtime_disable(&pdev->dev);
 
 	clk_disable_unprepare(spi_st->clk);
 
-	spi_controller_put(host);
-
 	pinctrl_pm_select_sleep_state(&pdev->dev);
 }
 
-#ifdef CONFIG_PM
 static int spi_st_runtime_suspend(struct device *dev)
 {
 	struct spi_controller *host = dev_get_drvdata(dev);
@@ -409,9 +402,7 @@ static int spi_st_runtime_resume(struct device *dev)
 
 	return ret;
 }
-#endif
 
-#ifdef CONFIG_PM_SLEEP
 static int spi_st_suspend(struct device *dev)
 {
 	struct spi_controller *host = dev_get_drvdata(dev);
@@ -435,11 +426,10 @@ static int spi_st_resume(struct device *dev)
 
 	return pm_runtime_force_resume(dev);
 }
-#endif
 
 static const struct dev_pm_ops spi_st_pm = {
-	SET_SYSTEM_SLEEP_PM_OPS(spi_st_suspend, spi_st_resume)
-	SET_RUNTIME_PM_OPS(spi_st_runtime_suspend, spi_st_runtime_resume, NULL)
+	SYSTEM_SLEEP_PM_OPS(spi_st_suspend, spi_st_resume)
+	RUNTIME_PM_OPS(spi_st_runtime_suspend, spi_st_runtime_resume, NULL)
 };
 
 static const struct of_device_id stm_spi_match[] = {
@@ -451,11 +441,11 @@ MODULE_DEVICE_TABLE(of, stm_spi_match);
 static struct platform_driver spi_st_driver = {
 	.driver = {
 		.name = "spi-st",
-		.pm = &spi_st_pm,
+		.pm = pm_ptr(&spi_st_pm),
 		.of_match_table = of_match_ptr(stm_spi_match),
 	},
 	.probe = spi_st_probe,
-	.remove_new = spi_st_remove,
+	.remove = spi_st_remove,
 };
 module_platform_driver(spi_st_driver);
 

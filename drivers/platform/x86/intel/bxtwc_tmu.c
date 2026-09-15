@@ -10,7 +10,6 @@
  */
 
 #include <linux/module.h>
-#include <linux/mod_devicetable.h>
 #include <linux/interrupt.h>
 #include <linux/platform_device.h>
 #include <linux/mfd/intel_soc_pmic.h>
@@ -121,7 +120,7 @@ MODULE_DEVICE_TABLE(platform, bxt_wcove_tmu_id_table);
 
 static struct platform_driver bxt_wcove_tmu_driver = {
 	.probe = bxt_wcove_tmu_probe,
-	.remove_new = bxt_wcove_tmu_remove,
+	.remove = bxt_wcove_tmu_remove,
 	.driver = {
 		.name = "bxt_wcove_tmu",
 		.pm     = &bxtwc_tmu_pm_ops,

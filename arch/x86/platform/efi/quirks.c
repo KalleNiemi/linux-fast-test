@@ -372,7 +372,7 @@ void __init efi_reserve_boot_services(void)
 		 * doesn't make sense as far as the firmware is
 		 * concerned, but it does provide us with a way to tag
 		 * those regions that must not be paired with
-		 * memblock_free_late().
+		 * memblock_phys_free().
 		 */
 		md->attribute |= EFI_MEMORY_RUNTIME;
 	}
@@ -610,6 +610,11 @@ int __init efi_reuse_config(u64 tables, int nr_tables)
 
 		if (!efi_guidcmp(guid, SMBIOS_TABLE_GUID))
 			((efi_config_table_64_t *)p)->table = data->smbios;
+
+		/* Do not bother to play with mem attr table across kexec */
+		if (!efi_guidcmp(guid, EFI_MEMORY_ATTRIBUTES_TABLE_GUID))
+			((efi_config_table_64_t *)p)->table = EFI_INVALID_TABLE_ADDR;
+
 		p += sz;
 	}
 	early_memunmap(tablep, nr_tables * sz);
@@ -705,8 +710,7 @@ static int qrk_capsule_setup_info(struct capsule_info *cap_info, void **pkbuff,
 }
 
 static const struct x86_cpu_id efi_capsule_quirk_ids[] = {
-	X86_MATCH_VENDOR_FAM_MODEL(INTEL, 5, INTEL_FAM5_QUARK_X1000,
-				   &qrk_capsule_setup_info),
+	X86_MATCH_VFM(INTEL_QUARK_X1000, &qrk_capsule_setup_info),
 	{ }
 };
 
@@ -757,7 +761,8 @@ int efi_capsule_setup_info(struct capsule_info *cap_info, void *kbuff,
  * @return: Returns, if the page fault is not handled. This function
  * will never return if the page fault is handled successfully.
  */
-void efi_crash_gracefully_on_page_fault(unsigned long phys_addr)
+void efi_crash_gracefully_on_page_fault(unsigned long phys_addr,
+					const struct pt_regs *regs)
 {
 	if (!IS_ENABLED(CONFIG_X86_64))
 		return;
@@ -766,7 +771,7 @@ void efi_crash_gracefully_on_page_fault(unsigned long phys_addr)
 	 * If we get an interrupt/NMI while processing an EFI runtime service
 	 * then this is a regular OOPS, not an EFI failure.
 	 */
-	if (in_interrupt())
+	if (!in_task())
 		return;
 
 	/*
@@ -807,6 +812,14 @@ void efi_crash_gracefully_on_page_fault(unsigned long phys_addr)
 	}
 
 	/*
+	 * The API does not permit entering a kernel mode FPU section with
+	 * interrupts enabled and leaving it with interrupts disabled.  So
+	 * re-enable interrupts now if they were enabled when the page fault
+	 * occurred.
+	 */
+	local_irq_restore(regs->flags);
+
+	/*
 	 * Before calling EFI Runtime Service, the kernel has switched the
 	 * calling process to efi_mm. Hence, switch back to task_mm.
 	 */
@@ -819,12 +832,5 @@ void efi_crash_gracefully_on_page_fault(unsigned long phys_addr)
 	clear_bit(EFI_RUNTIME_SERVICES, &efi.flags);
 	pr_info("Froze efi_rts_wq and disabled EFI Runtime Services\n");
 
-	/*
-	 * Call schedule() in an infinite loop, so that any spurious wake ups
-	 * will never run efi_rts_wq again.
-	 */
-	for (;;) {
-		set_current_state(TASK_IDLE);
-		schedule();
-	}
+	efi_rts_park_worker();
 }

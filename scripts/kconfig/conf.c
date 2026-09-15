@@ -348,6 +348,23 @@ static int conf_string(struct menu *menu)
 		}
 		if (def && sym_set_string_value(sym, def))
 			return 0;
+
+		/*
+		 * A new int or hex symbol whose default fails validation
+		 * cannot be set from an empty answer. When standard input is
+		 * exhausted, as it is for a non-interactive oldconfig or
+		 * syncconfig, re-asking would loop forever and grow the output
+		 * until it exhausts memory. Stop with an error that names the
+		 * symbol instead. String symbols accept any text, and bool and
+		 * tristate symbols (conf_sym()) and choices (conf_choice())
+		 * accept the default on an empty line, so they are unaffected.
+		 */
+		if (feof(stdin)) {
+			fprintf(stderr,
+				"\nerror: no value for new symbol '%s' at end of input\n",
+				sym->name);
+			exit(1);
+		}
 	}
 }
 
@@ -592,7 +609,7 @@ static void check_conf(struct menu *menu)
 		default:
 			if (!conf_cnt++)
 				printf("*\n* Restart config...\n*\n");
-			rootEntry = menu_get_parent_menu(menu);
+			rootEntry = menu_get_menu_or_parent_menu(menu);
 			conf(rootEntry);
 			break;
 		}
@@ -626,7 +643,7 @@ static const struct option long_opts[] = {
 
 static void conf_usage(const char *progname)
 {
-	printf("Usage: %s [options] <kconfig-file>\n", progname);
+	printf("Usage: %s [options] kconfig_file\n", progname);
 	printf("\n");
 	printf("Generic options:\n");
 	printf("  -h, --help              Print this message and exit.\n");
@@ -651,6 +668,9 @@ static void conf_usage(const char *progname)
 	printf("  --mod2yesconfig         Change answers from mod to yes if possible\n");
 	printf("  --mod2noconfig          Change answers from mod to no if possible\n");
 	printf("  (If none of the above is given, --oldaskconfig is the default)\n");
+	printf("\n");
+	printf("Arguments:\n");
+	printf("  kconfig_file            Top-level Kconfig file.\n");
 }
 
 int main(int ac, char **av)

@@ -211,8 +211,31 @@ static int tcan4x5x_write_fifo(struct m_can_classdev *cdev,
 	return regmap_bulk_write(priv->regmap, TCAN4X5X_MRAM_START + addr_offset, val, val_count);
 }
 
-static int tcan4x5x_power_enable(struct regulator *reg, int enable)
+static int tcan4x5x_power_enable(struct tcan4x5x_priv *priv, int enable)
 {
+	struct regulator *reg = priv->power;
+
+	/*
+	 * Put the device into sleep mode if the RST pin is available,
+	 * since a wake-up event, RST pin toggle, or power cycle are the only
+	 * ways to exit sleep mode.
+	 * Redundant if the regulator is exclusive to this device, but that
+	 * can't be determined here.
+	 *
+	 * Datasheet: TCAN4550, section "8.4.3 Sleep Mode"
+	 * https://www.ti.com/lit/gpn/tcan4550
+	 */
+	if (priv->reset_gpio && !enable) {
+		int ret;
+
+		ret = regmap_update_bits(priv->regmap, TCAN4X5X_CONFIG,
+					 TCAN4X5X_MODE_SEL_MASK,
+					 TCAN4X5X_MODE_SLEEP);
+		if (ret)
+			dev_err(&priv->spi->dev, "Setting sleep mode failed %pe\n",
+				ERR_PTR(ret));
+	}
+
 	if (IS_ERR_OR_NULL(reg))
 		return 0;
 
@@ -278,6 +301,14 @@ static int tcan4x5x_init(struct m_can_classdev *cdev)
 
 	return ret;
 }
+
+static int tcan4x5x_deinit(struct m_can_classdev *cdev)
+{
+	struct tcan4x5x_priv *tcan4x5x = cdev_to_priv(cdev);
+
+	return regmap_update_bits(tcan4x5x->regmap, TCAN4X5X_CONFIG,
+				  TCAN4X5X_MODE_SEL_MASK, TCAN4X5X_MODE_STANDBY);
+};
 
 static int tcan4x5x_disable_wake(struct m_can_classdev *cdev)
 {
@@ -391,6 +422,7 @@ static int tcan4x5x_check_gpios(struct m_can_classdev *cdev,
 
 static const struct m_can_ops tcan4x5x_ops = {
 	.init = tcan4x5x_init,
+	.deinit = tcan4x5x_deinit,
 	.read_reg = tcan4x5x_read_reg,
 	.write_reg = tcan4x5x_write_reg,
 	.write_fifo = tcan4x5x_write_fifo,
@@ -407,8 +439,8 @@ static int tcan4x5x_can_probe(struct spi_device *spi)
 
 	mcan_class = m_can_class_allocate_dev(&spi->dev,
 					      sizeof(struct tcan4x5x_priv));
-	if (!mcan_class)
-		return -ENOMEM;
+	if (IS_ERR(mcan_class))
+		return PTR_ERR(mcan_class);
 
 	ret = m_can_check_mram_cfg(mcan_class, TCAN4X5X_MRAM_SIZE);
 	if (ret)
@@ -425,7 +457,7 @@ static int tcan4x5x_can_probe(struct spi_device *spi)
 		priv->power = NULL;
 	}
 
-	m_can_class_get_clocks(mcan_class);
+	mcan_class->cclk = devm_clk_get(mcan_class->dev, "cclk");
 	if (IS_ERR(mcan_class->cclk)) {
 		dev_err(&spi->dev, "no CAN clock source defined\n");
 		freq = TCAN4X5X_EXT_CLK_DEF;
@@ -467,7 +499,7 @@ static int tcan4x5x_can_probe(struct spi_device *spi)
 		goto out_m_can_class_free_dev;
 	}
 
-	ret = tcan4x5x_power_enable(priv->power, 1);
+	ret = tcan4x5x_power_enable(priv, 1);
 	if (ret) {
 		dev_err(&spi->dev, "Enabling regulator failed %pe\n",
 			ERR_PTR(ret));
@@ -522,7 +554,7 @@ static int tcan4x5x_can_probe(struct spi_device *spi)
 	return 0;
 
 out_power:
-	tcan4x5x_power_enable(priv->power, 0);
+	tcan4x5x_power_enable(priv, 0);
  out_m_can_class_free_dev:
 	m_can_class_free_dev(mcan_class->net);
 	return ret;
@@ -534,7 +566,7 @@ static void tcan4x5x_can_remove(struct spi_device *spi)
 
 	m_can_class_unregister(&priv->cdev);
 
-	tcan4x5x_power_enable(priv->power, 0);
+	tcan4x5x_power_enable(priv, 0);
 
 	m_can_class_free_dev(priv->cdev.net);
 }

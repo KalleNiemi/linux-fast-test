@@ -29,12 +29,10 @@
 #include <linux/syscalls.h>
 #include <linux/sysctl.h>
 
+#include <asm/syscall.h>
+
 /* Not exposed in headers: strictly internal use only. */
 #define SECCOMP_MODE_DEAD	(SECCOMP_MODE_FILTER + 1)
-
-#ifdef CONFIG_HAVE_ARCH_SECCOMP_FILTER
-#include <asm/syscall.h>
-#endif
 
 #ifdef CONFIG_SECCOMP_FILTER
 #include <linux/file.h>
@@ -576,6 +574,9 @@ void seccomp_filter_release(struct task_struct *tsk)
 	if (WARN_ON((tsk->flags & PF_EXITING) == 0))
 		return;
 
+	if (READ_ONCE(tsk->seccomp.filter) == NULL)
+		return;
+
 	spin_lock_irq(&tsk->sighand->siglock);
 	orig = tsk->seccomp.filter;
 	/* Detach task from its filter tree. */
@@ -600,6 +601,13 @@ static inline void seccomp_sync_threads(unsigned long flags)
 
 	BUG_ON(!mutex_is_locked(&current->signal->cred_guard_mutex));
 	assert_spin_locked(&current->sighand->siglock);
+
+	/*
+	 * Don't touch any of the threads if the process is being killed.
+	 * This allows for a lockless check in seccomp_filter_release.
+	 */
+	if (current->signal->flags & SIGNAL_GROUP_EXIT)
+		return;
 
 	/* Synchronize all threads. */
 	caller = current;
@@ -685,7 +693,7 @@ static struct seccomp_filter *seccomp_prepare_filter(struct sock_fprog *fprog)
 		return ERR_PTR(-EACCES);
 
 	/* Allocate a new seccomp_filter */
-	sfilter = kzalloc(sizeof(*sfilter), GFP_KERNEL | __GFP_NOWARN);
+	sfilter = kzalloc_obj(*sfilter, GFP_KERNEL | __GFP_NOWARN);
 	if (!sfilter)
 		return ERR_PTR(-ENOMEM);
 
@@ -1092,6 +1100,14 @@ void secure_computing_strict(int this_syscall)
 	else
 		BUG();
 }
+
+bool __seccomp_permit_syscall(void)
+{
+	int this_syscall = syscall_get_nr(current, current_pt_regs());
+
+	secure_computing_strict(this_syscall);
+	return true;
+}
 #else
 
 #ifdef CONFIG_SECCOMP_FILTER
@@ -1241,13 +1257,12 @@ out:
 	return -1;
 }
 
-static int __seccomp_filter(int this_syscall, const struct seccomp_data *sd,
-			    const bool recheck_after_trace)
+static bool __seccomp_filter(int this_syscall, const bool recheck_after_trace)
 {
 	u32 filter_ret, action;
+	struct seccomp_data sd;
 	struct seccomp_filter *match = NULL;
 	int data;
-	struct seccomp_data sd_local;
 
 	/*
 	 * Make sure that any changes to mode from another thread have
@@ -1255,12 +1270,9 @@ static int __seccomp_filter(int this_syscall, const struct seccomp_data *sd,
 	 */
 	smp_rmb();
 
-	if (!sd) {
-		populate_seccomp_data(&sd_local);
-		sd = &sd_local;
-	}
+	populate_seccomp_data(&sd);
 
-	filter_ret = seccomp_run_filters(sd, &match);
+	filter_ret = seccomp_run_filters(&sd, &match);
 	data = filter_ret & SECCOMP_RET_DATA;
 	action = filter_ret & SECCOMP_RET_ACTION_FULL;
 
@@ -1283,7 +1295,7 @@ static int __seccomp_filter(int this_syscall, const struct seccomp_data *sd,
 	case SECCOMP_RET_TRACE:
 		/* We've been put in this state by the ptracer already. */
 		if (recheck_after_trace)
-			return 0;
+			return true;
 
 		/* ENOSYS these calls if there is no tracer attached. */
 		if (!ptrace_event_enabled(current, PTRACE_EVENT_SECCOMP)) {
@@ -1318,20 +1330,17 @@ static int __seccomp_filter(int this_syscall, const struct seccomp_data *sd,
 		 * a reload of all registers. This does not goto skip since
 		 * a skip would have already been reported.
 		 */
-		if (__seccomp_filter(this_syscall, NULL, true))
-			return -1;
-
-		return 0;
+		return __seccomp_filter(this_syscall, true);
 
 	case SECCOMP_RET_USER_NOTIF:
-		if (seccomp_do_user_notification(this_syscall, match, sd))
+		if (seccomp_do_user_notification(this_syscall, match, &sd))
 			goto skip;
 
-		return 0;
+		return true;
 
 	case SECCOMP_RET_LOG:
 		seccomp_log(this_syscall, 0, action, true);
-		return 0;
+		return true;
 
 	case SECCOMP_RET_ALLOW:
 		/*
@@ -1339,7 +1348,7 @@ static int __seccomp_filter(int this_syscall, const struct seccomp_data *sd,
 		 * this action since SECCOMP_RET_ALLOW is the starting
 		 * state in seccomp_run_filters().
 		 */
-		return 0;
+		return true;
 
 	case SECCOMP_RET_KILL_THREAD:
 	case SECCOMP_RET_KILL_PROCESS:
@@ -1356,48 +1365,46 @@ static int __seccomp_filter(int this_syscall, const struct seccomp_data *sd,
 		} else {
 			do_exit(SIGSYS);
 		}
-		return -1; /* skip the syscall go directly to signal handling */
+		return false; /* skip the syscall go directly to signal handling */
 	}
 
 	unreachable();
 
 skip:
 	seccomp_log(this_syscall, 0, action, match ? match->log : false);
-	return -1;
+	return false;
 }
 #else
-static int __seccomp_filter(int this_syscall, const struct seccomp_data *sd,
-			    const bool recheck_after_trace)
+static bool __seccomp_filter(int this_syscall, const bool recheck_after_trace)
 {
 	BUG();
 
-	return -1;
+	return false;
 }
 #endif
 
-int __secure_computing(const struct seccomp_data *sd)
+bool __seccomp_permit_syscall(void)
 {
 	int mode = current->seccomp.mode;
 	int this_syscall;
 
 	if (IS_ENABLED(CONFIG_CHECKPOINT_RESTORE) &&
 	    unlikely(current->ptrace & PT_SUSPEND_SECCOMP))
-		return 0;
+		return true;
 
-	this_syscall = sd ? sd->nr :
-		syscall_get_nr(current, current_pt_regs());
+	this_syscall = syscall_get_nr(current, current_pt_regs());
 
 	switch (mode) {
 	case SECCOMP_MODE_STRICT:
 		__secure_computing_strict(this_syscall);  /* may call do_exit */
-		return 0;
+		return true;
 	case SECCOMP_MODE_FILTER:
-		return __seccomp_filter(this_syscall, sd, false);
+		return __seccomp_filter(this_syscall, false);
 	/* Surviving SECCOMP_RET_KILL_* must be proactively impossible. */
 	case SECCOMP_MODE_DEAD:
 		WARN_ON_ONCE(1);
 		do_exit(SIGKILL);
-		return -1;
+		return false;
 	default:
 		BUG();
 	}
@@ -1884,7 +1891,7 @@ static struct file *init_listener(struct seccomp_filter *filter)
 	struct file *ret;
 
 	ret = ERR_PTR(-ENOMEM);
-	filter->notif = kzalloc(sizeof(*(filter->notif)), GFP_KERNEL);
+	filter->notif = kzalloc_obj(*(filter->notif));
 	if (!filter->notif)
 		goto out;
 
@@ -2478,7 +2485,7 @@ static int seccomp_actions_logged_handler(const struct ctl_table *ro_table, int 
 	return ret;
 }
 
-static struct ctl_table seccomp_sysctl_table[] = {
+static const struct ctl_table seccomp_sysctl_table[] = {
 	{
 		.procname	= "actions_avail",
 		.data		= (void *) &seccomp_actions_avail,

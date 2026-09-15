@@ -6,6 +6,7 @@
  *  USB/RS232 I-Force joysticks and wheels.
  */
 
+#include <linux/export.h>
 #include <linux/unaligned.h>
 #include "iforce.h"
 
@@ -31,49 +32,42 @@ int iforce_send_packet(struct iforce *iforce, u16 cmd, unsigned char* data)
 	int c;
 	int empty;
 	int head, tail;
-	unsigned long flags;
 
 /*
  * Update head and tail of xmit buffer
  */
-	spin_lock_irqsave(&iforce->xmit_lock, flags);
+	scoped_guard(spinlock_irqsave, &iforce->xmit_lock) {
+		head = iforce->xmit.head;
+		tail = iforce->xmit.tail;
 
-	head = iforce->xmit.head;
-	tail = iforce->xmit.tail;
+		if (CIRC_SPACE(head, tail, XMIT_SIZE) < n + 2) {
+			dev_warn(&iforce->dev->dev,
+				 "not enough space in xmit buffer to send new packet\n");
+			return -1;
+		}
 
-
-	if (CIRC_SPACE(head, tail, XMIT_SIZE) < n+2) {
-		dev_warn(&iforce->dev->dev,
-			 "not enough space in xmit buffer to send new packet\n");
-		spin_unlock_irqrestore(&iforce->xmit_lock, flags);
-		return -1;
-	}
-
-	empty = head == tail;
-	XMIT_INC(iforce->xmit.head, n+2);
+		empty = head == tail;
+		XMIT_INC(iforce->xmit.head, n + 2);
 
 /*
  * Store packet in xmit buffer
  */
-	iforce->xmit.buf[head] = HI(cmd);
-	XMIT_INC(head, 1);
-	iforce->xmit.buf[head] = LO(cmd);
-	XMIT_INC(head, 1);
+		iforce->xmit.buf[head] = HI(cmd);
+		XMIT_INC(head, 1);
+		iforce->xmit.buf[head] = LO(cmd);
+		XMIT_INC(head, 1);
 
-	c = CIRC_SPACE_TO_END(head, tail, XMIT_SIZE);
-	if (n < c) c=n;
+		c = CIRC_SPACE_TO_END(head, tail, XMIT_SIZE);
+		if (n < c)
+			c = n;
 
-	memcpy(&iforce->xmit.buf[head],
-	       data,
-	       c);
-	if (n != c) {
-		memcpy(&iforce->xmit.buf[0],
-		       data + c,
-		       n - c);
+		memcpy(&iforce->xmit.buf[head], data, c);
+		if (n != c)
+			memcpy(&iforce->xmit.buf[0], data + c, n - c);
+
+		XMIT_INC(head, n);
 	}
-	XMIT_INC(head, n);
 
-	spin_unlock_irqrestore(&iforce->xmit_lock, flags);
 /*
  * If necessary, start the transmission
  */
@@ -161,6 +155,9 @@ void iforce_process_packet(struct iforce *iforce,
 	switch (packet_id) {
 
 	case 0x01:	/* joystick position data */
+		if (len < 7)
+			break;
+
 		input_report_abs(dev, ABS_X,
 				 (__s16) get_unaligned_le16(data));
 		input_report_abs(dev, ABS_Y,
@@ -176,6 +173,9 @@ void iforce_process_packet(struct iforce *iforce,
 		break;
 
 	case 0x03:	/* wheel position data */
+		if (len < 7)
+			break;
+
 		input_report_abs(dev, ABS_WHEEL,
 				 (__s16) get_unaligned_le16(data));
 		input_report_abs(dev, ABS_GAS,   255 - data[2]);
@@ -187,6 +187,9 @@ void iforce_process_packet(struct iforce *iforce,
 		break;
 
 	case 0x02:	/* status report */
+		if (len < 2)
+			break;
+
 		input_report_key(dev, BTN_DEAD, data[0] & 0x02);
 		input_sync(dev);
 
@@ -206,7 +209,7 @@ void iforce_process_packet(struct iforce *iforce,
 			}
 		}
 
-		for (j = 3; j < len; j += 2)
+		for (j = 3; j + sizeof(u16) <= len; j += sizeof(u16))
 			mark_core_as_ready(iforce, get_unaligned_le16(data + j));
 
 		break;

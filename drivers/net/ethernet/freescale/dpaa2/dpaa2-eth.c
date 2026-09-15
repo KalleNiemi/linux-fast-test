@@ -920,7 +920,7 @@ static int dpaa2_eth_build_sg_fd(struct dpaa2_eth_priv *priv,
 	if (unlikely(PAGE_SIZE / sizeof(struct scatterlist) < nr_frags + 1))
 		return -EINVAL;
 
-	scl = kmalloc_array(nr_frags + 1, sizeof(struct scatterlist), GFP_ATOMIC);
+	scl = kmalloc_objs(struct scatterlist, nr_frags + 1, GFP_ATOMIC);
 	if (unlikely(!scl))
 		return -ENOMEM;
 
@@ -1403,10 +1403,10 @@ static netdev_tx_t __dpaa2_eth_tx(struct sk_buff *skb,
 	struct dpaa2_eth_fq *fq;
 	struct netdev_queue *nq;
 	struct dpaa2_fd *fd;
+	int err, i, num_tc;
 	u16 queue_mapping;
 	void *swa = NULL;
 	u8 prio = 0;
-	int err, i;
 	u32 fd_len;
 
 	percpu_stats = this_cpu_ptr(priv->percpu_stats);
@@ -1468,12 +1468,14 @@ static netdev_tx_t __dpaa2_eth_tx(struct sk_buff *skb,
 	 */
 	queue_mapping = skb_get_queue_mapping(skb);
 
-	if (net_dev->num_tc) {
+	num_tc = netdev_get_num_tc(net_dev);
+
+	if (num_tc) {
 		prio = netdev_txq_to_tc(net_dev, queue_mapping);
 		/* Hardware interprets priority level 0 as being the highest,
 		 * so we need to do a reverse mapping to the netdev tc index
 		 */
-		prio = net_dev->num_tc - prio - 1;
+		prio = num_tc - prio - 1;
 		/* We have only one FQ array entry for all Tx hardware queues
 		 * with the same flow id (but different priority levels)
 		 */
@@ -2584,49 +2586,58 @@ static int dpaa2_eth_set_features(struct net_device *net_dev,
 	return 0;
 }
 
-static int dpaa2_eth_ts_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
+static int dpaa2_eth_hwtstamp_set(struct net_device *dev,
+				  struct kernel_hwtstamp_config *config,
+				  struct netlink_ext_ack *extack)
 {
 	struct dpaa2_eth_priv *priv = netdev_priv(dev);
-	struct hwtstamp_config config;
 
 	if (!dpaa2_ptp)
 		return -EINVAL;
 
-	if (copy_from_user(&config, rq->ifr_data, sizeof(config)))
-		return -EFAULT;
-
-	switch (config.tx_type) {
+	switch (config->tx_type) {
 	case HWTSTAMP_TX_OFF:
 	case HWTSTAMP_TX_ON:
 	case HWTSTAMP_TX_ONESTEP_SYNC:
-		priv->tx_tstamp_type = config.tx_type;
+		priv->tx_tstamp_type = config->tx_type;
 		break;
 	default:
 		return -ERANGE;
 	}
 
-	if (config.rx_filter == HWTSTAMP_FILTER_NONE) {
+	if (config->rx_filter == HWTSTAMP_FILTER_NONE) {
 		priv->rx_tstamp = false;
 	} else {
 		priv->rx_tstamp = true;
 		/* TS is set for all frame types, not only those requested */
-		config.rx_filter = HWTSTAMP_FILTER_ALL;
+		config->rx_filter = HWTSTAMP_FILTER_ALL;
 	}
 
 	if (priv->tx_tstamp_type == HWTSTAMP_TX_ONESTEP_SYNC)
 		dpaa2_ptp_onestep_reg_update_method(priv);
 
-	return copy_to_user(rq->ifr_data, &config, sizeof(config)) ?
-			-EFAULT : 0;
+	return 0;
+}
+
+static int dpaa2_eth_hwtstamp_get(struct net_device *dev,
+				  struct kernel_hwtstamp_config *config)
+{
+	struct dpaa2_eth_priv *priv = netdev_priv(dev);
+
+	if (!dpaa2_ptp)
+		return -EINVAL;
+
+	config->tx_type = priv->tx_tstamp_type;
+	config->rx_filter = priv->rx_tstamp ? HWTSTAMP_FILTER_ALL :
+			    HWTSTAMP_FILTER_NONE;
+
+	return 0;
 }
 
 static int dpaa2_eth_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 {
 	struct dpaa2_eth_priv *priv = netdev_priv(dev);
 	int err;
-
-	if (cmd == SIOCSHWTSTAMP)
-		return dpaa2_eth_ts_ioctl(dev, rq, cmd);
 
 	mutex_lock(&priv->mac_lock);
 
@@ -2904,7 +2915,7 @@ static int update_xps(struct dpaa2_eth_priv *priv)
 		return -ENOMEM;
 
 	num_queues = dpaa2_eth_queue_count(priv);
-	netdev_queues = (net_dev->num_tc ? : 1) * num_queues;
+	netdev_queues = (netdev_get_num_tc(net_dev) ? : 1) * num_queues;
 
 	/* The first <num_queues> entries in priv->fq array are Tx/Tx conf
 	 * queues, so only process those
@@ -2937,7 +2948,7 @@ static int dpaa2_eth_setup_mqprio(struct net_device *net_dev,
 	num_queues = dpaa2_eth_queue_count(priv);
 	num_tc = mqprio->num_tc;
 
-	if (num_tc == net_dev->num_tc)
+	if (num_tc == netdev_get_num_tc(net_dev))
 		return 0;
 
 	if (num_tc  > dpaa2_eth_tc_count(priv)) {
@@ -3033,7 +3044,9 @@ static const struct net_device_ops dpaa2_eth_ops = {
 	.ndo_xsk_wakeup = dpaa2_xsk_wakeup,
 	.ndo_setup_tc = dpaa2_eth_setup_tc,
 	.ndo_vlan_rx_add_vid = dpaa2_eth_rx_add_vid,
-	.ndo_vlan_rx_kill_vid = dpaa2_eth_rx_kill_vid
+	.ndo_vlan_rx_kill_vid = dpaa2_eth_rx_kill_vid,
+	.ndo_hwtstamp_get = dpaa2_eth_hwtstamp_get,
+	.ndo_hwtstamp_set = dpaa2_eth_hwtstamp_set,
 };
 
 static void dpaa2_eth_cdan_cb(struct dpaa2_io_notification_ctx *ctx)
@@ -3114,7 +3127,7 @@ static struct dpaa2_eth_channel *dpaa2_eth_alloc_channel(struct dpaa2_eth_priv *
 	struct device *dev = priv->net_dev->dev.parent;
 	int err;
 
-	channel = kzalloc(sizeof(*channel), GFP_KERNEL);
+	channel = kzalloc_obj(*channel);
 	if (!channel)
 		return NULL;
 
@@ -3381,7 +3394,7 @@ struct dpaa2_eth_bp *dpaa2_eth_allocate_dpbp(struct dpaa2_eth_priv *priv)
 		return ERR_PTR(err);
 	}
 
-	bp = kzalloc(sizeof(*bp), GFP_KERNEL);
+	bp = kzalloc_obj(*bp);
 	if (!bp) {
 		err = -ENOMEM;
 		goto err_alloc;
@@ -4662,7 +4675,7 @@ static int dpaa2_eth_connect_mac(struct dpaa2_eth_priv *priv)
 		goto out_put_device;
 	}
 
-	mac = kzalloc(sizeof(struct dpaa2_mac), GFP_KERNEL);
+	mac = kzalloc_obj(struct dpaa2_mac);
 	if (!mac) {
 		err = -ENOMEM;
 		goto out_put_device;
@@ -4873,7 +4886,7 @@ static int dpaa2_eth_probe(struct fsl_mc_device *dpni_dev)
 	priv->tx_tstamp_type = HWTSTAMP_TX_OFF;
 	priv->rx_tstamp = false;
 
-	priv->dpaa2_ptp_wq = alloc_workqueue("dpaa2_ptp_wq", 0, 0);
+	priv->dpaa2_ptp_wq = alloc_workqueue("dpaa2_ptp_wq", WQ_PERCPU, 0);
 	if (!priv->dpaa2_ptp_wq) {
 		err = -ENOMEM;
 		goto err_wq_alloc;

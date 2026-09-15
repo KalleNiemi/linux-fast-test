@@ -120,9 +120,13 @@ static int virtbt_setup_zephyr(struct hci_dev *hdev)
 	if (IS_ERR(skb))
 		return PTR_ERR(skb);
 
-	bt_dev_info(hdev, "%s", (char *)(skb->data + 1));
+	/* Bounded print: the backend controls skb->len. */
+	if (skb->len > 1) {
+		int len = skb->len - 1;
 
-	hci_set_fw_info(hdev, "%s", skb->data + 1);
+		bt_dev_info(hdev, "%.*s", len, (char *)(skb->data + 1));
+		hci_set_fw_info(hdev, "%.*s", len, skb->data + 1);
+	}
 
 	kfree_skb(skb);
 	return 0;
@@ -300,7 +304,7 @@ static int virtbt_probe(struct virtio_device *vdev)
 		return -EINVAL;
 	}
 
-	vbt = kzalloc(sizeof(*vbt), GFP_KERNEL);
+	vbt = kzalloc_obj(*vbt);
 	if (!vbt)
 		return -ENOMEM;
 
@@ -352,17 +356,17 @@ static int virtbt_probe(struct virtio_device *vdev)
 			hdev->setup = virtbt_setup_intel;
 			hdev->shutdown = virtbt_shutdown_generic;
 			hdev->set_bdaddr = virtbt_set_bdaddr_intel;
-			set_bit(HCI_QUIRK_STRICT_DUPLICATE_FILTER, &hdev->quirks);
-			set_bit(HCI_QUIRK_SIMULTANEOUS_DISCOVERY, &hdev->quirks);
-			set_bit(HCI_QUIRK_WIDEBAND_SPEECH_SUPPORTED, &hdev->quirks);
+			hci_set_quirk(hdev, HCI_QUIRK_STRICT_DUPLICATE_FILTER);
+			hci_set_quirk(hdev, HCI_QUIRK_SIMULTANEOUS_DISCOVERY);
+			hci_set_quirk(hdev, HCI_QUIRK_WIDEBAND_SPEECH_SUPPORTED);
 			break;
 
 		case VIRTIO_BT_CONFIG_VENDOR_REALTEK:
 			hdev->manufacturer = 93;
 			hdev->setup = virtbt_setup_realtek;
 			hdev->shutdown = virtbt_shutdown_generic;
-			set_bit(HCI_QUIRK_SIMULTANEOUS_DISCOVERY, &hdev->quirks);
-			set_bit(HCI_QUIRK_WIDEBAND_SPEECH_SUPPORTED, &hdev->quirks);
+			hci_set_quirk(hdev, HCI_QUIRK_SIMULTANEOUS_DISCOVERY);
+			hci_set_quirk(hdev, HCI_QUIRK_WIDEBAND_SPEECH_SUPPORTED);
 			break;
 		}
 	}

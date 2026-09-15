@@ -40,6 +40,7 @@
 #include <linux/ktime.h>
 
 #ifdef CONFIG_X86
+#include <asm/cpuid/api.h>
 #include <asm/desc.h>
 #include <asm/ptrace.h>
 #include <asm/idtentry.h>
@@ -411,7 +412,7 @@ static evtchn_port_t evtchn_from_irq(unsigned int irq)
 {
 	const struct irq_info *info = NULL;
 
-	if (likely(irq < nr_irqs))
+	if (likely(irq < irq_get_nr_irqs()))
 		info = info_for_irq(irq);
 	if (!info)
 		return 0;
@@ -581,7 +582,7 @@ static void lateeoi_list_add(struct irq_info *info)
 					eoi_list);
 	if (!elem || info->eoi_time < elem->eoi_time) {
 		list_add(&info->eoi_list, &eoi->eoi_list);
-		mod_delayed_work_on(info->eoi_cpu, system_wq,
+		mod_delayed_work_on(info->eoi_cpu, system_percpu_wq,
 				    &eoi->delayed, delay);
 	} else {
 		list_for_each_entry_reverse(elem, &eoi->eoi_list, eoi_list) {
@@ -666,7 +667,7 @@ static void xen_irq_lateeoi_worker(struct work_struct *work)
 			break;
 
 		if (now < info->eoi_time) {
-			mod_delayed_work_on(info->eoi_cpu, system_wq,
+			mod_delayed_work_on(info->eoi_cpu, system_percpu_wq,
 					    &eoi->delayed,
 					    info->eoi_time - now);
 			break;
@@ -714,7 +715,7 @@ static struct irq_info *xen_irq_init(unsigned int irq)
 {
 	struct irq_info *info;
 
-	info = kzalloc(sizeof(*info), GFP_KERNEL);
+	info = kzalloc_obj(*info);
 	if (info) {
 		info->irq = irq;
 		info->type = IRQT_UNBOUND;
@@ -722,12 +723,6 @@ static struct irq_info *xen_irq_init(unsigned int irq)
 		INIT_RCU_WORK(&info->rwork, delayed_free_irq);
 
 		set_info_for_irq(irq, info);
-		/*
-		 * Interrupt affinity setting can be immediate. No point
-		 * in delaying it until an interrupt is handled.
-		 */
-		irq_set_status_flags(irq, IRQ_MOVE_PCNTXT);
-
 		INIT_LIST_HEAD(&info->eoi_list);
 		list_add_tail(&info->list, &xen_irq_list_head);
 	}
@@ -788,7 +783,7 @@ static void xen_free_irq(struct irq_info *info)
 
 	WARN_ON(info->refcnt > 0);
 
-	queue_rcu_work(system_wq, &info->rwork);
+	queue_rcu_work(system_percpu_wq, &info->rwork);
 }
 
 /* Not called for lateeoi events. */
@@ -2185,7 +2180,6 @@ static struct irq_chip xen_percpu_chip __read_mostly = {
 };
 
 #ifdef CONFIG_X86
-#ifdef CONFIG_XEN_PVHVM
 /* Vector callbacks are better than PCI interrupts to receive event
  * channel notifications because we can receive vector callbacks on any
  * vcpu and we don't need PCI support or APIC interactions. */
@@ -2247,12 +2241,6 @@ static __init void xen_alloc_callback_vector(void)
 	pr_info("Xen HVM callback vector for event delivery is enabled\n");
 	sysvec_install(HYPERVISOR_CALLBACK_VECTOR, sysvec_xen_hvm_callback);
 }
-#else
-void xen_setup_callback_vector(void) {}
-static inline void xen_init_setup_upcall_vector(void) {}
-int xen_set_upcall_vector(unsigned int cpu) {}
-static inline void xen_alloc_callback_vector(void) {}
-#endif /* CONFIG_XEN_PVHVM */
 #endif /* CONFIG_X86 */
 
 bool xen_fifo_events = true;
@@ -2298,8 +2286,8 @@ void __init xen_init_IRQ(void)
 				  "xen/evtchn:prepare",
 				  xen_evtchn_cpu_prepare, xen_evtchn_cpu_dead);
 
-	evtchn_to_irq = kcalloc(EVTCHN_ROW(xen_evtchn_max_channels()),
-				sizeof(*evtchn_to_irq), GFP_KERNEL);
+	evtchn_to_irq = kzalloc_objs(*evtchn_to_irq,
+				     EVTCHN_ROW(xen_evtchn_max_channels()));
 	BUG_ON(!evtchn_to_irq);
 
 	/* No event channels are 'live' right now. */

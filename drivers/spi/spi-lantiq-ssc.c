@@ -139,7 +139,7 @@
 #define LTQ_SPI_FGPO_CLROUTN_S	0
 
 #define LTQ_SPI_RXREQ_RXCNT_M	0xFFFF	/* Receive count value */
-#define LTQ_SPI_RXCNT_TODO_M	0xFFFF	/* Recevie to-do value */
+#define LTQ_SPI_RXCNT_TODO_M	0xFFFF	/* Receive to-do value */
 
 #define LTQ_SPI_IRNEN_TFI	BIT(4)	/* TX finished interrupt */
 #define LTQ_SPI_IRNEN_F		BIT(3)	/* Frame end interrupt request */
@@ -913,7 +913,7 @@ static int lantiq_ssc_probe(struct platform_device *pdev)
 
 	hwcfg = of_device_get_match_data(dev);
 
-	host = spi_alloc_host(dev, sizeof(struct lantiq_ssc_spi));
+	host = devm_spi_alloc_host(dev, sizeof(struct lantiq_ssc_spi));
 	if (!host)
 		return -ENOMEM;
 
@@ -923,20 +923,16 @@ static int lantiq_ssc_probe(struct platform_device *pdev)
 	spi->hwcfg = hwcfg;
 	platform_set_drvdata(pdev, spi);
 	spi->regbase = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(spi->regbase)) {
-		err = PTR_ERR(spi->regbase);
-		goto err_host_put;
-	}
+	if (IS_ERR(spi->regbase))
+		return PTR_ERR(spi->regbase);
 
 	err = hwcfg->cfg_irq(pdev, spi);
 	if (err)
-		goto err_host_put;
+		return err;
 
 	spi->spi_clk = devm_clk_get_enabled(dev, "gate");
-	if (IS_ERR(spi->spi_clk)) {
-		err = PTR_ERR(spi->spi_clk);
-		goto err_host_put;
-	}
+	if (IS_ERR(spi->spi_clk))
+		return PTR_ERR(spi->spi_clk);
 
 	/*
 	 * Use the old clk_get_fpi() function on Lantiq platform, till it
@@ -947,10 +943,8 @@ static int lantiq_ssc_probe(struct platform_device *pdev)
 #else
 	spi->fpi_clk = clk_get(dev, "freq");
 #endif
-	if (IS_ERR(spi->fpi_clk)) {
-		err = PTR_ERR(spi->fpi_clk);
-		goto err_host_put;
-	}
+	if (IS_ERR(spi->fpi_clk))
+		return PTR_ERR(spi->fpi_clk);
 
 	num_cs = 8;
 	of_property_read_u32(pdev->dev.of_node, "num-cs", &num_cs);
@@ -962,7 +956,6 @@ static int lantiq_ssc_probe(struct platform_device *pdev)
 	spi->bits_per_word = 8;
 	spi->speed_hz = 0;
 
-	host->dev.of_node = pdev->dev.of_node;
 	host->num_chipselect = num_cs;
 	host->use_gpio_descriptors = true;
 	host->setup = lantiq_ssc_setup;
@@ -1007,8 +1000,6 @@ err_wq_destroy:
 	destroy_workqueue(spi->wq);
 err_clk_put:
 	clk_put(spi->fpi_clk);
-err_host_put:
-	spi_controller_put(host);
 
 	return err;
 }
@@ -1016,8 +1007,6 @@ err_host_put:
 static void lantiq_ssc_remove(struct platform_device *pdev)
 {
 	struct lantiq_ssc_spi *spi = platform_get_drvdata(pdev);
-
-	spi_controller_get(spi->host);
 
 	spi_unregister_controller(spi->host);
 
@@ -1029,13 +1018,11 @@ static void lantiq_ssc_remove(struct platform_device *pdev)
 
 	destroy_workqueue(spi->wq);
 	clk_put(spi->fpi_clk);
-
-	spi_controller_put(spi->host);
 }
 
 static struct platform_driver lantiq_ssc_driver = {
 	.probe = lantiq_ssc_probe,
-	.remove_new = lantiq_ssc_remove,
+	.remove = lantiq_ssc_remove,
 	.driver = {
 		.name = "spi-lantiq-ssc",
 		.of_match_table = lantiq_ssc_match,

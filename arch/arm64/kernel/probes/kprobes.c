@@ -28,7 +28,7 @@
 #include <asm/debug-monitors.h>
 #include <asm/insn.h>
 #include <asm/irq.h>
-#include <asm/patching.h>
+#include <asm/text-patching.h>
 #include <asm/ptrace.h>
 #include <asm/sections.h>
 #include <asm/system_misc.h>
@@ -58,7 +58,7 @@ void *alloc_insn_page(void)
 
 static void __kprobes arch_prepare_ss_slot(struct kprobe *p)
 {
-	kprobe_opcode_t *addr = p->ainsn.api.insn;
+	kprobe_opcode_t *addr = p->ainsn.xol_insn;
 
 	/*
 	 * Prepare insn slot, Mark Rutland points out it depends on a coupe of
@@ -79,20 +79,20 @@ static void __kprobes arch_prepare_ss_slot(struct kprobe *p)
 	 * the BRK exception handler, so it is unnecessary to generate
 	 * Contex-Synchronization-Event via ISB again.
 	 */
-	aarch64_insn_patch_text_nosync(addr, p->opcode);
+	aarch64_insn_patch_text_nosync(addr, le32_to_cpu(p->opcode));
 	aarch64_insn_patch_text_nosync(addr + 1, BRK64_OPCODE_KPROBES_SS);
 
 	/*
 	 * Needs restoring of return address after stepping xol.
 	 */
-	p->ainsn.api.restore = (unsigned long) p->addr +
+	p->ainsn.xol_restore = (unsigned long) p->addr +
 	  sizeof(kprobe_opcode_t);
 }
 
 static void __kprobes arch_prepare_simulate(struct kprobe *p)
 {
 	/* This instructions is not executed xol. No need to adjust the PC */
-	p->ainsn.api.restore = 0;
+	p->ainsn.xol_restore = 0;
 }
 
 static void __kprobes arch_simulate_insn(struct kprobe *p, struct pt_regs *regs)
@@ -100,7 +100,7 @@ static void __kprobes arch_simulate_insn(struct kprobe *p, struct pt_regs *regs)
 	struct kprobe_ctlblk *kcb = get_kprobe_ctlblk();
 
 	if (p->ainsn.api.handler)
-		p->ainsn.api.handler((u32)p->opcode, (long)p->addr, regs);
+		p->ainsn.api.handler(le32_to_cpu(p->opcode), (long)p->addr, regs);
 
 	/* single step simulated, now go for post processing */
 	post_kprobe_handler(p, kcb, regs);
@@ -114,7 +114,7 @@ int __kprobes arch_prepare_kprobe(struct kprobe *p)
 		return -EINVAL;
 
 	/* copy instruction */
-	p->opcode = le32_to_cpu(*p->addr);
+	p->opcode = *p->addr;
 
 	if (search_exception_tables(probe_addr))
 		return -EINVAL;
@@ -125,18 +125,18 @@ int __kprobes arch_prepare_kprobe(struct kprobe *p)
 		return -EINVAL;
 
 	case INSN_GOOD_NO_SLOT:	/* insn need simulation */
-		p->ainsn.api.insn = NULL;
+		p->ainsn.xol_insn = NULL;
 		break;
 
 	case INSN_GOOD:	/* instruction uses slot */
-		p->ainsn.api.insn = get_insn_slot();
-		if (!p->ainsn.api.insn)
+		p->ainsn.xol_insn = get_insn_slot();
+		if (!p->ainsn.xol_insn)
 			return -ENOMEM;
 		break;
 	}
 
 	/* prepare the instruction */
-	if (p->ainsn.api.insn)
+	if (p->ainsn.xol_insn)
 		arch_prepare_ss_slot(p);
 	else
 		arch_prepare_simulate(p);
@@ -157,15 +157,16 @@ void __kprobes arch_arm_kprobe(struct kprobe *p)
 void __kprobes arch_disarm_kprobe(struct kprobe *p)
 {
 	void *addr = p->addr;
+	u32 insn = le32_to_cpu(p->opcode);
 
-	aarch64_insn_patch_text(&addr, &p->opcode, 1);
+	aarch64_insn_patch_text(&addr, &insn, 1);
 }
 
 void __kprobes arch_remove_kprobe(struct kprobe *p)
 {
-	if (p->ainsn.api.insn) {
-		free_insn_slot(p->ainsn.api.insn, 0);
-		p->ainsn.api.insn = NULL;
+	if (p->ainsn.xol_insn) {
+		free_insn_slot(p->ainsn.xol_insn, 0);
+		p->ainsn.xol_insn = NULL;
 	}
 }
 
@@ -173,12 +174,27 @@ static void __kprobes save_previous_kprobe(struct kprobe_ctlblk *kcb)
 {
 	kcb->prev_kprobe.kp = kprobe_running();
 	kcb->prev_kprobe.status = kcb->kprobe_status;
+
+	/*
+	 * Save the outer kprobe's original DAIF flags before the nested
+	 * kprobe calls kprobes_save_local_irqflag() and overwrites
+	 * kcb->saved_irqflag. Without this, the outer kprobe will restore
+	 * the wrong DAIF state and leave interrupts permanently masked.
+	 */
+	kcb->prev_kprobe.saved_irqflag = kcb->saved_irqflag;
 }
 
 static void __kprobes restore_previous_kprobe(struct kprobe_ctlblk *kcb)
 {
 	__this_cpu_write(current_kprobe, kcb->prev_kprobe.kp);
 	kcb->kprobe_status = kcb->prev_kprobe.status;
+
+	/*
+	 * Restore the outer kprobe's saved_irqflag so that when its
+	 * single-step completes, kprobes_restore_local_irqflag() uses
+	 * the correct original DAIF value.
+	 */
+	kcb->saved_irqflag = kcb->prev_kprobe.saved_irqflag;
 }
 
 static void __kprobes set_current_kprobe(struct kprobe *p)
@@ -220,9 +236,9 @@ static void __kprobes setup_singlestep(struct kprobe *p,
 	}
 
 
-	if (p->ainsn.api.insn) {
+	if (p->ainsn.xol_insn) {
 		/* prepare for single stepping */
-		slot = (unsigned long)p->ainsn.api.insn;
+		slot = (unsigned long)p->ainsn.xol_insn;
 
 		kprobes_save_local_irqflag(kcb, regs);
 		instruction_pointer_set(regs, slot);
@@ -239,10 +255,16 @@ static int __kprobes reenter_kprobe(struct kprobe *p,
 	switch (kcb->kprobe_status) {
 	case KPROBE_HIT_SSDONE:
 	case KPROBE_HIT_ACTIVE:
+	case KPROBE_HIT_SS:
+		/*
+		 * A probe can be hit while another kprobe is preparing or
+		 * executing its XOL single-step instruction. This is still a
+		 * recoverable one-level reentry, so handle it in the same way as
+		 * reentry from KPROBE_HIT_ACTIVE or KPROBE_HIT_SSDONE.
+		 */
 		kprobes_inc_nmissed_count(p);
 		setup_singlestep(p, regs, kcb, 1);
 		break;
-	case KPROBE_HIT_SS:
 	case KPROBE_REENTER:
 		pr_warn("Failed to recover from reentered kprobes.\n");
 		dump_kprobe(p);
@@ -260,8 +282,8 @@ static void __kprobes
 post_kprobe_handler(struct kprobe *cur, struct kprobe_ctlblk *kcb, struct pt_regs *regs)
 {
 	/* return addr restore if non-branching insn */
-	if (cur->ainsn.api.restore != 0)
-		instruction_pointer_set(regs, cur->ainsn.api.restore);
+	if (cur->ainsn.xol_restore != 0)
+		instruction_pointer_set(regs, cur->ainsn.xol_restore);
 
 	/* restore back original saved kprobe variables and continue */
 	if (kcb->kprobe_status == KPROBE_REENTER) {
@@ -281,9 +303,31 @@ int __kprobes kprobe_fault_handler(struct pt_regs *regs, unsigned int fsr)
 	struct kprobe *cur = kprobe_running();
 	struct kprobe_ctlblk *kcb = get_kprobe_ctlblk();
 
+	/*
+	 * Simulated kprobes execute in the debug trap context and have no
+	 * XOL slot. Any page fault taken while a simulated kprobe is in
+	 * progress cannot have been caused by kprobe single-stepping and
+	 * must be left alone for the normal page fault handler, including
+	 * fixup_exception.
+	 */
+	if (cur && !cur->ainsn.xol_insn)
+		return 0;
+
 	switch (kcb->kprobe_status) {
 	case KPROBE_HIT_SS:
 	case KPROBE_REENTER:
+		/*
+		 * A page fault taken while in KPROBE_HIT_SS or
+		 * KPROBE_REENTER state is only attributable to kprobe
+		 * single-stepping if the faulting PC points to the
+		 * current kprobe's XOL instruction. If the fault occurred
+		 * elsewhere (e.g. in perf or tracing code invoked from the
+		 * debug exception path), leave it for the normal page fault
+		 * handler to process.
+		 */
+		if (instruction_pointer(regs) != (unsigned long)cur->ainsn.xol_insn)
+			break;
+
 		/*
 		 * We are here because the instruction being single
 		 * stepped caused a page fault. We reset the current
@@ -358,7 +402,7 @@ kprobe_ss_brk_handler(struct pt_regs *regs, unsigned long esr)
 	struct kprobe *cur = kprobe_running();
 
 	if (cur && (kcb->kprobe_status & (KPROBE_HIT_SS | KPROBE_REENTER)) &&
-	    ((unsigned long)&cur->ainsn.api.insn[1] == addr)) {
+	    ((unsigned long)&cur->ainsn.xol_insn[1] == addr)) {
 		kprobes_restore_local_irqflag(kcb, regs);
 		post_kprobe_handler(cur, kcb, regs);
 

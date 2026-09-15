@@ -4,19 +4,13 @@
  */
 
 #include <linux/err.h>
-#include <linux/interrupt.h>
 #include <linux/kernel.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_graph.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
-#include <linux/regulator/consumer.h>
 #include <linux/slab.h>
-#include <linux/usb/role.h>
 #include <linux/usb/tcpm.h>
-#include <linux/usb/typec_mux.h>
 
 #include <drm/bridge/aux-bridge.h>
 
@@ -163,7 +157,7 @@ static struct platform_driver qcom_pmic_typec_driver = {
 		.of_match_table = qcom_pmic_typec_table,
 	},
 	.probe = qcom_pmic_typec_probe,
-	.remove_new = qcom_pmic_typec_remove,
+	.remove = qcom_pmic_typec_remove,
 };
 
 module_platform_driver(qcom_pmic_typec_driver);

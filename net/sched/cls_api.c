@@ -84,7 +84,7 @@ tcf_exts_miss_cookie_base_alloc(struct tcf_exts *exts, struct tcf_proto *tp,
 	if (WARN_ON(!handle || !tp->ops->get_exts))
 		return -EINVAL;
 
-	n = kzalloc(sizeof(*n), GFP_KERNEL);
+	n = kzalloc_obj(*n);
 	if (!n)
 		return -ENOMEM;
 
@@ -377,7 +377,7 @@ static struct tcf_proto *tcf_proto_create(const char *kind, u32 protocol,
 	struct tcf_proto *tp;
 	int err;
 
-	tp = kzalloc(sizeof(*tp), GFP_KERNEL);
+	tp = kzalloc_obj(*tp);
 	if (!tp)
 		return ERR_PTR(-ENOBUFS);
 
@@ -443,7 +443,22 @@ static void tcf_chain_put(struct tcf_chain *chain);
 static void tcf_proto_destroy(struct tcf_proto *tp, bool rtnl_held,
 			      bool sig_destroy, struct netlink_ext_ack *extack)
 {
-	tp->ops->destroy(tp, rtnl_held, extack);
+	/* A locked classifier's destroy callback (e.g. u32_destroy) uses
+	 * rtnl_dereference() and mutates shared structures (e.g. the
+	 * tc_u_common hash list) that are only safe under rtnl_lock. When an
+	 * unlocked classifier's request (e.g. flower on ingress) loses the
+	 * tcf_chain_tp_insert_unique() race and ends up dropping the last
+	 * reference on a locked classifier's proto, destroy() would run
+	 * without rtnl held. Take it here in that case.
+	 */
+	bool not_lockless = !rtnl_held &&
+		!(tp->ops->flags & TCF_PROTO_OPS_DOIT_UNLOCKED);
+
+	if (not_lockless)
+		rtnl_lock();
+	tp->ops->destroy(tp, rtnl_held || not_lockless, extack);
+	if (not_lockless)
+		rtnl_unlock();
 	tcf_proto_count_usesw(tp, false);
 	if (sig_destroy)
 		tcf_proto_signal_destroyed(tp->chain, tp);
@@ -502,7 +517,7 @@ static struct tcf_chain *tcf_chain_create(struct tcf_block *block,
 
 	ASSERT_BLOCK_LOCKED(block);
 
-	chain = kzalloc(sizeof(*chain), GFP_KERNEL);
+	chain = kzalloc_obj(*chain);
 	if (!chain)
 		return NULL;
 	list_add_tail_rcu(&chain->list, &block->chain_list);
@@ -918,7 +933,7 @@ tcf_chain0_head_change_cb_add(struct tcf_block *block,
 	struct tcf_filter_chain_list_item *item;
 	struct tcf_chain *chain0;
 
-	item = kmalloc(sizeof(*item), GFP_KERNEL);
+	item = kmalloc_obj(*item);
 	if (!item) {
 		NL_SET_ERR_MSG(extack, "Memory allocation for head change callback item failed");
 		return -ENOMEM;
@@ -1016,7 +1031,7 @@ static struct tcf_block *tcf_block_create(struct net *net, struct Qdisc *q,
 {
 	struct tcf_block *block;
 
-	block = kzalloc(sizeof(*block), GFP_KERNEL);
+	block = kzalloc_obj(*block);
 	if (!block) {
 		NL_SET_ERR_MSG(extack, "Memory allocation for block failed");
 		return ERR_PTR(-ENOMEM);
@@ -1428,7 +1443,7 @@ static int tcf_block_owner_add(struct tcf_block *block,
 {
 	struct tcf_block_owner_item *item;
 
-	item = kmalloc(sizeof(*item), GFP_KERNEL);
+	item = kmalloc_obj(*item);
 	if (!item)
 		return -ENOMEM;
 	item->q = q;
@@ -1866,15 +1881,15 @@ int tcf_classify(struct sk_buff *skb,
 			struct tc_skb_cb *cb = tc_skb_cb(skb);
 
 			ext = tc_skb_ext_alloc(skb);
-			if (WARN_ON_ONCE(!ext)) {
+			if (!ext) {
 				tcf_set_drop_reason(skb, SKB_DROP_REASON_NOMEM);
 				return TC_ACT_SHOT;
 			}
 			ext->chain = last_executed_chain;
 			ext->mru = cb->mru;
-			ext->post_ct = cb->post_ct;
-			ext->post_ct_snat = cb->post_ct_snat;
-			ext->post_ct_dnat = cb->post_ct_dnat;
+			ext->post_ct = qdisc_skb_cb(skb)->post_ct;
+			ext->post_ct_snat = qdisc_skb_cb(skb)->post_ct_snat;
+			ext->post_ct_dnat = qdisc_skb_cb(skb)->post_ct_dnat;
 			ext->zone = cb->zone;
 		}
 	}
@@ -1926,7 +1941,8 @@ static void tcf_chain_tp_remove(struct tcf_chain *chain,
 static struct tcf_proto *tcf_chain_tp_find(struct tcf_chain *chain,
 					   struct tcf_chain_info *chain_info,
 					   u32 protocol, u32 prio,
-					   bool prio_allocate);
+					   bool prio_allocate,
+					   struct netlink_ext_ack *extack);
 
 /* Try to insert new proto.
  * If proto with specified priority already exists, free new proto
@@ -1950,8 +1966,7 @@ static struct tcf_proto *tcf_chain_tp_insert_unique(struct tcf_chain *chain,
 		return ERR_PTR(-EAGAIN);
 	}
 
-	tp = tcf_chain_tp_find(chain, &chain_info,
-			       protocol, prio, false);
+	tp = tcf_chain_tp_find(chain, &chain_info, protocol, prio, false, NULL);
 	if (!tp)
 		err = tcf_chain_tp_insert(chain, &chain_info, tp_new);
 	mutex_unlock(&chain->filter_chain_lock);
@@ -2011,7 +2026,8 @@ static void tcf_chain_tp_delete_empty(struct tcf_chain *chain,
 static struct tcf_proto *tcf_chain_tp_find(struct tcf_chain *chain,
 					   struct tcf_chain_info *chain_info,
 					   u32 protocol, u32 prio,
-					   bool prio_allocate)
+					   bool prio_allocate,
+					   struct netlink_ext_ack *extack)
 {
 	struct tcf_proto **pprev;
 	struct tcf_proto *tp;
@@ -2022,9 +2038,14 @@ static struct tcf_proto *tcf_chain_tp_find(struct tcf_chain *chain,
 	     pprev = &tp->next) {
 		if (tp->prio >= prio) {
 			if (tp->prio == prio) {
-				if (prio_allocate ||
-				    (tp->protocol != protocol && protocol))
+				if (prio_allocate) {
+					NL_SET_ERR_MSG(extack, "Lowest ID from auto-alloc range already in use");
+					return ERR_PTR(-ENOSPC);
+				}
+				if (tp->protocol != protocol && protocol) {
+					NL_SET_ERR_MSG(extack, "Protocol mismatch for filter with specified priority");
 					return ERR_PTR(-EINVAL);
+				}
 			} else {
 				tp = NULL;
 			}
@@ -2227,6 +2248,12 @@ static bool is_ingress_or_clsact(struct tcf_block *block, struct Qdisc *q)
 	return tcf_block_shared(block) || (q && !!(q->flags & TCQ_F_INGRESS));
 }
 
+enum tcf_tp_insert_state {
+	TP_NOT_CREATED = 0, /* did not create and insert a new tp */
+	TP_CREATED, /* created and inserted a new tp */
+	TP_NOT_OWNED, /* created a proto but failed to insert */
+};
+
 static int tc_new_tfilter(struct sk_buff *skb, struct nlmsghdr *n,
 			  struct netlink_ext_ack *extack)
 {
@@ -2247,12 +2274,12 @@ static int tc_new_tfilter(struct sk_buff *skb, struct nlmsghdr *n,
 	unsigned long cl;
 	void *fh;
 	int err;
-	int tp_created;
+	enum tcf_tp_insert_state tp_state;
 	bool rtnl_held = false;
 	u32 flags;
 
 replay:
-	tp_created = 0;
+	tp_state = TP_NOT_CREATED;
 
 	err = nlmsg_parse_deprecated(n, sizeof(*t), tca, TCA_MAX,
 				     rtm_tca_policy, extack);
@@ -2319,7 +2346,7 @@ replay:
 	}
 	block->classid = parent;
 
-	chain_index = tca[TCA_CHAIN] ? nla_get_u32(tca[TCA_CHAIN]) : 0;
+	chain_index = nla_get_u32_default(tca[TCA_CHAIN], 0);
 	if (chain_index > TC_ACT_EXT_VAL_MASK) {
 		NL_SET_ERR_MSG(extack, "Specified chain index exceeds upper limit");
 		err = -EINVAL;
@@ -2334,9 +2361,8 @@ replay:
 
 	mutex_lock(&chain->filter_chain_lock);
 	tp = tcf_chain_tp_find(chain, &chain_info, protocol,
-			       prio, prio_allocate);
+			       prio, prio_allocate, extack);
 	if (IS_ERR(tp)) {
-		NL_SET_ERR_MSG(extack, "Filter with specified priority/protocol not found");
 		err = PTR_ERR(tp);
 		goto errout_locked;
 	}
@@ -2375,13 +2401,15 @@ replay:
 			goto errout_tp;
 		}
 
-		tp_created = 1;
+		tp_state = TP_CREATED;
 		tp = tcf_chain_tp_insert_unique(chain, tp_new, protocol, prio,
 						rtnl_held);
 		if (IS_ERR(tp)) {
 			err = PTR_ERR(tp);
 			goto errout_tp;
 		}
+		if (tp != tp_new)
+			tp_state = TP_NOT_OWNED;
 	} else {
 		mutex_unlock(&chain->filter_chain_lock);
 	}
@@ -2435,13 +2463,13 @@ replay:
 	}
 
 errout:
-	if (err && tp_created)
+	if (err && tp_state == TP_CREATED)
 		tcf_chain_tp_delete_empty(chain, tp, rtnl_held, NULL);
 errout_tp:
 	if (chain) {
 		if (tp && !IS_ERR(tp))
 			tcf_proto_put(tp, rtnl_held, NULL);
-		if (!tp_created)
+		if (tp_state == TP_NOT_CREATED)
 			tcf_chain_put(chain);
 	}
 	tcf_block_release(q, block, rtnl_held);
@@ -2533,7 +2561,7 @@ static int tc_del_tfilter(struct sk_buff *skb, struct nlmsghdr *n,
 		goto errout;
 	}
 
-	chain_index = tca[TCA_CHAIN] ? nla_get_u32(tca[TCA_CHAIN]) : 0;
+	chain_index = nla_get_u32_default(tca[TCA_CHAIN], 0);
 	if (chain_index > TC_ACT_EXT_VAL_MASK) {
 		NL_SET_ERR_MSG(extack, "Specified chain index exceeds upper limit");
 		err = -EINVAL;
@@ -2563,10 +2591,13 @@ static int tc_del_tfilter(struct sk_buff *skb, struct nlmsghdr *n,
 
 	mutex_lock(&chain->filter_chain_lock);
 	tp = tcf_chain_tp_find(chain, &chain_info, protocol,
-			       prio, false);
-	if (!tp || IS_ERR(tp)) {
+			       prio, false, extack);
+	if (!tp) {
+		err = -ENOENT;
 		NL_SET_ERR_MSG(extack, "Filter with specified priority/protocol not found");
-		err = tp ? PTR_ERR(tp) : -ENOENT;
+		goto errout_locked;
+	} else if (IS_ERR(tp)) {
+		err = PTR_ERR(tp);
 		goto errout_locked;
 	} else if (tca[TCA_KIND] && nla_strcmp(tca[TCA_KIND], tp->ops->kind)) {
 		NL_SET_ERR_MSG(extack, "Specified filter kind does not match existing one");
@@ -2688,7 +2719,7 @@ static int tc_get_tfilter(struct sk_buff *skb, struct nlmsghdr *n,
 		goto errout;
 	}
 
-	chain_index = tca[TCA_CHAIN] ? nla_get_u32(tca[TCA_CHAIN]) : 0;
+	chain_index = nla_get_u32_default(tca[TCA_CHAIN], 0);
 	if (chain_index > TC_ACT_EXT_VAL_MASK) {
 		NL_SET_ERR_MSG(extack, "Specified chain index exceeds upper limit");
 		err = -EINVAL;
@@ -2703,11 +2734,14 @@ static int tc_get_tfilter(struct sk_buff *skb, struct nlmsghdr *n,
 
 	mutex_lock(&chain->filter_chain_lock);
 	tp = tcf_chain_tp_find(chain, &chain_info, protocol,
-			       prio, false);
+			       prio, false, extack);
 	mutex_unlock(&chain->filter_chain_lock);
-	if (!tp || IS_ERR(tp)) {
+	if (!tp) {
+		err = -ENOENT;
 		NL_SET_ERR_MSG(extack, "Filter with specified priority/protocol not found");
-		err = tp ? PTR_ERR(tp) : -ENOENT;
+		goto errout;
+	} else if (IS_ERR(tp)) {
+		err = PTR_ERR(tp);
 		goto errout;
 	} else if (tca[TCA_KIND] && nla_strcmp(tca[TCA_KIND], tp->ops->kind)) {
 		NL_SET_ERR_MSG(extack, "Specified filter kind does not match existing one");
@@ -3129,7 +3163,7 @@ replay:
 	if (IS_ERR(block))
 		return PTR_ERR(block);
 
-	chain_index = tca[TCA_CHAIN] ? nla_get_u32(tca[TCA_CHAIN]) : 0;
+	chain_index = nla_get_u32_default(tca[TCA_CHAIN], 0);
 	if (chain_index > TC_ACT_EXT_VAL_MASK) {
 		NL_SET_ERR_MSG(extack, "Specified chain index exceeds upper limit");
 		err = -EINVAL;
@@ -3220,7 +3254,7 @@ errout:
 	tcf_chain_put(chain);
 errout_block:
 	tcf_block_release(q, block, true);
-	if (err == -EAGAIN)
+	if (err == -EAGAIN && n->nlmsg_type == RTM_NEWCHAIN)
 		/* Replay the request. */
 		goto replay;
 	return err;
@@ -3338,8 +3372,8 @@ int tcf_exts_init_ex(struct tcf_exts *exts, struct net *net, int action,
 	 * This reference might be taken later from tcf_exts_get_net().
 	 */
 	exts->net = net;
-	exts->actions = kcalloc(TCA_ACT_MAX_PRIO, sizeof(struct tc_action *),
-				GFP_KERNEL);
+	exts->actions = kzalloc_objs(struct tc_action *, TCA_ACT_MAX_PRIO,
+				     GFP_KERNEL_ACCOUNT);
 	if (!exts->actions)
 		return -ENOMEM;
 #endif
@@ -4035,7 +4069,7 @@ struct sk_buff *tcf_qevent_handle(struct tcf_qevent *qe, struct Qdisc *sch, stru
 
 	fl = rcu_dereference_bh(qe->filter_chain);
 
-	switch (tcf_classify(skb, NULL, fl, &cl_res, false)) {
+	switch (tcf_classify_qdisc(skb, fl, &cl_res, false)) {
 	case TC_ACT_SHOT:
 		qdisc_qstats_drop(sch);
 		__qdisc_drop(skb, to_free);
@@ -4045,10 +4079,6 @@ struct sk_buff *tcf_qevent_handle(struct tcf_qevent *qe, struct Qdisc *sch, stru
 	case TC_ACT_QUEUED:
 	case TC_ACT_TRAP:
 		__qdisc_drop(skb, to_free);
-		*ret = __NET_XMIT_STOLEN;
-		return NULL;
-	case TC_ACT_REDIRECT:
-		skb_do_redirect(skb);
 		*ret = __NET_XMIT_STOLEN;
 		return NULL;
 	case TC_ACT_CONSUMED:
@@ -4092,6 +4122,19 @@ static struct pernet_operations tcf_net_ops = {
 	.size = sizeof(struct tcf_net),
 };
 
+static const struct rtnl_msg_handler tc_filter_rtnl_msg_handlers[] __initconst = {
+	{.msgtype = RTM_NEWTFILTER, .doit = tc_new_tfilter,
+	 .flags = RTNL_FLAG_DOIT_UNLOCKED},
+	{.msgtype = RTM_DELTFILTER, .doit = tc_del_tfilter,
+	 .flags = RTNL_FLAG_DOIT_UNLOCKED},
+	{.msgtype = RTM_GETTFILTER, .doit = tc_get_tfilter,
+	 .dumpit = tc_dump_tfilter, .flags = RTNL_FLAG_DOIT_UNLOCKED},
+	{.msgtype = RTM_NEWCHAIN, .doit = tc_ctl_chain},
+	{.msgtype = RTM_DELCHAIN, .doit = tc_ctl_chain},
+	{.msgtype = RTM_GETCHAIN, .doit = tc_ctl_chain,
+	 .dumpit = tc_dump_chain},
+};
+
 static int __init tc_filter_init(void)
 {
 	int err;
@@ -4105,17 +4148,7 @@ static int __init tc_filter_init(void)
 		goto err_register_pernet_subsys;
 
 	xa_init_flags(&tcf_exts_miss_cookies_xa, XA_FLAGS_ALLOC1);
-
-	rtnl_register(PF_UNSPEC, RTM_NEWTFILTER, tc_new_tfilter, NULL,
-		      RTNL_FLAG_DOIT_UNLOCKED);
-	rtnl_register(PF_UNSPEC, RTM_DELTFILTER, tc_del_tfilter, NULL,
-		      RTNL_FLAG_DOIT_UNLOCKED);
-	rtnl_register(PF_UNSPEC, RTM_GETTFILTER, tc_get_tfilter,
-		      tc_dump_tfilter, RTNL_FLAG_DOIT_UNLOCKED);
-	rtnl_register(PF_UNSPEC, RTM_NEWCHAIN, tc_ctl_chain, NULL, 0);
-	rtnl_register(PF_UNSPEC, RTM_DELCHAIN, tc_ctl_chain, NULL, 0);
-	rtnl_register(PF_UNSPEC, RTM_GETCHAIN, tc_ctl_chain,
-		      tc_dump_chain, 0);
+	rtnl_register_many(tc_filter_rtnl_msg_handlers);
 
 	return 0;
 

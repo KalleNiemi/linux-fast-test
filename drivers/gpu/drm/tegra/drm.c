@@ -4,6 +4,7 @@
  * Copyright (C) 2012-2016 NVIDIA CORPORATION.  All rights reserved.
  */
 
+#include <linux/aperture.h>
 #include <linux/bitops.h>
 #include <linux/host1x.h>
 #include <linux/idr.h>
@@ -12,7 +13,7 @@
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 
-#include <drm/drm_aperture.h>
+#include <drm/clients/drm_client_setup.h>
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_debugfs.h>
@@ -21,6 +22,7 @@
 #include <drm/drm_framebuffer.h>
 #include <drm/drm_ioctl.h>
 #include <drm/drm_prime.h>
+#include <drm/drm_print.h>
 #include <drm/drm_vblank.h>
 
 #if IS_ENABLED(CONFIG_ARM_DMA_USE_IOMMU)
@@ -34,7 +36,6 @@
 
 #define DRIVER_NAME "tegra"
 #define DRIVER_DESC "NVIDIA Tegra graphics"
-#define DRIVER_DATE "20120330"
 #define DRIVER_MAJOR 1
 #define DRIVER_MINOR 0
 #define DRIVER_PATCHLEVEL 0
@@ -43,7 +44,7 @@
 #define CDMA_GATHER_FETCHES_MAX_NB 16383
 
 static int tegra_atomic_check(struct drm_device *drm,
-			      struct drm_atomic_state *state)
+			      struct drm_atomic_commit *state)
 {
 	int err;
 
@@ -61,7 +62,7 @@ static const struct drm_mode_config_funcs tegra_drm_mode_config_funcs = {
 };
 
 static void tegra_atomic_post_commit(struct drm_device *drm,
-				     struct drm_atomic_state *old_state)
+				     struct drm_atomic_commit *old_state)
 {
 	struct drm_crtc_state *old_crtc_state __maybe_unused;
 	struct drm_crtc *crtc;
@@ -71,7 +72,7 @@ static void tegra_atomic_post_commit(struct drm_device *drm,
 		tegra_crtc_atomic_post_commit(crtc, old_state);
 }
 
-static void tegra_atomic_commit_tail(struct drm_atomic_state *old_state)
+static void tegra_atomic_commit_tail(struct drm_atomic_commit *old_state)
 {
 	struct drm_device *drm = old_state->dev;
 	struct tegra_drm *tegra = drm->dev_private;
@@ -103,7 +104,7 @@ static int tegra_drm_open(struct drm_device *drm, struct drm_file *filp)
 {
 	struct tegra_drm_file *fpriv;
 
-	fpriv = kzalloc(sizeof(*fpriv), GFP_KERNEL);
+	fpriv = kzalloc_obj(*fpriv);
 	if (!fpriv)
 		return -ENOMEM;
 
@@ -211,7 +212,7 @@ int tegra_drm_submit(struct tegra_drm_context *context,
 	 */
 	num_refs = num_cmdbufs + num_relocs * 2;
 
-	refs = kmalloc_array(num_refs, sizeof(*refs), GFP_KERNEL);
+	refs = kmalloc_objs(*refs, num_refs);
 	if (!refs) {
 		err = -ENOMEM;
 		goto put;
@@ -464,7 +465,7 @@ static int tegra_open_channel(struct drm_device *drm, void *data,
 	struct tegra_drm_client *client;
 	int err = -ENODEV;
 
-	context = kzalloc(sizeof(*context), GFP_KERNEL);
+	context = kzalloc_obj(*context);
 	if (!context)
 		return -ENOMEM;
 
@@ -892,13 +893,14 @@ static const struct drm_driver tegra_drm_driver = {
 
 	.dumb_create = tegra_bo_dumb_create,
 
+	TEGRA_FBDEV_DRIVER_OPS,
+
 	.ioctls = tegra_drm_ioctls,
 	.num_ioctls = ARRAY_SIZE(tegra_drm_ioctls),
 	.fops = &tegra_drm_fops,
 
 	.name = DRIVER_NAME,
 	.desc = DRIVER_DESC,
-	.date = DRIVER_DATE,
 	.major = DRIVER_MAJOR,
 	.minor = DRIVER_MINOR,
 	.patchlevel = DRIVER_PATCHLEVEL,
@@ -1145,7 +1147,7 @@ static int host1x_drm_probe(struct host1x_device *dev)
 	if (IS_ERR(drm))
 		return PTR_ERR(drm);
 
-	tegra = kzalloc(sizeof(*tegra), GFP_KERNEL);
+	tegra = kzalloc_obj(*tegra);
 	if (!tegra) {
 		err = -ENOMEM;
 		goto put;
@@ -1255,7 +1257,7 @@ static int host1x_drm_probe(struct host1x_device *dev)
 	 * will not expose any modesetting features.
 	 */
 	if (drm->mode_config.num_crtc > 0) {
-		err = drm_aperture_remove_framebuffers(&tegra_drm_driver);
+		err = aperture_remove_all_conflicting_devices(tegra_drm_driver.name);
 		if (err < 0)
 			goto hub;
 	} else {
@@ -1270,7 +1272,7 @@ static int host1x_drm_probe(struct host1x_device *dev)
 	if (err < 0)
 		goto hub;
 
-	tegra_fbdev_setup(drm);
+	drm_client_setup(drm, NULL);
 
 	return 0;
 
@@ -1299,7 +1301,7 @@ put:
 	return err;
 }
 
-static int host1x_drm_remove(struct host1x_device *dev)
+static void host1x_drm_remove(struct host1x_device *dev)
 {
 	struct drm_device *drm = dev_get_drvdata(&dev->dev);
 	struct tegra_drm *tegra = drm->dev_private;
@@ -1328,8 +1330,6 @@ static int host1x_drm_remove(struct host1x_device *dev)
 
 	kfree(tegra);
 	drm_dev_put(drm);
-
-	return 0;
 }
 
 static void host1x_drm_shutdown(struct host1x_device *dev)
@@ -1358,10 +1358,12 @@ static SIMPLE_DEV_PM_OPS(host1x_drm_pm_ops, host1x_drm_suspend,
 
 static const struct of_device_id host1x_drm_subdevs[] = {
 	{ .compatible = "nvidia,tegra20-dc", },
+	{ .compatible = "nvidia,tegra20-dsi", },
 	{ .compatible = "nvidia,tegra20-hdmi", },
 	{ .compatible = "nvidia,tegra20-gr2d", },
 	{ .compatible = "nvidia,tegra20-gr3d", },
 	{ .compatible = "nvidia,tegra30-dc", },
+	{ .compatible = "nvidia,tegra30-dsi", },
 	{ .compatible = "nvidia,tegra30-hdmi", },
 	{ .compatible = "nvidia,tegra30-gr2d", },
 	{ .compatible = "nvidia,tegra30-gr3d", },
@@ -1382,6 +1384,7 @@ static const struct of_device_id host1x_drm_subdevs[] = {
 	{ .compatible = "nvidia,tegra210-sor1", },
 	{ .compatible = "nvidia,tegra210-vic", },
 	{ .compatible = "nvidia,tegra210-nvdec", },
+	{ .compatible = "nvidia,tegra210-nvjpg", },
 	{ .compatible = "nvidia,tegra186-display", },
 	{ .compatible = "nvidia,tegra186-dc", },
 	{ .compatible = "nvidia,tegra186-sor", },
@@ -1395,6 +1398,7 @@ static const struct of_device_id host1x_drm_subdevs[] = {
 	{ .compatible = "nvidia,tegra194-nvdec", },
 	{ .compatible = "nvidia,tegra234-vic", },
 	{ .compatible = "nvidia,tegra234-nvdec", },
+	{ .compatible = "nvidia,tegra264-vic", },
 	{ /* sentinel */ }
 };
 
@@ -1420,6 +1424,7 @@ static struct platform_driver * const drivers[] = {
 	&tegra_gr3d_driver,
 	&tegra_vic_driver,
 	&tegra_nvdec_driver,
+	&tegra_nvjpg_driver,
 };
 
 static int __init host1x_drm_init(void)

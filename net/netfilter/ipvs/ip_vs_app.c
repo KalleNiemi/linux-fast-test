@@ -13,8 +13,7 @@
  * Author:	Juan Jose Ciarlante, <jjciarla@raiz.uncu.edu.ar>
  */
 
-#define KMSG_COMPONENT "IPVS"
-#define pr_fmt(fmt) KMSG_COMPONENT ": " fmt
+#define pr_fmt(fmt) "IPVS: " fmt
 
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -368,7 +367,7 @@ static inline int app_tcp_pkt_out(struct ip_vs_conn *cp, struct sk_buff *skb,
 	if (skb_ensure_writable(skb, ipvsh->len + sizeof(*th)))
 		return 0;
 
-	th = (struct tcphdr *)(skb_network_header(skb) + ipvsh->len);
+	th = (struct tcphdr *)(skb->data + ipvsh->len);
 
 	/*
 	 *	Remember seq number in case this pkt gets resized
@@ -444,7 +443,7 @@ static inline int app_tcp_pkt_in(struct ip_vs_conn *cp, struct sk_buff *skb,
 	if (skb_ensure_writable(skb, ipvsh->len + sizeof(*th)))
 		return 0;
 
-	th = (struct tcphdr *)(skb_network_header(skb) + ipvsh->len);
+	th = (struct tcphdr *)(skb->data + ipvsh->len);
 
 	/*
 	 *	Remember seq number in case this pkt gets resized

@@ -108,7 +108,9 @@ static struct ctl_table iwcm_ctl_table[] = {
 		.data		= &default_backlog,
 		.maxlen		= sizeof(default_backlog),
 		.mode		= 0644,
-		.proc_handler	= proc_dointvec,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_INT_MAX,
 	},
 };
 
@@ -169,7 +171,7 @@ static int alloc_work_entries(struct iwcm_id_private *cm_id_priv, int count)
 
 	BUG_ON(!list_empty(&cm_id_priv->work_free_list));
 	while (count--) {
-		work = kmalloc(sizeof(struct iwcm_work), GFP_KERNEL);
+		work = kmalloc_obj(struct iwcm_work);
 		if (!work) {
 			dealloc_work_entries(cm_id_priv);
 			return -ENOMEM;
@@ -240,7 +242,7 @@ struct iw_cm_id *iw_create_cm_id(struct ib_device *device,
 {
 	struct iwcm_id_private *cm_id_priv;
 
-	cm_id_priv = kzalloc(sizeof(*cm_id_priv), GFP_KERNEL);
+	cm_id_priv = kzalloc_obj(*cm_id_priv);
 	if (!cm_id_priv)
 		return ERR_PTR(-ENOMEM);
 
@@ -516,8 +518,8 @@ static int iw_cm_map(struct iw_cm_id *cm_id, bool active)
 	cm_id->m_local_addr = cm_id->local_addr;
 	cm_id->m_remote_addr = cm_id->remote_addr;
 
-	strcpy(pm_reg_msg.dev_name, devname);
-	strcpy(pm_reg_msg.if_name, ifname);
+	strscpy(pm_reg_msg.dev_name, devname);
+	strscpy(pm_reg_msg.if_name, ifname);
 
 	if (iwpm_register_pid(&pm_reg_msg, RDMA_NL_IWCM) ||
 	    !iwpm_valid_pid())

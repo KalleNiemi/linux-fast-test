@@ -29,8 +29,6 @@ static int of_iommu_xlate(struct device *dev,
 		return -ENODEV;
 
 	ret = iommu_fwspec_init(dev, of_fwnode_handle(iommu_spec->np));
-	if (ret == -EPROBE_DEFER)
-		return driver_deferred_probe_check_state(dev);
 	if (ret)
 		return ret;
 
@@ -47,12 +45,10 @@ static int of_iommu_configure_dev_id(struct device_node *master_np,
 				     struct device *dev,
 				     const u32 *id)
 {
-	struct of_phandle_args iommu_spec = { .args_count = 1 };
+	struct of_phandle_args iommu_spec = {};
 	int err;
 
-	err = of_map_id(master_np, *id, "iommu-map",
-			 "iommu-map-mask", &iommu_spec.np,
-			 iommu_spec.args);
+	err = of_map_iommu_id(master_np, *id, &iommu_spec);
 	if (err)
 		return err;
 
@@ -157,7 +153,12 @@ int of_iommu_configure(struct device *dev, struct device_node *master_np,
 		dev_iommu_free(dev);
 	mutex_unlock(&iommu_probe_device_lock);
 
-	if (!err && dev->bus)
+	/*
+	 * If we're not on the iommu_probe_device() path (as indicated by the
+	 * initial dev->iommu) then try to simulate it. This should no longer
+	 * happen unless of_dma_configure() is being misused outside bus code.
+	 */
+	if (!err && dev->bus && !dev_iommu_present)
 		err = iommu_probe_device(dev);
 
 	if (err && err != -EPROBE_DEFER)

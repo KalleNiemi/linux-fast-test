@@ -41,12 +41,10 @@
 #define RTTM_MAX_DIVISOR	GENMASK(15, 0)
 
 /*
- * Timers are derived from the LXB clock frequency. Usually this is a fixed
- * multiple of the 25 MHz oscillator. The 930X SOC is an exception from that.
- * Its LXB clock has only dividers and uses the switch PLL of 2.45 GHz as its
- * base. The only meaningful frequencies we can achieve from that are 175.000
- * MHz and 153.125 MHz. The greatest common divisor of all explained possible
- * speeds is 3125000. Pin the timers to this 3.125 MHz reference frequency.
+ * Timers are derived from the lexra bus (LXB) clock frequency. This is 175 MHz
+ * on RTL930x and 200 MHz on the other platforms. With 3.125 MHz choose a common
+ * divisor to have enough range and detail. This provides comparability between
+ * the different platforms.
  */
 #define RTTM_TICKS_PER_SEC	3125000
 
@@ -56,44 +54,39 @@ struct rttm_cs {
 };
 
 /* Simple internal register functions */
-static inline void rttm_set_counter(void __iomem *base, unsigned int counter)
-{
-	iowrite32(counter, base + RTTM_CNT);
-}
-
 static inline unsigned int rttm_get_counter(void __iomem *base)
 {
-	return ioread32(base + RTTM_CNT);
+	return __raw_readl(base + RTTM_CNT);
 }
 
 static inline void rttm_set_period(void __iomem *base, unsigned int period)
 {
-	iowrite32(period, base + RTTM_DATA);
+	__raw_writel(period, base + RTTM_DATA);
 }
 
 static inline void rttm_disable_timer(void __iomem *base)
 {
-	iowrite32(0, base + RTTM_CTRL);
+	__raw_writel(0, base + RTTM_CTRL);
 }
 
 static inline void rttm_enable_timer(void __iomem *base, u32 mode, u32 divisor)
 {
-	iowrite32(RTTM_CTRL_ENABLE | mode | divisor, base + RTTM_CTRL);
+	__raw_writel(RTTM_CTRL_ENABLE | mode | divisor, base + RTTM_CTRL);
 }
 
 static inline void rttm_ack_irq(void __iomem *base)
 {
-	iowrite32(ioread32(base + RTTM_INT) | RTTM_INT_PENDING, base + RTTM_INT);
+	__raw_writel(__raw_readl(base + RTTM_INT) | RTTM_INT_PENDING, base + RTTM_INT);
 }
 
 static inline void rttm_enable_irq(void __iomem *base)
 {
-	iowrite32(RTTM_INT_ENABLE, base + RTTM_INT);
+	__raw_writel(RTTM_INT_ENABLE, base + RTTM_INT);
 }
 
 static inline void rttm_disable_irq(void __iomem *base)
 {
-	iowrite32(0, base + RTTM_INT);
+	__raw_writel(0, base + RTTM_INT);
 }
 
 /* Aggregated control functions for kernel clock framework */
@@ -137,7 +130,6 @@ static void rttm_stop_timer(void __iomem *base)
 
 static void rttm_start_timer(struct timer_of *to, u32 mode)
 {
-	rttm_set_counter(to->of_base.base, 0);
 	rttm_enable_timer(to->of_base.base, mode, to->of_clk.rate / RTTM_TICKS_PER_SEC);
 }
 
@@ -233,7 +225,7 @@ static int rttm_enable_clocksource(struct clocksource *cs)
 	return 0;
 }
 
-struct rttm_cs rttm_cs = {
+static struct rttm_cs rttm_cs = {
 	.to = {
 		.flags	= TIMER_OF_BASE | TIMER_OF_CLOCK,
 	},

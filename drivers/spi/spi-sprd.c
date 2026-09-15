@@ -728,7 +728,7 @@ static int sprd_spi_setup_transfer(struct spi_device *sdev,
 	if (ret)
 		return ret;
 
-	/* Set tansfer speed and valid bits */
+	/* Set transfer speed and valid bits */
 	sprd_spi_set_speed(ss, t->speed_hz);
 	sprd_spi_set_transfer_bits(ss, bits_per_word);
 
@@ -923,20 +923,17 @@ static int sprd_spi_probe(struct platform_device *pdev)
 	int ret;
 
 	pdev->id = of_alias_get_id(pdev->dev.of_node, "spi");
-	sctlr = spi_alloc_host(&pdev->dev, sizeof(*ss));
+	sctlr = devm_spi_alloc_host(&pdev->dev, sizeof(*ss));
 	if (!sctlr)
 		return -ENOMEM;
 
 	ss = spi_controller_get_devdata(sctlr);
 	ss->base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
-	if (IS_ERR(ss->base)) {
-		ret = PTR_ERR(ss->base);
-		goto free_controller;
-	}
+	if (IS_ERR(ss->base))
+		return PTR_ERR(ss->base);
 
 	ss->phy_base = res->start;
 	ss->dev = &pdev->dev;
-	sctlr->dev.of_node = pdev->dev.of_node;
 	sctlr->mode_bits = SPI_CPOL | SPI_CPHA | SPI_3WIRE | SPI_TX_DUAL;
 	sctlr->bus_num = pdev->id;
 	sctlr->set_cs = sprd_spi_chipselect;
@@ -950,15 +947,15 @@ static int sprd_spi_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, sctlr);
 	ret = sprd_spi_clk_init(pdev, ss);
 	if (ret)
-		goto free_controller;
+		return ret;
 
 	ret = sprd_spi_irq_init(pdev, ss);
 	if (ret)
-		goto free_controller;
+		return ret;
 
 	ret = sprd_spi_dma_init(pdev, ss);
 	if (ret)
-		goto free_controller;
+		return ret;
 
 	ret = clk_prepare_enable(ss->clk);
 	if (ret)
@@ -982,7 +979,6 @@ static int sprd_spi_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_rpm_put;
 
-	pm_runtime_mark_last_busy(&pdev->dev);
 	pm_runtime_put_autosuspend(&pdev->dev);
 
 	return 0;
@@ -995,8 +991,6 @@ disable_clk:
 release_dma:
 	if (ss->dma.enable)
 		sprd_spi_dma_release(ss);
-free_controller:
-	spi_controller_put(sctlr);
 
 	return ret;
 }
@@ -1011,8 +1005,6 @@ static void sprd_spi_remove(struct platform_device *pdev)
 	if (ret < 0)
 		dev_err(ss->dev, "failed to resume SPI controller\n");
 
-	spi_controller_get(sctlr);
-
 	spi_unregister_controller(sctlr);
 
 	if (ret >= 0) {
@@ -1022,11 +1014,9 @@ static void sprd_spi_remove(struct platform_device *pdev)
 	}
 	pm_runtime_put_noidle(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
-
-	spi_controller_put(sctlr);
 }
 
-static int __maybe_unused sprd_spi_runtime_suspend(struct device *dev)
+static int sprd_spi_runtime_suspend(struct device *dev)
 {
 	struct spi_controller *sctlr = dev_get_drvdata(dev);
 	struct sprd_spi *ss = spi_controller_get_devdata(sctlr);
@@ -1039,7 +1029,7 @@ static int __maybe_unused sprd_spi_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused sprd_spi_runtime_resume(struct device *dev)
+static int sprd_spi_runtime_resume(struct device *dev)
 {
 	struct spi_controller *sctlr = dev_get_drvdata(dev);
 	struct sprd_spi *ss = spi_controller_get_devdata(sctlr);
@@ -1060,8 +1050,7 @@ static int __maybe_unused sprd_spi_runtime_resume(struct device *dev)
 }
 
 static const struct dev_pm_ops sprd_spi_pm_ops = {
-	SET_RUNTIME_PM_OPS(sprd_spi_runtime_suspend,
-			   sprd_spi_runtime_resume, NULL)
+	RUNTIME_PM_OPS(sprd_spi_runtime_suspend, sprd_spi_runtime_resume, NULL)
 };
 
 static const struct of_device_id sprd_spi_of_match[] = {
@@ -1074,10 +1063,10 @@ static struct platform_driver sprd_spi_driver = {
 	.driver = {
 		.name = "sprd-spi",
 		.of_match_table = sprd_spi_of_match,
-		.pm = &sprd_spi_pm_ops,
+		.pm = pm_ptr(&sprd_spi_pm_ops),
 	},
 	.probe = sprd_spi_probe,
-	.remove_new = sprd_spi_remove,
+	.remove = sprd_spi_remove,
 };
 
 module_platform_driver(sprd_spi_driver);

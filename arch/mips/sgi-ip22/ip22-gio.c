@@ -28,14 +28,7 @@ static struct {
 	{ .name = "SGI GR2/GR3", .id = 0x7f },
 };
 
-static void gio_bus_release(struct device *dev)
-{
-}
-
-static struct device gio_bus = {
-	.init_name = "gio",
-	.release = &gio_bus_release,
-};
+static struct device *gio_bus;
 
 /**
  * gio_match_device - Tell if an of_device structure has a matching
@@ -87,19 +80,18 @@ EXPORT_SYMBOL_GPL(gio_dev_put);
  * Will be called only by the device core when all users of this gio device are
  * done.
  */
-void gio_release_dev(struct device *dev)
+static void gio_release_dev(struct device *dev)
 {
 	struct gio_device *giodev;
 
 	giodev = to_gio_device(dev);
 	kfree(giodev);
 }
-EXPORT_SYMBOL_GPL(gio_release_dev);
 
 int gio_device_register(struct gio_device *giodev)
 {
 	giodev->dev.bus = &gio_bus_type;
-	giodev->dev.parent = &gio_bus;
+	giodev->dev.parent = gio_bus;
 	giodev->dev.release = gio_release_dev;
 
 	return device_register(&giodev->dev);
@@ -162,9 +154,8 @@ static ssize_t modalias_show(struct device *dev, struct device_attribute *a,
 			     char *buf)
 {
 	struct gio_device *gio_dev = to_gio_device(dev);
-	int len = snprintf(buf, PAGE_SIZE, "gio:%x\n", gio_dev->id.id);
 
-	return (len >= PAGE_SIZE) ? (PAGE_SIZE - 1) : len;
+	return sysfs_emit(buf, "gio:%x\n", gio_dev->id.id);
 }
 static DEVICE_ATTR_RO(modalias);
 
@@ -174,7 +165,7 @@ static ssize_t name_show(struct device *dev,
 	struct gio_device *giodev;
 
 	giodev = to_gio_device(dev);
-	return sprintf(buf, "%s", giodev->name);
+	return sysfs_emit(buf, "%s\n", giodev->name);
 }
 static DEVICE_ATTR_RO(name);
 
@@ -184,7 +175,7 @@ static ssize_t id_show(struct device *dev,
 	struct gio_device *giodev;
 
 	giodev = to_gio_device(dev);
-	return sprintf(buf, "%x", giodev->id.id);
+	return sysfs_emit(buf, "%x\n", giodev->id.id);
 }
 static DEVICE_ATTR_RO(id);
 
@@ -359,7 +350,7 @@ static void ip22_check_gio(int slotno, unsigned long addr, int irq)
 		}
 		printk(KERN_INFO "GIO: slot %d : %s (id %x)\n",
 		       slotno, name, id);
-		gio_dev = kzalloc(sizeof *gio_dev, GFP_KERNEL);
+		gio_dev = kzalloc_obj(*gio_dev);
 		if (!gio_dev)
 			return;
 		gio_dev->name = name;
@@ -398,11 +389,9 @@ static int __init ip22_gio_init(void)
 	unsigned int pbdma __maybe_unused;
 	int ret;
 
-	ret = device_register(&gio_bus);
-	if (ret) {
-		put_device(&gio_bus);
-		return ret;
-	}
+	gio_bus = root_device_register("gio");
+	if (IS_ERR(gio_bus))
+		return PTR_ERR(gio_bus);
 
 	ret = bus_register(&gio_bus_type);
 	if (!ret) {
@@ -421,8 +410,9 @@ static int __init ip22_gio_init(void)
 			ip22_check_gio(1, GIO_SLOT_EXP0_BASE, SGI_GIOEXP0_IRQ);
 			ip22_check_gio(2, GIO_SLOT_EXP1_BASE, SGI_GIOEXP1_IRQ);
 		}
-	} else
-		device_unregister(&gio_bus);
+	} else {
+		root_device_unregister(gio_bus);
+	}
 
 	return ret;
 }
